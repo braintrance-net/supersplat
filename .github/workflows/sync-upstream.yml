@@ -11,10 +11,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout braintrance branch
+      - name: Checkout main branch
         uses: actions/checkout@v4
         with:
-          ref: braintrance
+          ref: main
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -96,7 +96,7 @@ jobs:
               repo: context.repo.repo,
               title: `🔄 Sync with upstream (${new Date().toISOString().split('T')[0]})`,
               head: branchName,
-              base: 'braintrance',
+              base: 'main',
               body: body
             });
 
