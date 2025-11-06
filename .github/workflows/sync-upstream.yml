@@ -1,0 +1,103 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    # Run every Monday at 9am UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout braintrance branch
+        uses: actions/checkout@v4
+        with:
+          ref: braintrance
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/playcanvas/supersplat.git || true
+          git fetch upstream
+
+      - name: Check for updates
+        id: check
+        run: |
+          # Get the commit hashes
+          UPSTREAM_HASH=$(git rev-parse upstream/main)
+          LOCAL_BASE=$(git merge-base HEAD upstream/main)
+
+          if [ "$UPSTREAM_HASH" = "$LOCAL_BASE" ]; then
+            echo "No updates available"
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+          else
+            echo "Updates available from upstream"
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create sync branch
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          BRANCH_NAME="sync-upstream-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
+
+      - name: Merge upstream changes
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          # Try to merge upstream/main
+          if git merge upstream/main --no-edit; then
+            echo "merge_status=success" >> $GITHUB_ENV
+          else
+            # Conflicts detected - abort and mark for manual resolution
+            git merge --abort
+            echo "merge_status=conflicts" >> $GITHUB_ENV
+          fi
+
+      - name: Push sync branch
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          git push origin ${{ env.branch_name }}
+
+      - name: Create Pull Request
+        if: steps.check.outputs.has_updates == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const mergeStatus = process.env.merge_status;
+            const branchName = process.env.branch_name;
+
+            let body = '## 🔄 Upstream Sync\n\n';
+            body += 'This PR syncs the latest changes from [playcanvas/supersplat](https://github.com/playcanvas/supersplat).\n\n';
+
+            if (mergeStatus === 'conflicts') {
+              body += '⚠️ **Merge conflicts detected** - Manual resolution required.\n\n';
+              body += 'To resolve:\n';
+              body += '```bash\n';
+              body += `git checkout ${branchName}\n`;
+              body += 'git merge upstream/main\n';
+              body += '# Resolve conflicts\n';
+              body += 'git push\n';
+              body += '```\n';
+            } else {
+              body += '✅ No conflicts - Safe to merge!\n';
+            }
+
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔄 Sync with upstream (${new Date().toISOString().split('T')[0]})`,
+              head: branchName,
+              base: 'braintrance',
+              body: body
+            });
+
+            console.log(`Created PR #${pr.number}`);
