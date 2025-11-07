@@ -508,7 +508,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // camera mode
 
-    let activeMode = 'centers';
+    let activeMode = 'rings';
 
     const setCameraMode = (mode: string) => {
         if (mode !== activeMode) {

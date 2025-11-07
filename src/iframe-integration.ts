@@ -1,7 +1,7 @@
 import { Events } from './events';
 import { Scene } from './scene';
 import { BufferWriter } from './serialize/writer';
-import { serializePly } from './splat-serialize';
+import { serializePlyCompressed } from './splat-serialize';
 
 /**
  * Checks if the app is running inside an iframe
@@ -32,6 +32,28 @@ const createIframeControls = (events: Events, scene: Scene): { submit: HTMLButto
     document.body.appendChild(submitButton);
 
     return { submit: submitButton, cancel: cancelButton };
+};
+
+/**
+ * Gets the current camera pose (position, target, fov)
+ */
+const getCameraPose = (events: Events): { position: number[], target: number[], fov: number } | null => {
+    try {
+        const pose = events.invoke('camera.getPose');
+        if (!pose) {
+            console.error('[IframeIntegration] Failed to get camera pose');
+            return null;
+        }
+
+        return {
+            position: [pose.position.x, pose.position.y, pose.position.z],
+            target: [pose.target.x, pose.target.y, pose.target.z],
+            fov: events.invoke('camera.fov')
+        };
+    } catch (error) {
+        console.error('[IframeIntegration] Error getting camera pose:', error);
+        return null;
+    }
 };
 
 /**
@@ -92,8 +114,8 @@ const exportPly = async (events: Events): Promise<{ filename: string, data: Arra
         // Use BufferWriter to capture PLY data in memory (no download)
         const bufferWriter = new BufferWriter();
 
-        // Serialize PLY directly without showing popup
-        await serializePly(splats, { maxSHBands: 3 }, bufferWriter);
+        // Serialize compressed PLY directly without showing popup
+        await serializePlyCompressed(splats, { maxSHBands: 3 }, bufferWriter);
 
         // Get the buffers and concatenate into a single ArrayBuffer
         const buffers = bufferWriter.close();
@@ -110,8 +132,11 @@ const exportPly = async (events: Events): Promise<{ filename: string, data: Arra
             offset += buf.byteLength;
         }
 
-        // Get the filename from the first splat
-        const filename = splats[0].filename || 'edited.ply';
+        // Get the filename from the first splat and ensure .compressed.ply extension
+        let filename = splats[0].filename || 'edited.ply';
+        if (!filename.includes('.compressed.ply')) {
+            filename = filename.replace(/\.ply$/i, '.compressed.ply');
+        }
 
         return {
             filename,
@@ -151,6 +176,12 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
         submit.textContent = 'Processing...';
 
         try {
+            // Capture camera pose
+            const cameraPose = getCameraPose(events);
+            if (!cameraPose) {
+                throw new Error('Failed to capture camera pose');
+            }
+
             // Capture thumbnail
             const thumbnail = await captureThumbnail(scene);
             if (!thumbnail) {
@@ -163,13 +194,14 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
                 throw new Error('Failed to export PLY');
             }
 
-            // Send both to parent window
+            // Send thumbnail, PLY, and camera pose to parent window
             window.parent.postMessage({
                 type: 'splat-editor-submit',
                 data: {
                     thumbnail: thumbnail,
                     plyFile: plyData.data,
-                    filename: plyData.filename
+                    filename: plyData.filename,
+                    cameraPose: cameraPose
                 }
             }, '*');
 
@@ -187,7 +219,31 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
         }
     });
 
-    // Notify parent that editor is ready
+    // Listen for import messages from parent
+    window.addEventListener('message', async (e) => {
+        if (e.data?.type === 'supersplat:import') {
+            console.log('[IframeIntegration] Import message received:', e.data);
+            const files = e.data.files;
+
+            if (files && files.length > 0) {
+                for (const fileData of files) {
+                    try {
+                        await events.invoke('import', [fileData]);
+                        console.log('[IframeIntegration] Successfully imported:', fileData.filename);
+                    } catch (error) {
+                        console.error('[IframeIntegration] Failed to import:', fileData.filename, error);
+                        window.parent.postMessage({
+                            type: 'supersplat:import:error',
+                            error: error.message
+                        }, '*');
+                    }
+                }
+            }
+        }
+    });
+
+    // Notify parent that editor is ready (send both formats for compatibility)
     window.parent.postMessage({ type: 'splat-editor-ready' }, '*');
-    console.log('[IframeIntegration] Sent ready message to parent');
+    window.parent.postMessage({ type: 'supersplat:ready' }, '*');
+    console.log('[IframeIntegration] Sent ready messages to parent');
 };

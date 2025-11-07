@@ -1,54 +1,41 @@
-// Iframe Submit/Cancel buttons styling
+@use 'colors.scss' as *;
+
+// Iframe Submit/Cancel buttons styling - sleek and elegant
 #cancel-splat-button,
 #submit-splat-button {
     position: absolute;
-    top: 3%;
+    top: 50px;
     pointer-events: auto;
     z-index: 10;
-    width: 120px;
-    font-size: 16px;
-    padding: 16px 24px;
-    border-radius: 8px;
+    height: 32px;
+    padding: 0 18px;
+    border-radius: 10px;
+    background-color: $bcg-darker;
+    color: $text-secondary;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    font-size: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border: none;
-    cursor: pointer;
-    font-weight: 500;
     transition: all 0.2s ease;
-    font-family: inherit;
+
+    &:hover:not(:disabled) {
+        color: $text-primary;
+        background-color: $clr-hilight;
+        border-color: rgba(255, 255, 255, 0.2);
+    }
 
     &:disabled {
         opacity: 0.5;
         cursor: not-allowed;
     }
-
-    &:not(:disabled):hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-    }
-
-    &:not(:disabled):active {
-        transform: translateY(0);
-    }
 }
 
 #cancel-splat-button {
-    left: calc(50% - 130px);
-    background-color: #6c757d;
-    color: white;
-
-    &:not(:disabled):hover {
-        background-color: #5a6268;
-    }
+    left: calc(50% - 90px);
 }
 
 #submit-splat-button {
-    left: calc(50% + 10px);
-    background-color: #007bff;
-    color: white;
-
-    &:not(:disabled):hover {
-        background-color: #0056b3;
-    }
+    left: calc(50% + 30px);
 }
