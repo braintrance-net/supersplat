@@ -167,6 +167,50 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
         window.parent.postMessage({ type: 'splat-editor-cancel' }, '*');
     });
 
+    /**
+     * Core export logic - used by both Submit button and auto-export message
+     */
+    const performExport = async (options: { includeThumbnail?: boolean, includeCameraPose?: boolean } = {}) => {
+        const { includeThumbnail = true, includeCameraPose = true } = options;
+
+        // Capture camera pose if requested
+        let cameraPose = null;
+        if (includeCameraPose) {
+            cameraPose = getCameraPose(events);
+            if (!cameraPose) {
+                throw new Error('Failed to capture camera pose');
+            }
+        }
+
+        // Capture thumbnail if requested
+        let thumbnail = null;
+        if (includeThumbnail) {
+            thumbnail = await captureThumbnail(scene);
+            if (!thumbnail) {
+                throw new Error('Failed to capture thumbnail');
+            }
+        }
+
+        // Export PLY (always required)
+        const plyData = await exportPly(events);
+        if (!plyData) {
+            throw new Error('Failed to export PLY');
+        }
+
+        // Send data to parent window
+        window.parent.postMessage({
+            type: 'splat-editor-submit',
+            data: {
+                thumbnail: thumbnail,
+                plyFile: plyData.data,
+                filename: plyData.filename,
+                cameraPose: cameraPose
+            }
+        }, '*');
+
+        console.log('[IframeIntegration] Successfully sent export to parent');
+    };
+
     // Handle Submit button
     submit.addEventListener('click', async () => {
         console.log('[IframeIntegration] Submit clicked, capturing thumbnail and exporting PLY');
@@ -176,36 +220,7 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
         submit.textContent = 'Processing...';
 
         try {
-            // Capture camera pose
-            const cameraPose = getCameraPose(events);
-            if (!cameraPose) {
-                throw new Error('Failed to capture camera pose');
-            }
-
-            // Capture thumbnail
-            const thumbnail = await captureThumbnail(scene);
-            if (!thumbnail) {
-                throw new Error('Failed to capture thumbnail');
-            }
-
-            // Export PLY
-            const plyData = await exportPly(events);
-            if (!plyData) {
-                throw new Error('Failed to export PLY');
-            }
-
-            // Send thumbnail, PLY, and camera pose to parent window
-            window.parent.postMessage({
-                type: 'splat-editor-submit',
-                data: {
-                    thumbnail: thumbnail,
-                    plyFile: plyData.data,
-                    filename: plyData.filename,
-                    cameraPose: cameraPose
-                }
-            }, '*');
-
-            console.log('[IframeIntegration] Successfully sent thumbnail and PLY to parent');
+            await performExport({ includeThumbnail: true, includeCameraPose: true });
         } catch (error) {
             console.error('[IframeIntegration] Error during submit:', error);
             window.parent.postMessage({
@@ -219,7 +234,7 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
         }
     });
 
-    // Listen for import messages from parent
+    // Listen for messages from parent
     window.addEventListener('message', async (e) => {
         if (e.data?.type === 'supersplat:import') {
             console.log('[IframeIntegration] Import message received:', e.data);
@@ -238,6 +253,20 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
                         }, '*');
                     }
                 }
+            }
+        } else if (e.data?.type === 'supersplat:auto-export') {
+            console.log('[IframeIntegration] Auto-export message received');
+
+            try {
+                // For auto-export (batch compression), skip thumbnail and camera pose
+                // to optimize performance
+                await performExport({ includeThumbnail: false, includeCameraPose: false });
+            } catch (error) {
+                console.error('[IframeIntegration] Error during auto-export:', error);
+                window.parent.postMessage({
+                    type: 'splat-editor-error',
+                    error: error.message
+                }, '*');
             }
         }
     });
