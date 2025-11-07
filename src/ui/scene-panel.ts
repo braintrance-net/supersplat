@@ -19,7 +19,6 @@ class ScenePanel extends Container {
             ...args,
             id: 'scene-panel',
             class: 'panel',
-            hidden: true
         };
 
         super(args);

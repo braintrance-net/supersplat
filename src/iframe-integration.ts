@@ -225,7 +225,7 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
             console.error('[IframeIntegration] Error during submit:', error);
             window.parent.postMessage({
                 type: 'splat-editor-error',
-                error: error.message
+                error: error?.message || String(error)
             }, '*');
 
             submit.disabled = false;
@@ -249,7 +249,7 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
                         console.error('[IframeIntegration] Failed to import:', fileData.filename, error);
                         window.parent.postMessage({
                             type: 'supersplat:import:error',
-                            error: error.message
+                            error: error?.message || String(error)
                         }, '*');
                     }
                 }
@@ -265,7 +265,7 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
                 console.error('[IframeIntegration] Error during auto-export:', error);
                 window.parent.postMessage({
                     type: 'splat-editor-error',
-                    error: error.message
+                    error: error?.message || String(error)
                 }, '*');
             }
         }
