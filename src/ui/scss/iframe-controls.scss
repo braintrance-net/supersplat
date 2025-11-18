@@ -1,0 +1,41 @@
+@use 'colors.scss' as *;
+
+// Iframe Submit/Cancel buttons styling - sleek and elegant
+#cancel-splat-button,
+#submit-splat-button {
+    position: absolute;
+    top: 50px;
+    pointer-events: auto;
+    z-index: 10;
+    height: 32px;
+    padding: 0 18px;
+    border-radius: 10px;
+    background-color: $bcg-darker;
+    color: $text-secondary;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+
+    &:hover:not(:disabled) {
+        color: $text-primary;
+        background-color: $clr-hilight;
+        border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    &:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+}
+
+#cancel-splat-button {
+    left: calc(50% - 90px);
+}
+
+#submit-splat-button {
+    left: calc(50% + 30px);
+}

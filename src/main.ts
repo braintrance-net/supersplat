@@ -28,6 +28,7 @@ import { SphereSelection } from './tools/sphere-selection';
 import { ToolManager } from './tools/tool-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
+import { initIframeIntegration } from './iframe-integration';
 
 declare global {
     interface LaunchParams {
@@ -257,6 +258,9 @@ const main = async () => {
 
     // load async models
     scene.start();
+
+    // initialize iframe integration if running in iframe
+    initIframeIntegration(events, scene);
 
     // handle load params
     const loadList = url.searchParams.getAll('load');
