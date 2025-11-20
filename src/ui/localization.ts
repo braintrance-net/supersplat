@@ -212,9 +212,6 @@ const localizeInit = () => {
                     'export.ply-compress': 'PLY komprimieren',
                     'export.splats-select': 'Splats',
                     'export.splats-select.all': 'Alle Splats',
-                    'export.format': 'Format',
-                    'export.format-compressed-ply': 'Komprimiertes PLY',
-                    'export.format-sog': 'SOG',
 
                     // Cursor
                     'cursor.click-to-copy': 'Klicken zum kopieren',
@@ -256,7 +253,12 @@ const localizeInit = () => {
                     // Video Settings Dialog
                     'video.header': 'VIDEO EINSTELLUNGEN',
                     'video.resolution': 'Auflösung',
+                    'video.format': 'Format',
+                    'video.codec': 'Codec',
                     'video.frameRate': 'Bildrate',
+                    'video.frameRange': 'Frame-Bereich',
+                    'video.frameRangeFirst': 'Erste',
+                    'video.frameRangeLast': 'Letzte',
                     'video.bitrate': 'Bitrate',
                     'video.portrait': 'Hochformat',
                     'video.transparentBg': 'Transparenter Hintergrund',
@@ -483,9 +485,6 @@ const localizeInit = () => {
                     'export.ply-compress': 'Compress PLY',
                     'export.splats-select': 'Splats',
                     'export.splats-select.all': 'All Splats',
-                    'export.format': 'File Format',
-                    'export.format-compressed-ply': 'Compressed PLY',
-                    'export.format-sog': 'SOG',
 
                     // Cursor
                     'cursor.click-to-copy': 'Click to copy',
@@ -527,7 +526,12 @@ const localizeInit = () => {
                     // Video Settings Dialog
                     'video.header': 'VIDEO SETTINGS',
                     'video.resolution': 'Resolution',
+                    'video.format': 'Format',
+                    'video.codec': 'Codec',
                     'video.frameRate': 'Frame Rate',
+                    'video.frameRange': 'Frame Range',
+                    'video.frameRangeFirst': 'First',
+                    'video.frameRangeLast': 'Last',
                     'video.bitrate': 'Bitrate',
                     'video.portrait': 'Portrait Mode',
                     'video.transparentBg': 'Transparent Background',
@@ -745,9 +749,6 @@ const localizeInit = () => {
                     'export.ply-compress': 'Compresser PLY',
                     'export.splats-select': 'Splats',
                     'export.splats-select.all': 'Tous les Splats',
-                    'export.format': 'Format de fichier',
-                    'export.format-compressed-ply': 'PLY compressé',
-                    'export.format-sog': 'SOG',
 
                     // Cursor
                     'cursor.click-to-copy': 'Cliquez pour copier',
@@ -789,7 +790,12 @@ const localizeInit = () => {
                     // Video Settings Dialog
                     'video.header': 'PARAMETRES VIDEO',
                     'video.resolution': 'Résolution',
+                    'video.format': 'Format',
+                    'video.codec': 'Codec',
                     'video.frameRate': 'Fréquence d\'image',
+                    'video.frameRange': 'Plage d\'images',
+                    'video.frameRangeFirst': 'Première',
+                    'video.frameRangeLast': 'Dernière',
                     'video.bitrate': 'Débit binaire',
                     'video.portrait': 'Mode portrait',
                     'video.transparentBg': 'Fond transparent',
@@ -1007,9 +1013,6 @@ const localizeInit = () => {
                     'export.ply-compress': 'PLYを圧縮',
                     'export.splats-select': 'Splat',
                     'export.splats-select.all': 'すべてのSplat',
-                    'export.format': 'ファイル形式',
-                    'export.format-compressed-ply': '圧縮PLY',
-                    'export.format-sog': 'SOG',
 
                     // Cursor
                     'cursor.click-to-copy': 'クリックしてコピー',
@@ -1051,7 +1054,12 @@ const localizeInit = () => {
                     // Video Settings Dialog
                     'video.header': 'ビデオ設定',
                     'video.resolution': '解像度',
+                    'video.format': 'フォーマット',
+                    'video.codec': 'コーデック',
                     'video.frameRate': 'フレームレート',
+                    'video.frameRange': 'フレーム範囲',
+                    'video.frameRangeFirst': '最初',
+                    'video.frameRangeLast': '最後',
                     'video.bitrate': 'ビットレート',
                     'video.portrait': 'ポートレートモード',
                     'video.transparentBg': '透明な背景',
@@ -1269,9 +1277,6 @@ const localizeInit = () => {
                     'export.ply-compress': 'PLY 압축',
                     'export.splats-select': 'Splat',
                     'export.splats-select.all': '모든 Splat',
-                    'export.format': '파일 형식',
-                    'export.format-compressed-ply': '압축된 PLY',
-                    'export.format-sog': 'SOG',
 
                     // Cursor
                     'cursor.click-to-copy': '클릭하여 복사',
@@ -1313,7 +1318,12 @@ const localizeInit = () => {
                     // Video Settings Dialog
                     'video.header': '비디오 설정',
                     'video.resolution': '해상도',
+                    'video.format': '형식',
+                    'video.codec': '코덱',
                     'video.frameRate': '프레임 속도',
+                    'video.frameRange': '프레임 범위',
+                    'video.frameRangeFirst': '첫 번째',
+                    'video.frameRangeLast': '마지막',
                     'video.bitrate': '비트 전송률',
                     'video.portrait': '세로 모드',
                     'video.transparentBg': '투명 배경',
@@ -1531,9 +1541,6 @@ const localizeInit = () => {
                     'export.ply-compress': '压缩PLY',
                     'export.splats-select': 'Splat',
                     'export.splats-select.all': '所有Splat',
-                    'export.format': '文件格式',
-                    'export.format-compressed-ply': '压缩 PLY',
-                    'export.format-sog': 'SOG',
 
                     // Cursor
                     'cursor.click-to-copy': '点击复制',
@@ -1575,7 +1582,12 @@ const localizeInit = () => {
                     // Video Settings Dialog
                     'video.header': '视频设置',
                     'video.resolution': '分辨率',
+                    'video.format': '格式',
+                    'video.codec': '编解码器',
                     'video.frameRate': '帧率',
+                    'video.frameRange': '帧范围',
+                    'video.frameRangeFirst': '起始',
+                    'video.frameRangeLast': '结束',
                     'video.bitrate': '比特率',
                     'video.portrait': '纵向模式',
                     'video.transparentBg': '透明背景',

@@ -1,4 +1,4 @@
-import { BooleanInput, Button, Container, Element, Label, SelectInput } from '@playcanvas/pcui';
+import { BooleanInput, Button, Container, Element, Label, SelectInput, VectorInput } from '@playcanvas/pcui';
 
 import { Events } from '../events';
 import { VideoSettings } from '../render';
@@ -59,6 +59,74 @@ class VideoSettingsDialog extends Container {
         resolutionRow.append(resolutionLabel);
         resolutionRow.append(resolutionSelect);
 
+        // format
+
+        const formatLabel = new Label({ class: 'label', text: localize('video.format') });
+        const formatSelect = new SelectInput({
+            class: 'select',
+            defaultValue: 'mp4',
+            options: [
+                { v: 'mp4', t: 'MP4' },
+                { v: 'webm', t: 'WebM' },
+                { v: 'mov', t: 'MOV' },
+                { v: 'mkv', t: 'MKV' }
+            ]
+        });
+        const formatRow = new Container({ class: 'row' });
+        formatRow.append(formatLabel);
+        formatRow.append(formatSelect);
+
+        // codec
+
+        const codecLabel = new Label({ class: 'label', text: localize('video.codec') });
+        const codecSelect = new SelectInput({
+            class: 'select',
+            defaultValue: 'h264',
+            options: [
+                { v: 'h264', t: 'H.264' },
+                { v: 'h265', t: 'H.265/HEVC' }
+            ]
+        });
+        const codecRow = new Container({ class: 'row' });
+        codecRow.append(codecLabel);
+        codecRow.append(codecSelect);
+
+        // Codec compatibility mapping
+        const codecOptions: Record<string, Array<{ v: string, t: string }>> = {
+            'mp4': [
+                { v: 'h264', t: 'H.264' },
+                { v: 'h265', t: 'H.265/HEVC' }
+            ],
+            'webm': [
+                { v: 'vp9', t: 'VP9' },
+                { v: 'av1', t: 'AV1' }
+            ],
+            'mov': [
+                { v: 'h264', t: 'H.264' },
+                { v: 'h265', t: 'H.265/HEVC' }
+            ],
+            'mkv': [
+                { v: 'h264', t: 'H.264' },
+                { v: 'h265', t: 'H.265/HEVC' },
+                { v: 'vp9', t: 'VP9' },
+                { v: 'av1', t: 'AV1' }
+            ]
+        };
+
+        // Update codec options when format changes
+        formatSelect.on('change', () => {
+            const format = formatSelect.value;
+            const options = codecOptions[format] || codecOptions.mp4;
+            codecSelect.options = options;
+
+            // Set default codec based on format
+            if (format === 'webm') {
+                codecSelect.value = 'vp9';
+            } else {
+                codecSelect.value = 'h264';
+            }
+        });
+
         // framerate
 
         const frameRateLabel = new Label({ class: 'label', text: localize('video.frameRate') });
@@ -67,8 +135,11 @@ class VideoSettingsDialog extends Container {
             defaultValue: '30',
             options: [
                 { v: '12', t: '12 fps' },
+                { v: '15', t: '15 fps' },
                 { v: '24', t: '24 fps' },
+                { v: '25', t: '25 fps' },
                 { v: '30', t: '30 fps' },
+                { v: '48', t: '48 fps' },
                 { v: '60', t: '60 fps' },
                 { v: '120', t: '120 fps' }
             ]
@@ -94,6 +165,31 @@ class VideoSettingsDialog extends Container {
         const bitrateRow = new Container({ class: 'row' });
         bitrateRow.append(bitrateLabel);
         bitrateRow.append(bitrateSelect);
+
+        // frame range
+
+        const totalFrames = events.invoke('timeline.frames');
+        const frameRangeLabel = new Label({ class: 'label', text: localize('video.frameRange') });
+        const frameRangeInput = new VectorInput({
+            class: 'vector-input',
+            dimensions: 2,
+            min: 0,
+            max: totalFrames - 1,
+            // @ts-ignore
+            placeholder: [localize('video.frameRangeFirst'), localize('video.frameRangeLast')],
+            precision: 0,
+            value: [0, totalFrames - 1]
+        });
+        const frameRangeRow = new Container({ class: 'row' });
+        frameRangeRow.append(frameRangeLabel);
+        frameRangeRow.append(frameRangeInput);
+
+        // Validate frame range
+        frameRangeInput.on('change', (value: number[]) => {
+            if (value[0] > value[1]) {
+                frameRangeInput.value = [value[1], value[0]];
+            }
+        });
 
         // portrait mode
 
@@ -127,8 +223,11 @@ class VideoSettingsDialog extends Container {
 
         const content = new Container({ id: 'content' });
         content.append(resolutionRow);
+        content.append(formatRow);
+        content.append(codecRow);
         content.append(frameRateRow);
         content.append(bitrateRow);
+        content.append(frameRangeRow);
         content.append(portraitRow);
         content.append(transparentBgRow);
         content.append(showDebugRow);
@@ -165,22 +264,18 @@ class VideoSettingsDialog extends Container {
         okButton.on('click', () => onOK());
 
         const keydown = (e: KeyboardEvent) => {
-            switch (e.key) {
-                case 'Escape':
-                    onCancel();
-                    break;
-                case 'Enter':
-                    if (!e.shiftKey) onOK();
-                    break;
-                default:
-                    e.stopPropagation();
-                    break;
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                e.stopPropagation();
+                onCancel();
             }
         };
 
         // reset UI and configure for current state
         const reset = () => {
-
+            const totalFrames = events.invoke('timeline.frames');
+            frameRangeInput.max = totalFrames - 1;
+            frameRangeInput.value = [0, totalFrames - 1];
         };
 
         // function implementations
@@ -189,7 +284,7 @@ class VideoSettingsDialog extends Container {
             reset();
 
             this.hidden = false;
-            this.dom.addEventListener('keydown', keydown);
+            document.addEventListener('keydown', keydown);
             this.dom.focus();
 
             return new Promise<VideoSettings | null>((resolve) => {
@@ -217,8 +312,11 @@ class VideoSettingsDialog extends Container {
 
                     const frameRates: Record<string, number> = {
                         '12': 12,
+                        '15': 15,
                         '24': 24,
+                        '25': 25,
                         '30': 30,
+                        '48': 48,
                         '60': 60,
                         '120': 120
                     };
@@ -248,21 +346,25 @@ class VideoSettingsDialog extends Container {
                     // bitrate (bps) = 100m * (width × height × frame rate × bppf) / 1m
                     const bitrate = Math.floor(10 * width * height * frameRate * bppf);
 
+                    const frameRange = frameRangeInput.value as number[];
+
                     const videoSettings = {
-                        startFrame: 0,
-                        endFrame: events.invoke('timeline.frames') - 1,
+                        startFrame: frameRange[0],
+                        endFrame: frameRange[1],
                         frameRate,
                         width,
                         height,
                         bitrate,
                         transparentBg: transparentBgBoolean.value,
-                        showDebug: showDebugBoolean.value
+                        showDebug: showDebugBoolean.value,
+                        format: formatSelect.value as 'mp4' | 'webm' | 'mov' | 'mkv',
+                        codec: codecSelect.value as 'h264' | 'h265' | 'vp9' | 'av1'
                     };
 
                     resolve(videoSettings);
                 };
             }).finally(() => {
-                this.dom.removeEventListener('keydown', keydown);
+                document.removeEventListener('keydown', keydown);
                 this.hide();
             });
         };

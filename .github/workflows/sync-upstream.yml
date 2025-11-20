@@ -1,4 +1,7 @@
 name: Sync with Upstream
+permissions:
+  contents: write
+  pull-requests: write
 
 on:
   schedule:
@@ -33,9 +36,9 @@ jobs:
         run: |
           # Get the commit hashes
           UPSTREAM_HASH=$(git rev-parse upstream/main)
-          LOCAL_BASE=$(git merge-base HEAD upstream/main)
+          LOCAL_HASH=$(git rev-parse HEAD)
 
-          if [ "$UPSTREAM_HASH" = "$LOCAL_BASE" ]; then
+          if [ "$UPSTREAM_HASH" = "$LOCAL_HASH" ]; then
             echo "No updates available"
             echo "has_updates=false" >> $GITHUB_OUTPUT
           else
@@ -43,60 +46,43 @@ jobs:
             echo "has_updates=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Create sync branch
+      - name: Merge upstream into main
         if: steps.check.outputs.has_updates == 'true'
         run: |
-          BRANCH_NAME="sync-upstream-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b $BRANCH_NAME
+          # Directly merge upstream/main into main (should always be clean)
+          git merge upstream/main --no-edit
+          git push origin main
+
+      - name: Create PR branch from main to braintrance
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          BRANCH_NAME="sync-main-to-braintrance-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME main
           echo "branch_name=$BRANCH_NAME" >> $GITHUB_ENV
-
-      - name: Merge upstream changes
-        if: steps.check.outputs.has_updates == 'true'
-        run: |
-          # Try to merge upstream/main
-          if git merge upstream/main --no-edit; then
-            echo "merge_status=success" >> $GITHUB_ENV
-          else
-            # Conflicts detected - abort and mark for manual resolution
-            git merge --abort
-            echo "merge_status=conflicts" >> $GITHUB_ENV
-          fi
-
-      - name: Push sync branch
-        if: steps.check.outputs.has_updates == 'true'
-        run: |
-          git push origin ${{ env.branch_name }}
+          git push origin $BRANCH_NAME
 
       - name: Create Pull Request
         if: steps.check.outputs.has_updates == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const mergeStatus = process.env.merge_status;
             const branchName = process.env.branch_name;
 
-            let body = '## 🔄 Upstream Sync\n\n';
-            body += 'This PR syncs the latest changes from [playcanvas/supersplat](https://github.com/playcanvas/supersplat).\n\n';
-
-            if (mergeStatus === 'conflicts') {
-              body += '⚠️ **Merge conflicts detected** - Manual resolution required.\n\n';
-              body += 'To resolve:\n';
-              body += '```bash\n';
-              body += `git checkout ${branchName}\n`;
-              body += 'git merge upstream/main\n';
-              body += '# Resolve conflicts\n';
-              body += 'git push\n';
-              body += '```\n';
-            } else {
-              body += '✅ No conflicts - Safe to merge!\n';
-            }
+            let body = '## 🔄 Upstream Sync: Merge main into braintrance\n\n';
+            body += 'The `main` branch has been updated with the latest changes from [playcanvas/supersplat](https://github.com/playcanvas/supersplat).\n\n';
+            body += 'This PR merges those upstream changes into the `braintrance` branch.\n\n';
+            body += '### Review the changes:\n';
+            body += '- Check what changed upstream in the Files tab\n';
+            body += '- Resolve any conflicts if they occur\n';
+            body += '- Merge when ready to pull in upstream updates\n\n';
+            body += '**Note:** The `main` branch was automatically updated with upstream changes (no conflicts since main is clean).\n';
 
             const { data: pr } = await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `🔄 Sync with upstream (${new Date().toISOString().split('T')[0]})`,
+              title: `🔄 Sync upstream changes into braintrance (${new Date().toISOString().split('T')[0]})`,
               head: branchName,
-              base: 'main',
+              base: 'braintrance',
               body: body
             });
 

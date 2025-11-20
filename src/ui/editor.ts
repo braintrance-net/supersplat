@@ -25,6 +25,9 @@ import { ViewCube } from './view-cube';
 import { ViewPanel } from './view-panel';
 import { version } from '../../package.json';
 
+// ts compiler and vscode find this type, but eslint does not
+type FilePickerAcceptType = unknown;
+
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
 };
@@ -243,19 +246,54 @@ class EditorUI {
 
                 try {
                     const docName = events.invoke('doc.name');
-                    const suggested = `${removeExtension(docName ?? 'SuperSplat')}-video.mp4`;
+
+                    // Determine file extension and mime type based on format
+                    let fileExtension: string;
+                    let filePickerTypes: FilePickerAcceptType[];
+
+                    // Codec name mapping for display
+                    const codecNames: Record<string, string> = {
+                        'h264': 'H.264',
+                        'h265': 'H.265',
+                        'vp9': 'VP9',
+                        'av1': 'AV1'
+                    };
+                    const codecName = codecNames[videoSettings.codec] || videoSettings.codec.toUpperCase();
+
+                    if (videoSettings.format === 'webm') {
+                        fileExtension = '.webm';
+                        filePickerTypes = [{
+                            description: `WebM Video (${codecName})`,
+                            accept: { 'video/webm': ['.webm'] }
+                        }];
+                    } else if (videoSettings.format === 'mov') {
+                        fileExtension = '.mov';
+                        filePickerTypes = [{
+                            description: `MOV Video (${codecName})`,
+                            accept: { 'video/quicktime': ['.mov'] }
+                        }];
+                    } else if (videoSettings.format === 'mkv') {
+                        fileExtension = '.mkv';
+                        filePickerTypes = [{
+                            description: `MKV Video (${codecName})`,
+                            accept: { 'video/x-matroska': ['.mkv'] }
+                        }];
+                    } else {
+                        fileExtension = '.mp4';
+                        filePickerTypes = [{
+                            description: `MP4 Video (${codecName})`,
+                            accept: { 'video/mp4': ['.mp4'] }
+                        }];
+                    }
+
+                    const suggested = `${removeExtension(docName ?? 'supersplat')}${fileExtension}`;
 
                     let writable;
 
                     if (window.showSaveFilePicker) {
                         const fileHandle = await window.showSaveFilePicker({
                             id: 'SuperSplatVideoFileExport',
-                            types: [{
-                                description: 'MP4 Video',
-                                accept: {
-                                    'video/mp4': ['.mp4']
-                                }
-                            }],
+                            types: filePickerTypes,
                             suggestedName: suggested
                         });
 
