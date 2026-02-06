@@ -64,6 +64,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             // start rendering to offscreen buffer only
             scene.camera.startOffscreenMode(width, height);
             scene.camera.renderOverlays = false;
+            scene.gizmoLayer.enabled = false;
 
             // render the next frame
             scene.forceRender = true;
@@ -94,6 +95,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
         } finally {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
+            scene.gizmoLayer.enabled = true;
             scene.camera.entity.camera.clearColor.set(0, 0, 0, 0);
         }
     });
@@ -108,6 +110,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             // start rendering to offscreen buffer only
             scene.camera.startOffscreenMode(width, height);
             scene.camera.renderOverlays = showDebug;
+            scene.gizmoLayer.enabled = false;
             if (!transparentBg) {
                 scene.camera.entity.camera.clearColor.copy(bgClr);
             }
@@ -172,6 +175,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
         } finally {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
+            scene.gizmoLayer.enabled = true;
             scene.camera.entity.camera.clearColor.set(0, 0, 0, 0);
 
             events.fire('stopSpinner');
@@ -179,7 +183,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     });
 
     events.function('render.video', async (videoSettings: VideoSettings, fileStream: FileSystemWritableFileStream) => {
-        events.fire('progressStart', localize('render.render-video'));
+        events.fire('progressStart', localize('panel.render.render-video'));
 
         try {
             const { startFrame, endFrame, frameRate, width, height, bitrate, transparentBg, showDebug, format, codec: codecChoice } = videoSettings;
@@ -262,6 +266,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             // start rendering to offscreen buffer only
             scene.camera.startOffscreenMode(width, height);
             scene.camera.renderOverlays = showDebug;
+            scene.gizmoLayer.enabled = false;
             if (!transparentBg) {
                 scene.camera.entity.camera.clearColor.copy(events.invoke('bgClr'));
             }
@@ -370,7 +375,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 await captureFrame(frameTime);
 
                 events.fire('progressUpdate', {
-                    text: localize('render.rendering'),
+                    text: localize('panel.render.rendering', { ellipsis: true }),
                     progress: 100 * frameTime / duration
                 });
             }
@@ -397,6 +402,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
         } finally {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
+            scene.gizmoLayer.enabled = true;
             scene.camera.entity.camera.clearColor.set(0, 0, 0, 0);
             scene.lockedRenderMode = false;
             scene.forceRender = true;       // camera likely moved, finish with normal render

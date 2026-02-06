@@ -6,6 +6,7 @@ import { EditHistory } from './edit-history';
 import { registerEditorEvents } from './editor';
 import { Events } from './events';
 import { initFileHandler } from './file-handler';
+import { registerIframeApi } from './iframe-api';
 import { registerPlySequenceEvents } from './ply-sequence';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
@@ -16,6 +17,7 @@ import { Shortcuts } from './shortcuts';
 import { registerTimelineEvents } from './timeline';
 import { BoxSelection } from './tools/box-selection';
 import { BrushSelection } from './tools/brush-selection';
+import { EyedropperSelection } from './tools/eyedropper-selection';
 import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
 import { MeasureTool } from './tools/measure-tool';
@@ -28,6 +30,7 @@ import { SphereSelection } from './tools/sphere-selection';
 import { ToolManager } from './tools/tool-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
+import { localizeInit } from './ui/localization';
 import { initIframeIntegration } from './iframe-integration';
 
 declare global {
@@ -86,6 +89,7 @@ const initShortcuts = (events: Events) => {
     shortcuts.register(['L', 'l'], { event: 'tool.lassoSelection', sticky: true });
     shortcuts.register(['B', 'b'], { event: 'tool.brushSelection', sticky: true });
     shortcuts.register(['O', 'o'], { event: 'tool.floodSelection', sticky: true });
+    shortcuts.register(['E', 'e'], { event: 'tool.eyedropperSelection', sticky: true });
     shortcuts.register(['A', 'a'], { event: 'select.all', ctrl: true });
     shortcuts.register(['A', 'a'], { event: 'select.none', shift: true });
     shortcuts.register(['I', 'i'], { event: 'select.invert', ctrl: true });
@@ -111,6 +115,9 @@ const main = async () => {
 
     // edit history
     const editHistory = new EditHistory(events);
+
+    // init localization
+    await localizeInit();
 
     // editor ui
     const editorUI = new EditorUI(events);
@@ -235,6 +242,7 @@ const main = async () => {
     toolManager.register('lassoSelection', new LassoSelection(events, editorUI.toolsContainer.dom, mask));
     toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer));
     toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer));
+    toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('move', new MoveTool(events, scene));
     toolManager.register('rotate', new RotateTool(events, scene));
     toolManager.register('scale', new ScaleTool(events, scene));
@@ -253,6 +261,7 @@ const main = async () => {
     registerPublishEvents(events);
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
+    registerIframeApi(events);
     initShortcuts(events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
 
