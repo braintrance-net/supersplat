@@ -1,24 +1,27 @@
 import {
     BLEND_NORMAL,
-    BUFFER_STATIC,
     PRIMITIVE_POINTS,
-    SEMANTIC_POSITION,
+    Color,
+    Entity,
     GSplatResource,
     ShaderMaterial,
     Mesh,
-    MeshInstance,
-    TYPE_UINT32,
-    VertexBuffer,
-    VertexFormat
+    MeshInstance
 } from 'playcanvas';
 
 import { ElementType, Element } from './element';
 import { vertexShader, fragmentShader } from './shaders/splat-overlay-shader';
 import { Splat } from './splat';
 
+const nullClr = new Color(0, 0, 0, 0);
+
 class SplatOverlay extends Element {
+    entity: Entity;
+    mesh: Mesh;
+    material: ShaderMaterial;
     meshInstance: MeshInstance;
     splat: Splat;
+    onSorterUpdated: (count: number) => void;
 
     constructor() {
         super(ElementType.debug);
@@ -28,99 +31,145 @@ class SplatOverlay extends Element {
         const scene = this.scene;
         const device = scene.graphicsDevice;
 
-        const material = new ShaderMaterial({
+        this.material = new ShaderMaterial({
             uniqueName: 'splatOverlayMaterial',
-            attributes: { vertex_id: SEMANTIC_POSITION },
             vertexGLSL: vertexShader,
             fragmentGLSL: fragmentShader
         });
-        material.blendType = BLEND_NORMAL;
+        this.material.blendType = BLEND_NORMAL;
+        this.material.depthWrite = false;
+        this.material.depthTest = true;
+        this.material.update();
 
-        const mesh = new Mesh(device);
-
-        const meshInstance = new MeshInstance(mesh, material, null);
-
-        const events = this.scene.events;
-
-        const update = (splat: Splat) => {
-            if (!splat) {
-                meshInstance.node = null;
-                return;
-            }
-
-            const splatData = splat.splatData;
-
-            const vertexFormat = new VertexFormat(device, [{
-                semantic: SEMANTIC_POSITION,
-                components: 1,
-                type: TYPE_UINT32,
-                asInt: true
-            }]);
-
-            // TODO: make use of Splat's mapping instead of rendering all splats
-            const vertexData = new Uint32Array(splatData.numSplats);
-            for (let i = 0; i < splatData.numSplats; ++i) {
-                vertexData[i] = i;
-            }
-
-            const vertexBuffer = new VertexBuffer(device, vertexFormat, splatData.numSplats, {
-                usage: BUFFER_STATIC,
-                data: vertexData.buffer
-            });
-
-            if (mesh.vertexBuffer) {
-                mesh.vertexBuffer.destroy();
-                mesh.vertexBuffer = null;
-            }
-
-            mesh.vertexBuffer = vertexBuffer;
-            mesh.primitive[0] = {
-                type: PRIMITIVE_POINTS,
-                base: 0,
-                baseVertex: 0,
-                count: splatData.numSplats
-            };
-
-            material.setParameter('splatState', splat.stateTexture);
-            material.setParameter('splatPosition', (splat.entity.gsplat.instance.resource as GSplatResource).transformATexture);
-            material.setParameter('splatTransform', splat.transformTexture);
-            material.setParameter('texParams', [splat.stateTexture.width, splat.stateTexture.height]);
-            material.update();
-
-            meshInstance.node = splat.entity;
-            this.splat = splat;
+        this.mesh = new Mesh(device);
+        this.mesh.primitive[0] = {
+            baseVertex: 0,
+            type: PRIMITIVE_POINTS,
+            base: 0,
+            count: 0
         };
 
-        events.on('selection.changed', (selection: Splat) => {
-            update(selection);
+        this.meshInstance = new MeshInstance(this.mesh, this.material, null);
+        // slightly higher priority so it renders before gizmos
+        this.meshInstance.drawBucket = 128;
+        // disable frustum culling since mesh has no vertex buffer for AABB calculation
+        this.meshInstance.cull = false;
+
+        this.entity = new Entity('splatOverlay');
+        this.entity.addComponent('render', {
+            meshInstances: [this.meshInstance],
+            layers: [scene.gizmoLayer.id]
         });
 
-        this.meshInstance = meshInstance;
+        scene.events.on('selection.changed', (selection: Splat) => {
+            if (selection) {
+                this.attach(selection);
+            } else {
+                this.detach();
+            }
+        });
     }
 
     destroy() {
-        this.meshInstance.material.destroy();
-        this.meshInstance.destroy();
+        this.detach();
+        this.entity.destroy();
+    }
+
+    attach(splat: Splat) {
+        // detach from previous splat first
+        this.detach();
+
+        const { mesh, material } = this;
+        const instance = splat.entity.gsplat.instance;
+        const orderTexture = instance.orderTexture;
+
+        // set up order texture uniforms
+        material.setParameter('splatOrder', orderTexture);
+        material.setParameter('splatTextureSize', orderTexture.width);
+
+        // set up other uniforms
+        const resource = instance.resource as GSplatResource;
+        material.setParameter('splatState', splat.stateTexture);
+        material.setParameter('splatPosition', (resource as any).getTexture('transformA'));
+        material.setParameter('splatTransform', splat.transformTexture);
+        material.setParameter('splatColor', (resource as any).getTexture('splatColor'));
+        material.setParameter('texParams', [splat.stateTexture.width, splat.stateTexture.height]);
+
+        // set up SH textures and define based on SH bands
+        const shBands = resource.shBands;
+        material.setDefine('SH_BANDS', `${shBands}`);
+        if (shBands > 0) {
+            material.setParameter('splatSH_1to3', (resource as any).getTexture('splatSH_1to3'));
+            if (shBands > 1) {
+                material.setParameter('splatSH_4to7', (resource as any).getTexture('splatSH_4to7'));
+                material.setParameter('splatSH_8to11', (resource as any).getTexture('splatSH_8to11'));
+                if (shBands > 2) {
+                    material.setParameter('splatSH_12to15', (resource as any).getTexture('splatSH_12to15'));
+                }
+            }
+        }
+
+        material.update();
+
+        // subscribe to sorter updates for dynamic count
+        this.onSorterUpdated = (count: number) => {
+            mesh.primitive[0].count = count;
+        };
+        instance.sorter.on('updated', this.onSorterUpdated);
+
+        // initialize count - numSplats is the current visible count (excluding deleted)
+        mesh.primitive[0].count = splat.numSplats;
+
+        splat.entity.addChild(this.entity);
+        this.splat = splat;
+    }
+
+    detach() {
+        // unsubscribe from sorter updates
+        if (this.splat && this.onSorterUpdated) {
+            this.splat.entity.gsplat.instance.sorter.off('updated', this.onSorterUpdated);
+            this.onSorterUpdated = null;
+        }
+
+        this.entity.remove();
+        this.splat = null;
     }
 
     onPreRender() {
-        const events = this.scene.events;
-        const splatSize = events.invoke('camera.splatSize');
+        const { enabled, scene } = this;
+        const { events } = scene;
 
-        if (this.meshInstance.node &&
-            this.scene.camera.renderOverlays &&
-            splatSize > 0 &&
-            events.invoke('camera.overlay') &&
-            events.invoke('camera.mode') === 'centers') {
-            const selectedClr = events.invoke('selectedClr');
+        this.entity.enabled = enabled;
+
+        if (enabled) {
+            const { material } = this;
+            const splatSize = events.invoke('camera.splatSize');
+            const selectedClr = events.invoke('view.outlineSelection') ? nullClr : events.invoke('selectedClr');
             const unselectedClr = events.invoke('unselectedClr');
-            const { material } = this.meshInstance;
+            const useGaussianColor = events.invoke('view.centersUseGaussianColor') ? 1.0 : 0.0;
+
             material.setParameter('splatSize', splatSize * window.devicePixelRatio);
             material.setParameter('selectedClr', [selectedClr.r, selectedClr.g, selectedClr.b, selectedClr.a]);
             material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
+            material.setParameter('useGaussianColor', useGaussianColor);
             material.setParameter('transformPalette', this.splat.transformPalette.texture);
-            this.scene.app.drawMeshInstance(this.meshInstance);
+
+            // pass camera position for SH evaluation
+            const camPos = scene.camera.mainCamera.getPosition();
+            material.setParameter('view_position', [camPos.x, camPos.y, camPos.z]);
+
+            material.update();
         }
+    }
+
+    get enabled() {
+        const { scene, splat } = this;
+        const { events } = scene;
+        return splat &&
+            events.invoke('camera.splatSize') > 0 &&
+            scene.camera.renderOverlays &&
+            events.invoke('camera.overlay') &&
+            events.invoke('camera.mode') === 'centers';
     }
 }
 

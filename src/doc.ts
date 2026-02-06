@@ -1,8 +1,9 @@
+import { ZipFileSystem, ZipReadFileSystem } from '@playcanvas/splat-transform';
+
 import { Events } from './events';
+import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
 import { Scene } from './scene';
-import { DownloadWriter, FileStreamWriter } from './serialize/writer';
-import { ZipWriter } from './serialize/zip-writer';
 import { Splat } from './splat';
 import { serializePly } from './splat-serialize';
 import { Transform } from './transform';
@@ -84,32 +85,31 @@ const registerDocEvents = (scene: Scene, events: Events) => {
     // load the document from the given file
     const loadDocument = async (file: File) => {
         events.fire('startSpinner');
+
+        // Create streaming ZIP reader from the file
+        const blobSource = new BlobReadSource(file);
+        const zipFs = new ZipReadFileSystem(blobSource);
+
         try {
             // reset the scene
             resetScene();
 
-            // read the document
-            /* global JSZip */
-            // @ts-ignore
-            const zip = new JSZip();
-            await zip.loadAsync(file);
-            const document = JSON.parse(await zip.file('document.json').async('text'));
+            // read document.json via streaming (only reads what's needed)
+            const docSource = await zipFs.createSource('document.json');
+            const docData = await docSource.read().readAll();
+            docSource.close();
+            const document = JSON.parse(new TextDecoder().decode(docData));
 
             // run through each splat and load it
             for (let i = 0; i < document.splats.length; ++i) {
                 const filename = `splat_${i}.ply`;
                 const splatSettings = document.splats[i];
 
-                // construct the splat asset
-                const contents = await zip.file(`splat_${i}.ply`).async('blob');
-                const url = URL.createObjectURL(contents);
-                const splat = await scene.assetLoader.load({
-                    url,
-                    filename
-                });
-                URL.revokeObjectURL(url);
+                // load splat directly from the zip filesystem (streams on-demand)
+                // skipReorder=true because ssproj PLY files are already in morton order
+                const splat = await scene.assetLoader.load(filename, zipFs, false, true);
 
-                scene.add(splat);
+                await scene.add(splat);
 
                 splat.docDeserialize(splatSettings);
             }
@@ -141,6 +141,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 message: `'${error.message ?? error}'`
             });
         } finally {
+            // Clean up resources
+            zipFs.close();
             events.fire('stopSpinner');
         }
     };
@@ -169,15 +171,23 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 keepColorTint: true
             };
 
-            const writer = options.stream ? new FileStreamWriter(options.stream) : new DownloadWriter(options.filename);
-            const zipWriter = new ZipWriter(writer);
-            await zipWriter.file('document.json', JSON.stringify(document));
+            // Create browser filesystem and zip filesystem
+            const browserFs = new BrowserFileSystem(options.filename, options.stream);
+            const browserWriter = await browserFs.createWriter(options.filename);
+            const zipFs = new ZipFileSystem(browserWriter);
+
+            // Write document.json
+            const docWriter = await zipFs.createWriter('document.json');
+            await docWriter.write(new TextEncoder().encode(JSON.stringify(document)));
+            await docWriter.close();
+
+            // Write each splat as PLY
             for (let i = 0; i < splats.length; ++i) {
-                await zipWriter.start(`splat_${i}.ply`);
-                await serializePly([splats[i]], serializeSettings, zipWriter);
+                await serializePly([splats[i]], serializeSettings, zipFs, `splat_${i}.ply`);
             }
-            await zipWriter.close();
-            await writer.close();
+
+            // Close zip (also closes underlying browser writer)
+            await zipFs.close();
         } catch (error) {
             await events.invoke('showPopup', {
                 type: 'error',

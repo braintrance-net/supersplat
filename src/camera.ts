@@ -1,13 +1,13 @@
 import {
     math,
     ADDRESS_CLAMP_TO_EDGE,
+    ASPECT_MANUAL,
     FILTER_NEAREST,
     PIXELFORMAT_RGBA8,
     PIXELFORMAT_RGBA16F,
     PIXELFORMAT_DEPTH,
     PROJECTION_ORTHOGRAPHIC,
     PROJECTION_PERSPECTIVE,
-    TONEMAP_NONE,
     TONEMAP_ACES,
     TONEMAP_ACES2,
     TONEMAP_FILMIC,
@@ -15,39 +15,30 @@ import {
     TONEMAP_LINEAR,
     TONEMAP_NEUTRAL,
     BoundingBox,
+    Color,
     Entity,
     Mat4,
-    Picker,
-    Plane,
     Ray,
+    RenderPass,
+    RenderPassForward,
     RenderTarget,
     Texture,
     Vec3,
-    Vec4,
-    WebglGraphicsDevice
+    Vec4
 } from 'playcanvas';
 
 import { PointerController } from './controllers';
 import { Element, ElementType } from './element';
+import { Picker } from './picker';
 import { Serializer } from './serializer';
+import { vertexShader, fragmentShader } from './shaders/blit-shader';
 import { Splat } from './splat';
 import { TweenValue } from './tween-value';
-
-// calculate the forward vector given azimuth and elevation
-const calcForwardVec = (result: Vec3, azim: number, elev: number) => {
-    const ex = elev * math.DEG_TO_RAD;
-    const ey = azim * math.DEG_TO_RAD;
-    const s1 = Math.sin(-ex);
-    const c1 = Math.cos(-ex);
-    const s2 = Math.sin(-ey);
-    const c2 = Math.cos(-ey);
-    result.set(-c1 * s2, s1, c1 * c2);
-};
+import { ShaderQuad, SimpleRenderPass } from './utils/simple-render-pass';
 
 // work globals
 const forwardVec = new Vec3();
 const cameraPosition = new Vec3();
-const plane = new Plane();
 const ray = new Ray();
 const vec = new Vec3();
 const vecb = new Vec3();
@@ -59,8 +50,24 @@ const v4 = new Vec4();
 const mod = (n: number, m: number) => ((n % m) + m) % m;
 
 class Camera extends Element {
+    /**
+     * Calculate the forward vector given azimuth and elevation angles.
+     *
+     * @param {Vec3} result - The Vec3 to store the result in.
+     * @param {number} azim - Azimuth angle in degrees.
+     * @param {number} elev - Elevation angle in degrees.
+     */
+    static calcForwardVec(result: Vec3, azim: number, elev: number) {
+        const ex = elev * math.DEG_TO_RAD;
+        const ey = azim * math.DEG_TO_RAD;
+        const s1 = Math.sin(-ex);
+        const c1 = Math.cos(-ex);
+        const s2 = Math.sin(-ey);
+        const c2 = Math.cos(-ey);
+        result.set(-c1 * s2, s1, c1 * c2);
+    }
+
     controller: PointerController;
-    entity: Entity;
     focalPointTween = new TweenValue({ x: 0, y: 0.5, z: 0 });
     azimElevTween = new TweenValue({ azim: 30, elev: -15 });
     distanceTween = new TweenValue({ distance: 1 });
@@ -70,16 +77,28 @@ class Camera extends Element {
 
     sceneRadius = 1;
 
-    flySpeed = 5;
+    flySpeed = 1;
+
+    controlMode: 'orbit' | 'fly' = 'orbit';
 
     picker: Picker;
 
-    workRenderTarget: RenderTarget;
+    mainCamera: Entity;
+
+    mainTarget: RenderTarget;
+    splatTarget: RenderTarget;
+    colorTarget: RenderTarget;
+    workTarget: RenderTarget;
+
+    // Render passes
+    clearPass: RenderPass;
+    mainPass: RenderPassForward;
+    splatPass: RenderPassForward;
+    gizmoPass: RenderPassForward;
+    finalPass: SimpleRenderPass;
 
     // overridden target size
-    targetSize: { width: number, height: number } = null;
-
-    suppressFinalBlit = false;
+    targetSizeOverride: { width: number, height: number } = null;
 
     renderOverlays = true;
 
@@ -87,40 +106,36 @@ class Camera extends Element {
 
     constructor() {
         super(ElementType.camera);
-        // create the camera entity
-        this.entity = new Entity('Camera');
-        this.entity.addComponent('camera');
 
-        // NOTE: this call is needed for refraction effect to work correctly, but
-        // it slows rendering and should only be made when required.
-        // this.entity.camera.requestSceneColorMap(true);
+        // create the camera entity
+        this.mainCamera = new Entity('Camera');
+        this.mainCamera.addComponent('camera');
     }
 
     // ortho
     set ortho(value: boolean) {
         if (value !== this.ortho) {
-            this.entity.camera.projection = value ? PROJECTION_ORTHOGRAPHIC : PROJECTION_PERSPECTIVE;
+            this.camera.projection = value ? PROJECTION_ORTHOGRAPHIC : PROJECTION_PERSPECTIVE;
             this.scene.events.fire('camera.ortho', value);
         }
     }
 
     get ortho() {
-        return this.entity.camera.projection === PROJECTION_ORTHOGRAPHIC;
+        return this.camera.projection === PROJECTION_ORTHOGRAPHIC;
     }
 
     // fov
     set fov(value: number) {
-        this.entity.camera.fov = value;
+        this.camera.fov = value;
     }
 
     get fov() {
-        return this.entity.camera.fov;
+        return this.camera.fov;
     }
 
     // tonemapping
     set tonemapping(value: string) {
         const mapping: Record<string, number> = {
-            none: TONEMAP_NONE,
             linear: TONEMAP_LINEAR,
             neutral: TONEMAP_NEUTRAL,
             aces: TONEMAP_ACES,
@@ -131,15 +146,14 @@ class Camera extends Element {
 
         const tvalue = mapping[value];
 
-        if (tvalue !== undefined && tvalue !== this.entity.camera.toneMapping) {
-            this.entity.camera.toneMapping = tvalue;
+        if (tvalue !== undefined && tvalue !== this.camera.toneMapping) {
+            this.camera.toneMapping = tvalue;
             this.scene.events.fire('camera.tonemapping', value);
         }
     }
 
     get tonemapping() {
-        switch (this.entity.camera.toneMapping) {
-            case TONEMAP_NONE: return 'none';
+        switch (this.camera.toneMapping) {
             case TONEMAP_LINEAR: return 'linear';
             case TONEMAP_NEUTRAL: return 'neutral';
             case TONEMAP_ACES: return 'aces';
@@ -147,25 +161,25 @@ class Camera extends Element {
             case TONEMAP_FILMIC: return 'filmic';
             case TONEMAP_HEJL: return 'hejl';
         }
-        return 'none';
+        return 'linear';
     }
 
     // near clip
     set near(value: number) {
-        this.entity.camera.nearClip = value;
+        this.camera.nearClip = value;
     }
 
     get near() {
-        return this.entity.camera.nearClip;
+        return this.camera.nearClip;
     }
 
     // far clip
     set far(value: number) {
-        this.entity.camera.farClip = value;
+        this.camera.farClip = value;
     }
 
     get far() {
-        return this.entity.camera.farClip;
+        return this.camera.farClip;
     }
 
     // focal point
@@ -236,7 +250,7 @@ class Camera extends Element {
 
     // transform the world space coordinate to normalized screen coordinate
     worldToScreen(world: Vec3, screen: Vec3) {
-        const { camera } = this.entity.camera;
+        const { camera } = this;
         m.mul2(camera.projectionMatrix, camera.viewMatrix);
 
         v4.set(world.x, world.y, world.z, 1);
@@ -248,33 +262,51 @@ class Camera extends Element {
     }
 
     add() {
-        this.scene.cameraRoot.addChild(this.entity);
-        this.entity.camera.layers = this.entity.camera.layers.concat([
-            this.scene.shadowLayer.id,
-            this.scene.debugLayer.id,
-            this.scene.gizmoLayer.id
-        ]);
+        const { camera, scene } = this;
 
-        if (this.scene.config.camera.debugRender) {
-            this.entity.camera.setShaderPass(`debug_${this.scene.config.camera.debugRender}`);
-        }
+        scene.cameraRoot.addChild(this.mainCamera);
+
+        // configure camera to render all layers
+        this.mainCamera.camera.layers = [
+            scene.worldLayer.id,
+            scene.splatLayer.id,
+            scene.gizmoLayer.id
+        ];
+
+        // use manual aspect ratio mode so we can set it based on targetSize
+        camera.aspectRatioMode = ASPECT_MANUAL;
+
+        // create render passes
+        const device = scene.graphicsDevice;
+        const { app } = scene;
+        const renderer = app.renderer;
+        const composition = app.scene.layers;
+
+        this.clearPass = new RenderPass(device);
+        this.mainPass = new RenderPassForward(device, composition, app.scene, renderer);
+        this.splatPass = new RenderPassForward(device, composition, app.scene, renderer);
+        this.gizmoPass = new RenderPassForward(device, composition, app.scene, renderer);
+        this.finalPass = new SimpleRenderPass(device,
+            new ShaderQuad(device, vertexShader, fragmentShader, 'final-blit'), {
+                vars: () => {
+                    return {
+                        srcTexture: this.mainTarget.colorBuffer
+                    };
+                }
+            });
 
         const target = document.getElementById('canvas-container');
-
         this.controller = new PointerController(this, target);
 
         // apply scene config
-        const config = this.scene.config;
+        const config = scene.config;
         const controls = config.controls;
-
-        // configure background
-        this.entity.camera.clearColor.set(0, 0, 0, 0);
 
         this.minElev = (controls.minPolarAngle * 180) / Math.PI - 90;
         this.maxElev = (controls.maxPolarAngle * 180) / Math.PI - 90;
 
         // tonemapping
-        this.scene.camera.entity.camera.toneMapping = {
+        camera.toneMapping = {
             linear: TONEMAP_LINEAR,
             filmic: TONEMAP_FILMIC,
             hejl: TONEMAP_HEJL,
@@ -284,7 +316,7 @@ class Camera extends Element {
         }[config.camera.toneMapping];
 
         // exposure
-        this.scene.app.scene.exposure = config.camera.exposure;
+        scene.app.scene.exposure = config.camera.exposure;
 
         this.fov = config.camera.fov;
 
@@ -293,19 +325,14 @@ class Camera extends Element {
         this.setDistance(controls.initialZoom, 0);
 
         // picker
-        const { width, height } = this.scene.targetSize;
-        this.picker = new Picker(this.scene.app, width, height);
+        this.picker = new Picker(scene);
 
-        // override buffer allocation to use our render target
-        this.picker.allocateRenderTarget = () => { };
-        this.picker.releaseRenderTarget = () => { };
-
-        this.scene.events.on('scene.boundChanged', this.onBoundChanged, this);
+        scene.events.on('scene.boundChanged', this.onBoundChanged, this);
 
         // prepare camera-specific uniforms
         this.updateCameraUniforms = () => {
-            const device = this.scene.graphicsDevice;
-            const entity = this.entity;
+            const device = scene.graphicsDevice;
+            const entity = this.mainCamera;
             const camera = entity.camera;
 
             const set = (name: string, vec: Vec3) => {
@@ -314,7 +341,7 @@ class Camera extends Element {
 
             // get frustum corners in world space
             const points = camera.camera.getFrustumCorners(-100);
-            const worldTransform = entity.getWorldTransform();
+            const worldTransform = this.worldTransform;
             for (let i = 0; i < points.length; i++) {
                 worldTransform.transformPoint(points[i], points[i]);
             }
@@ -361,17 +388,25 @@ class Camera extends Element {
     }
 
     remove() {
+        const { scene } = this;
+
         this.controller.destroy();
         this.controller = null;
 
-        this.entity.camera.layers = this.entity.camera.layers.filter(layer => layer !== this.scene.shadowLayer.id);
-        this.scene.cameraRoot.removeChild(this.entity);
+        // cleanup render passes
+        this.clearPass?.destroy();
+        this.mainPass?.destroy();
+        this.splatPass?.destroy();
+        this.gizmoPass?.destroy();
+        this.finalPass?.destroy();
+        this.camera.renderPasses = null;
 
-        // destroy doesn't exist on picker?
-        // this.picker.destroy();
+        scene.cameraRoot.removeChild(this.mainCamera);
+
+        this.picker.destroy();
         this.picker = null;
 
-        this.scene.events.off('scene.boundChanged', this.onBoundChanged, this);
+        scene.events.off('scene.boundChanged', this.onBoundChanged, this);
     }
 
     // handle the scene's bound changing. the camera must be configured to render
@@ -384,74 +419,122 @@ class Camera extends Element {
     }
 
     serialize(serializer: Serializer) {
-        serializer.packa(this.entity.getWorldTransform().data);
+        serializer.packa(this.worldTransform.data);
         serializer.pack(
             this.fov,
             this.tonemapping,
-            this.entity.camera.renderTarget?.width,
-            this.entity.camera.renderTarget?.height
+            this.targetSize.width,
+            this.targetSize.height
         );
     }
 
     // handle the viewer canvas resizing
     rebuildRenderTargets() {
-        const device = this.scene.graphicsDevice;
-        const { width, height } = this.targetSize ?? this.scene.targetSize;
-        const format = this.scene.events.invoke('camera.highPrecision') ? PIXELFORMAT_RGBA16F : PIXELFORMAT_RGBA8;
+        const { width, height } = this.targetSize;
+        const { mainTarget, scene } = this;
 
-        const rt = this.entity.camera.renderTarget;
-        if (rt && rt.width === width && rt.height === height && rt.colorBuffer.format === format) {
+        // early out if size is unchanged
+        if (mainTarget && mainTarget.width === width && mainTarget.height === height) {
             return;
         }
 
-        // out with the old
-        if (rt) {
-            rt.destroyTextureBuffers();
-            rt.destroy();
+        if (!mainTarget) {
+            // first time - construct render targets
+            const { graphicsDevice } = scene;
 
-            this.workRenderTarget.destroy();
-            this.workRenderTarget = null;
+            const createTexture = (name: string, width: number, height: number, format: number) => {
+                return new Texture(graphicsDevice, {
+                    name,
+                    width,
+                    height,
+                    format,
+                    mipmaps: false,
+                    minFilter: FILTER_NEAREST,
+                    magFilter: FILTER_NEAREST,
+                    addressU: ADDRESS_CLAMP_TO_EDGE,
+                    addressV: ADDRESS_CLAMP_TO_EDGE
+                });
+            };
+
+            const colorBuffer = createTexture('cameraColor', width, height, PIXELFORMAT_RGBA16F);
+            const workBuffer = createTexture('workColor', width, height, PIXELFORMAT_RGBA8);
+            const depthBuffer = createTexture('cameraDepth', width, height, PIXELFORMAT_DEPTH);
+
+            // create main render target
+            this.mainTarget = new RenderTarget({
+                colorBuffer,
+                depthBuffer,
+                flipY: false,
+                autoResolve: false
+            });
+
+            // create MRT render target for splat pass
+            this.splatTarget = new RenderTarget({
+                colorBuffers: [
+                    colorBuffer,        // RT0: main color (shared)
+                    workBuffer          // RT1: overlay output (shared with workTarget)
+                ],
+                depthBuffer,
+                flipY: false,
+                autoResolve: false
+            });
+
+            this.colorTarget = new RenderTarget({
+                colorBuffer,
+                depth: false,
+                autoResolve: false
+            });
+
+            // create work buffer (used for picking, overlay output, and other operations)
+            this.workTarget = new RenderTarget({
+                colorBuffer: workBuffer,
+                depth: false,
+                autoResolve: false
+            });
+
+            // set picker render targets
+            this.picker.setRenderTargets(this.colorTarget, this.workTarget);
+
+            // clear all targets
+            this.clearPass.init(this.splatTarget);
+            this.clearPass.setClearColor(new Color(0, 0, 0, 0));
+            this.clearPass.setClearDepth(1);
+            this.clearPass.setClearStencil(0);
+
+            // configure main pass - world layer with clears
+            this.mainPass.init(this.mainTarget);
+            this.mainPass.addLayer(this.camera, scene.worldLayer, false, false);
+            this.mainPass.addLayer(this.camera, scene.worldLayer, true, false);
+
+            // configure splat pass - MRT target, no clears
+            this.splatPass.init(this.splatTarget);
+            this.splatPass.addLayer(this.camera, scene.splatLayer, false, false);
+            this.splatPass.addLayer(this.camera, scene.splatLayer, true, false);
+
+            // configure gizmo pass
+            this.gizmoPass.init(this.mainTarget);
+            this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, false, false);
+            this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, true, false);
+            this.gizmoPass.renderActions[0].clearDepth = true;
+            this.gizmoPass.renderActions[0].clearStencil = true;
+
+            this.finalPass.init(null);
+
+            // assign render passes to camera
+            this.camera.renderPasses = [this.clearPass, this.mainPass, this.splatPass, this.gizmoPass, this.finalPass];
+        } else {
+            // resize existing render targets
+            const { splatTarget, colorTarget, workTarget } = this;
+
+            mainTarget.resize(width, height);
+            workTarget.resize(width, height);
+            colorTarget.resize(width, height);
+            splatTarget.resize(width, height);
         }
 
-        const createTexture = (name: string, width: number, height: number, format: number) => {
-            return new Texture(device, {
-                name,
-                width,
-                height,
-                format,
-                mipmaps: false,
-                minFilter: FILTER_NEAREST,
-                magFilter: FILTER_NEAREST,
-                addressU: ADDRESS_CLAMP_TO_EDGE,
-                addressV: ADDRESS_CLAMP_TO_EDGE
-            });
-        };
-
-        // in with the new
-        const colorBuffer = createTexture('cameraColor', width, height, format);
-        const depthBuffer = createTexture('cameraDepth', width, height, PIXELFORMAT_DEPTH);
-        const renderTarget = new RenderTarget({
-            colorBuffer,
-            depthBuffer,
-            flipY: false,
-            autoResolve: false
-        });
-        this.entity.camera.renderTarget = renderTarget;
-        this.entity.camera.horizontalFov = width > height;
-
-        const workColorBuffer = createTexture('workColor', width, height, PIXELFORMAT_RGBA8);
-
-        // create pick mode render target (reuse color buffer)
-        this.workRenderTarget = new RenderTarget({
-            colorBuffer: workColorBuffer,
-            depth: false,
-            autoResolve: false
-        });
-
-        // set picker render target
-        this.picker.renderTarget = this.workRenderTarget;
-
-        this.scene.events.fire('camera.resize', { width, height });
+        this.camera.horizontalFov = width > height;
+        this.camera.aspectRatio = width / height;
+        scene.events.fire('camera.resize', { width, height });
     }
 
     onUpdate(deltaTime: number) {
@@ -466,18 +549,21 @@ class Camera extends Element {
         const azimElev = this.azimElevTween.value;
         const distance = this.distanceTween.value;
 
-        calcForwardVec(forwardVec, azimElev.azim, azimElev.elev);
+        Camera.calcForwardVec(forwardVec, azimElev.azim, azimElev.elev);
         cameraPosition.copy(forwardVec);
         cameraPosition.mulScalar(distance.distance * this.sceneRadius / this.fovFactor);
         cameraPosition.add(this.focalPointTween.value);
 
-        this.entity.setLocalPosition(cameraPosition);
-        this.entity.setLocalEulerAngles(azimElev.elev, azimElev.azim, 0);
+        this.mainCamera.setLocalPosition(cameraPosition);
+        this.mainCamera.setLocalEulerAngles(azimElev.elev, azimElev.azim, 0);
 
-        this.fitClippingPlanes(this.entity.getLocalPosition(), this.entity.forward);
+        this.fitClippingPlanes(this.mainCamera.getLocalPosition(), this.mainCamera.forward);
 
-        const { camera } = this.entity;
-        camera.orthoHeight = this.distanceTween.value.distance * this.sceneRadius / this.fovFactor * (this.fov / 90) * (camera.horizontalFov ? this.scene.targetSize.height / this.scene.targetSize.width : 1);
+        const { camera } = this.mainCamera;
+        const { targetSize } = this;
+
+        // update ortho height
+        camera.orthoHeight = this.distanceTween.value.distance * this.sceneRadius / this.fovFactor * (this.fov / 90) * (camera.horizontalFov ? targetSize.height / targetSize.width : 1);
         camera.camera._updateViewProjMat();
     }
 
@@ -505,18 +591,7 @@ class Camera extends Element {
     }
 
     onPostRender() {
-        const device = this.scene.graphicsDevice as WebglGraphicsDevice;
-        const renderTarget = this.entity.camera.renderTarget;
 
-        // resolve msaa buffer
-        if (renderTarget.samples > 1) {
-            renderTarget.resolve(true, false);
-        }
-
-        // copy render target
-        if (!this.suppressFinalBlit) {
-            device.copyRenderTarget(renderTarget, null, true, false);
-        }
     }
 
     focus(options?: { focalPoint: Vec3, radius: number, speed: number }) {
@@ -543,66 +618,47 @@ class Camera extends Element {
     get fovFactor() {
         // we set the fov of the longer axis. here we get the fov of the other (smaller) axis so framing
         // doesn't cut off the scene.
-        const { width, height } = this.scene.targetSize;
-        const aspect = (width && height) ? this.entity.camera.horizontalFov ? height / width : width / height : 1;
+        const { width, height } = this.targetSize;
+        const aspect = (width && height) ? this.camera.horizontalFov ? height / width : width / height : 1;
         const fov = 2 * Math.atan(Math.tan(this.fov * math.DEG_TO_RAD * 0.5) * aspect);
         return Math.sin(fov * 0.5);
     }
 
     getRay(screenX: number, screenY: number, ray: Ray) {
-        const { entity, ortho, scene } = this;
-        const cameraPos = this.entity.getPosition();
+        const { camera, ortho } = this;
+        const cameraPos = this.mainCamera.getPosition();
 
         // create the pick ray in world space
         if (ortho) {
-            entity.camera.screenToWorld(screenX, screenY, -1.0, vec);
-            entity.camera.screenToWorld(screenX, screenY, 1.0, vecb);
+            camera.screenToWorld(screenX, screenY, -1.0, vec);
+            camera.screenToWorld(screenX, screenY, 1.0, vecb);
             vecb.sub(vec).normalize();
             ray.set(vec, vecb);
         } else {
-            entity.camera.screenToWorld(screenX, screenY, 1.0, vec);
+            camera.screenToWorld(screenX, screenY, 1.0, vec);
             vec.sub(cameraPos).normalize();
             ray.set(cameraPos, vec);
         }
     }
 
-    // intersect the scene at the given screen coordinate
-    intersect(screenX: number, screenY: number) {
+    // intersect the scene at the given normalized screen coordinate (0-1 range) using depth picking
+    async intersect(x: number, y: number) {
         const { scene } = this;
-
-        const target = scene.canvas;
-        const sx = screenX / target.clientWidth * scene.targetSize.width;
-        const sy = screenY / target.clientHeight * scene.targetSize.height;
-
-        this.getRay(screenX, screenY, ray);
-
         const splats = scene.getElementsByType(ElementType.splat);
 
-        let closestD = 0;
-        const closestP = new Vec3();
-        let closestSplat = null;
+        let closestDepth = Infinity;
+        let closestSplat: Splat | null = null;
 
+        // Find the splat with the smallest depth at this screen position
         for (let i = 0; i < splats.length; ++i) {
             const splat = splats[i] as Splat;
 
-            this.pickPrep(splat, 'set');
-            const pickId = this.pick(sx, sy);
+            this.picker.prepareDepth(splat);
+            const normalizedDepth = await this.picker.readDepth(x, y);
 
-            if (pickId !== -1) {
-                splat.calcSplatWorldPosition(pickId, vec);
-
-                // create a plane at the world position facing perpendicular to the camera
-                plane.setFromPointNormal(vec, this.entity.forward);
-
-                // find intersection
-                if (plane.intersectsRay(ray, vec)) {
-                    const distance = vecb.sub2(vec, ray.origin).length();
-                    if (!closestSplat || distance < closestD) {
-                        closestD = distance;
-                        closestP.copy(vec);
-                        closestSplat = splat;
-                    }
-                }
+            if (normalizedDepth !== null && normalizedDepth < closestDepth) {
+                closestDepth = normalizedDepth;
+                closestSplat = splat;
             }
         }
 
@@ -610,16 +666,29 @@ class Camera extends Element {
             return null;
         }
 
+        // Convert normalized depth to linear depth
+        const linearDepth = closestDepth * (this.far - this.near) + this.near;
+
+        // Convert normalized coordinates to screen pixels for getRay
+        const screenX = x * scene.canvas.clientWidth;
+        const screenY = y * scene.canvas.clientHeight;
+
+        // Calculate world position from ray and depth
+        this.getRay(screenX, screenY, ray);
+        const t = linearDepth / ray.direction.dot(this.mainCamera.forward);
+        const position = new Vec3();
+        position.copy(ray.origin).add(vec.copy(ray.direction).mulScalar(t));
+
         return {
             splat: closestSplat,
-            position: closestP,
-            distance: closestD
+            position: position,
+            distance: t
         };
     }
 
-    // intersect the scene at the screen location and focus the camera on this location
-    pickFocalPoint(screenX: number, screenY: number) {
-        const result = this.intersect(screenX, screenY);
+    // intersect the scene at the normalized screen location (0-1 range) and focus the camera on this location
+    async pickFocalPoint(x: number, y: number) {
+        const result = await this.intersect(x, y);
         if (result) {
             const { scene } = this;
 
@@ -636,56 +705,16 @@ class Camera extends Element {
     // pick mode
 
     // render picker contents
-    pickPrep(splat: Splat, op: 'add'|'remove'|'set') {
-        const { width, height } = this.scene.targetSize;
-        const worldLayer = this.scene.app.scene.layers.getLayerByName('World');
-
-        const device = this.scene.graphicsDevice;
-        const events = this.scene.events;
-        const alpha = events.invoke('camera.mode') === 'rings' ? 0.0 : 0.2;
-
-        // hide non-selected elements
-        const splats = this.scene.getElementsByType(ElementType.splat);
-        splats.forEach((s: Splat) => {
-            s.entity.enabled = s === splat;
-        });
-
-        device.scope.resolve('pickerAlpha').setValue(alpha);
-        device.scope.resolve('pickMode').setValue(['add', 'remove', 'set'].indexOf(op));
-        this.picker.resize(width, height);
-        this.picker.prepare(this.entity.camera, this.scene.app.scene, [worldLayer]);
-
-        // re-enable all splats
-        splats.forEach((splat: Splat) => {
-            splat.entity.enabled = true;
-        });
+    pickPrep(splat: Splat, mode: 'add' | 'remove' | 'set') {
+        this.picker.prepareId(splat, mode);
     }
 
     pick(x: number, y: number) {
-        return this.pickRect(x, y, 1, 1)[0];
+        return this.picker.readId(x, y);
     }
 
     pickRect(x: number, y: number, width: number, height: number) {
-        const device = this.scene.graphicsDevice as WebglGraphicsDevice;
-        const pixels = new Uint8Array(width * height * 4);
-
-        // read pixels
-        device.setRenderTarget(this.picker.renderTarget);
-        device.updateBegin();
-        device.readPixels(x, this.picker.renderTarget.height - y - height, width, height, pixels);
-        device.updateEnd();
-
-        const result: number[] = [];
-        for (let i = 0; i < width * height; i++) {
-            result.push(
-                pixels[i * 4] |
-                (pixels[i * 4 + 1] << 8) |
-                (pixels[i * 4 + 2] << 16) |
-                (pixels[i * 4 + 3] << 24)
-            );
-        }
-
-        return result;
+        return this.picker.readIds(x, y, width, height);
     }
 
     docSerialize() {
@@ -712,13 +741,37 @@ class Camera extends Element {
     // offscreen render mode
 
     startOffscreenMode(width: number, height: number) {
-        this.targetSize = { width, height };
-        this.suppressFinalBlit = true;
+        this.targetSizeOverride = { width, height };
+        this.finalPass.enabled = false;
+        this.rebuildRenderTargets();
+        this.onUpdate(0);
     }
 
     endOffscreenMode() {
-        this.targetSize = null;
-        this.suppressFinalBlit = false;
+        this.targetSizeOverride = null;
+        this.finalPass.enabled = true;
+        this.rebuildRenderTargets();
+        this.onUpdate(0);
+    }
+
+    get targetSize() {
+        return this.targetSizeOverride ?? this.scene.targetSize;
+    }
+
+    get camera() {
+        return this.mainCamera.camera;
+    }
+
+    get worldTransform() {
+        return this.mainCamera.getWorldTransform();
+    }
+
+    get position() {
+        return this.mainCamera.getPosition();
+    }
+
+    get forward() {
+        return this.mainCamera.forward;
     }
 }
 

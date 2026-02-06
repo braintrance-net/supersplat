@@ -2,6 +2,7 @@ import { BooleanInput, ColorPicker, Container, Label, SelectInput, SliderInput }
 import { Color } from 'playcanvas';
 
 import { Events } from '../events';
+import { ShortcutManager } from '../shortcut-manager';
 import { localize } from './localization';
 import { Tooltips } from './tooltips';
 
@@ -120,9 +121,8 @@ class ViewPanel extends Container {
 
         const tonemappingSelection = new SelectInput({
             class: 'view-panel-row-select',
-            defaultValue: 'none',
+            defaultValue: 'linear',
             options: [
-                { v: 'none', t: localize('panel.view-options.tonemapping.none') },
                 { v: 'linear', t: localize('panel.view-options.tonemapping.linear') },
                 { v: 'neutral', t: localize('panel.view-options.tonemapping.neutral') },
                 { v: 'aces', t: localize('panel.view-options.tonemapping.aces') },
@@ -178,6 +178,28 @@ class ViewPanel extends Container {
         shBandsRow.append(shBandsLabel);
         shBandsRow.append(shBandsSlider);
 
+        // camera fly speed
+
+        const cameraFlySpeedRow = new Container({
+            class: 'view-panel-row'
+        });
+
+        const cameraFlySpeedLabel = new Label({
+            text: localize('panel.view-options.fly-speed'),
+            class: 'view-panel-row-label'
+        });
+
+        const cameraFlySpeedSlider = new SliderInput({
+            class: 'view-panel-row-slider',
+            min: 0.1,
+            max: 30,
+            precision: 1,
+            value: 1
+        });
+
+        cameraFlySpeedRow.append(cameraFlySpeedLabel);
+        cameraFlySpeedRow.append(cameraFlySpeedSlider);
+
         // centers size
 
         const centersSizeRow = new Container({
@@ -200,47 +222,24 @@ class ViewPanel extends Container {
         centersSizeRow.append(centersSizeLabel);
         centersSizeRow.append(centersSizeSlider);
 
-        // camera fly speed
-
-        const cameraFlySpeedRow = new Container({
+        // centers gaussian color
+        const centersColorRow = new Container({
             class: 'view-panel-row'
         });
 
-        const cameraFlySpeedLabel = new Label({
-            text: localize('panel.view-options.fly-speed'),
+        const centersColorLabel = new Label({
+            text: localize('panel.view-options.centers-gaussian-color'),
             class: 'view-panel-row-label'
         });
 
-        const cameraFlySpeedSlider = new SliderInput({
-            class: 'view-panel-row-slider',
-            min: 0.1,
-            max: 30,
-            precision: 1,
-            value: 5
-        });
-
-        cameraFlySpeedRow.append(cameraFlySpeedLabel);
-        cameraFlySpeedRow.append(cameraFlySpeedSlider);
-
-        // high precision (render to float)
-
-        const highPrecisionRow = new Container({
-            class: 'view-panel-row'
-        });
-
-        const highPrecisionLabel = new Label({
-            text: localize('panel.view-options.high-precision'),
-            class: 'view-panel-row-label'
-        });
-
-        const highPrecisionToggle = new BooleanInput({
+        const centersColorToggle = new BooleanInput({
             type: 'toggle',
             class: 'view-panel-row-toggle',
-            value: true
+            value: false
         });
 
-        highPrecisionRow.append(highPrecisionLabel);
-        highPrecisionRow.append(highPrecisionToggle);
+        centersColorRow.append(centersColorLabel);
+        centersColorRow.append(centersColorToggle);
 
         // outline selection
 
@@ -307,9 +306,9 @@ class ViewPanel extends Container {
         this.append(tonemappingRow);
         this.append(fovRow);
         this.append(shBandsRow);
-        this.append(centersSizeRow);
         this.append(cameraFlySpeedRow);
-        this.append(highPrecisionRow);
+        this.append(centersSizeRow);
+        this.append(centersColorRow);
         this.append(outlineSelectionRow);
         this.append(showGridRow);
         this.append(showBoundRow);
@@ -363,6 +362,15 @@ class ViewPanel extends Container {
             events.fire('camera.setMode', 'centers');
         });
 
+        // centers gaussian color
+        events.on('view.centersUseGaussianColor', (value: boolean) => {
+            centersColorToggle.value = value;
+        });
+
+        centersColorToggle.on('change', (value: boolean) => {
+            events.fire('view.setCentersUseGaussianColor', value);
+        });
+
         // camera speed
 
         events.on('camera.flySpeed', (value: number) => {
@@ -401,16 +409,6 @@ class ViewPanel extends Container {
 
         showBoundToggle.on('change', () => {
             events.fire('camera.setBound', showBoundToggle.value);
-        });
-
-        // high precision (render to float)
-
-        events.on('camera.highPrecision', (enabled: boolean) => {
-            highPrecisionToggle.value = enabled;
-        });
-
-        highPrecisionToggle.on('change', () => {
-            events.fire('camera.sethighPrecision', highPrecisionToggle.value);
         });
 
         // background color
@@ -452,6 +450,9 @@ class ViewPanel extends Container {
         });
 
         // tooltips
+        const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
+        const shortcut = shortcutManager.formatShortcut('grid.toggleVisible');
+        tooltips.register(showGridLabel, `${localize('panel.view-options.show-grid')} ( ${shortcut} )`, 'left');
         tooltips.register(bgClrPicker, localize('panel.view-options.background-color'), 'left');
         tooltips.register(selectedClrPicker, localize('panel.view-options.selected-color'), 'top');
         tooltips.register(unselectedClrPicker, localize('panel.view-options.unselected-color'), 'top');
