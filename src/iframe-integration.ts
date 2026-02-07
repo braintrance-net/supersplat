@@ -1,6 +1,7 @@
+import { MemoryFileSystem } from '@playcanvas/splat-transform';
+
 import { Events } from './events';
 import { Scene } from './scene';
-import { BufferWriter } from './serialize/writer';
 import { serializePlyCompressed } from './splat-serialize';
 
 /**
@@ -111,26 +112,23 @@ const exportPly = async (events: Events): Promise<{ filename: string, data: Arra
             return null;
         }
 
-        // Use BufferWriter to capture PLY data in memory (no download)
-        const bufferWriter = new BufferWriter();
+        // Use MemoryFileSystem to capture PLY data in memory (no download)
+        const memFs = new MemoryFileSystem();
+        const serializeSettings = {
+            maxSHBands: 3,
+            minOpacity: 1 / 255,
+            removeInvalid: true
+        };
+        await serializePlyCompressed(splats, serializeSettings, memFs);
 
-        // Serialize compressed PLY directly without showing popup
-        await serializePlyCompressed(splats, { maxSHBands: 3 }, bufferWriter);
-
-        // Get the buffers and concatenate into a single ArrayBuffer
-        const buffers = bufferWriter.close();
-
-        // Calculate total size
-        const totalSize = buffers.reduce((sum, buf) => sum + buf.byteLength, 0);
-
-        // Concatenate all buffers into one ArrayBuffer
-        const arrayBuffer = new ArrayBuffer(totalSize);
-        const uint8View = new Uint8Array(arrayBuffer);
-        let offset = 0;
-        for (const buf of buffers) {
-            uint8View.set(buf, offset);
-            offset += buf.byteLength;
+        // Get the written file from memory (serializer uses 'output.compressed.ply')
+        const data = memFs.results.get('output.compressed.ply');
+        if (!data) {
+            console.error('[IframeIntegration] No PLY data written to memory');
+            return null;
         }
+        const arrayBuffer = new ArrayBuffer(data.byteLength);
+        new Uint8Array(arrayBuffer).set(data);
 
         // Get the filename from the first splat and ensure .compressed.ply extension
         let filename = splats[0].filename || 'edited.ply';
