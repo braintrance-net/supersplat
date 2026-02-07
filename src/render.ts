@@ -1,5 +1,5 @@
 import { BufferTarget, EncodedPacket, EncodedVideoPacketSource, MkvOutputFormat, MovOutputFormat, Mp4OutputFormat, Output, StreamTarget, WebMOutputFormat } from 'mediabunny';
-import { path, Vec3 } from 'playcanvas';
+import { Color, path, Vec3 } from 'playcanvas';
 
 import { ElementType } from './element';
 import { Events } from './events';
@@ -7,6 +7,8 @@ import { PngCompressor } from './png-compressor';
 import { Scene } from './scene';
 import { Splat } from './splat';
 import { localize } from './ui/localization';
+
+const nullClr = new Color(0, 0, 0, 0);
 
 type ImageSettings = {
     width: number;
@@ -75,13 +77,12 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             // cpu-side buffer to read pixels into
             const data = new Uint8Array(width * height * 4);
 
-            const { renderTarget } = scene.camera.entity.camera;
-            const { workRenderTarget } = scene.camera;
+            const { mainTarget, workTarget } = scene.camera;
 
-            scene.dataProcessor.copyRt(renderTarget, workRenderTarget);
+            scene.dataProcessor.copyRt(mainTarget, workTarget);
 
             // read the rendered frame
-            await workRenderTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workRenderTarget, data });
+            await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
 
             // flip y positions to have 0,0 at the top
             let line = new Uint8Array(width * 4);
@@ -96,7 +97,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
             scene.gizmoLayer.enabled = true;
-            scene.camera.entity.camera.clearColor.set(0, 0, 0, 0);
+            scene.camera.camera.clearColor.set(0, 0, 0, 0);
         }
     });
 
@@ -112,7 +113,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             scene.camera.renderOverlays = showDebug;
             scene.gizmoLayer.enabled = false;
             if (!transparentBg) {
-                scene.camera.entity.camera.clearColor.copy(bgClr);
+                scene.camera.clearPass.setClearColor(events.invoke('bgClr'));
             }
 
             // render the next frame
@@ -124,28 +125,12 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             // cpu-side buffer to read pixels into
             const data = new Uint8Array(width * height * 4);
 
-            const { renderTarget } = scene.camera.entity.camera;
-            const { workRenderTarget } = scene.camera;
+            const { mainTarget, workTarget } = scene.camera;
 
-            scene.dataProcessor.copyRt(renderTarget, workRenderTarget);
+            scene.dataProcessor.copyRt(mainTarget, workTarget);
 
             // read the rendered frame
-            await workRenderTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workRenderTarget, data });
-
-            // the render buffer contains premultiplied alpha. so apply background color.
-            if (!transparentBg) {
-                // @ts-ignore
-                const pixels = new Uint8ClampedArray(data.buffer);
-
-                const { r, g, b } = bgClr;
-                for (let i = 0; i < pixels.length; i += 4) {
-                    const a = 255 - pixels[i + 3];
-                    pixels[i + 0] += r * a;
-                    pixels[i + 1] += g * a;
-                    pixels[i + 2] += b * a;
-                    pixels[i + 3] = 255;
-                }
-            }
+            await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
 
             // construct the png compressor
             if (!compressor) {
@@ -176,7 +161,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
             scene.gizmoLayer.enabled = true;
-            scene.camera.entity.camera.clearColor.set(0, 0, 0, 0);
+            scene.camera.clearPass.setClearColor(nullClr);
 
             events.fire('stopSpinner');
         }
@@ -246,13 +231,15 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
             await output.start();
 
+            let encoderError: Error | null = null;
+
             const encoder = new VideoEncoder({
                 output: async (chunk, meta) => {
                     const encodedPacket = EncodedPacket.fromEncodedChunk(chunk);
                     await videoSource.add(encodedPacket, meta);
                 },
                 error: (error) => {
-                    console.log(error);
+                    encoderError = error;
                 }
             });
 
@@ -268,7 +255,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             scene.camera.renderOverlays = showDebug;
             scene.gizmoLayer.enabled = false;
             if (!transparentBg) {
-                scene.camera.entity.camera.clearColor.copy(events.invoke('bgClr'));
+                scene.camera.clearPass.setClearColor(events.invoke('bgClr'));
             }
             scene.lockedRenderMode = true;
 
@@ -276,66 +263,60 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             const data = new Uint8Array(width * height * 4);
             const line = new Uint8Array(width * 4);
 
-            // get the list of visible splats
-            const splats = (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
-
             // remember last camera position so we can skip sorting if the camera didn't move
             const last_pos = new Vec3(0, 0, 0);
             const last_forward = new Vec3(1, 0, 0);
 
-            // prepare the frame for rendering
-            const prepareFrame = async (frameTime: number) => {
-                events.fire('timeline.time', frameTime);
-
-                // manually update the camera so position and rotation are correct
-                scene.camera.onUpdate(0);
-
-                // if the camera didn't move, don't sort
-                const pos = scene.camera.entity.getPosition();
-                const forward = scene.camera.entity.forward;
-                if (last_pos.equals(pos) && last_forward.equals(forward)) {
-                    return;
-                }
-
-                // update remembered position
-                last_pos.copy(pos);
-                last_forward.copy(forward);
-
-                // wait for sorting to complete
-                await Promise.all(splats.map((splat) => {
-                    // create a promise for each splat that will resolve upon sorting complete
+            // helper to sort splats and wait for completion
+            const sortAndWait = (splats: Splat[]) => {
+                return Promise.all(splats.map((splat) => {
                     return new Promise<void>((resolve) => {
                         const { instance } = splat.entity.gsplat;
-
-                        // listen for the sorter to complete
-                        const handle = instance.sorter.on('updated', () => {
-                            handle.off();
-                            resolve();
-                        });
-
-                        // manually invoke sort because internally the engine sorts after render the
-                        // scene call is made.
-                        instance.sort(scene.camera.entity);
-
-                        // in cases where the camera does not move between frames the sorter won't run
-                        // and we need a timeout instead. this is a hack - the engine should allow us to
-                        // know whether the sorter is running or not.
-                        setTimeout(() => {
-                            resolve();
-                        }, 1000);
+                        instance.sorter.once('updated', resolve);
+                        instance.sort(scene.camera.mainCamera);
+                        setTimeout(resolve, 1000);
                     });
                 }));
             };
 
+            // prepare the frame for rendering, returns the newly loaded splat if any
+            const prepareFrame = async (frameTime: number): Promise<Splat | null> => {
+                // Fire timeline.time for camera animation interpolation
+                events.fire('timeline.time', frameTime);
+
+                // Wait for PLY sequence to load the frame if present
+                const newSplat = await events.invoke('plysequence.setFrameAsync', Math.floor(frameTime)) as Splat | null;
+
+                // manually update the camera so position and rotation are correct
+                scene.camera.onUpdate(0);
+
+                // If a new PLY was loaded, sort and wait for completion
+                if (newSplat) {
+                    await sortAndWait([newSplat]);
+                } else {
+                    // No new PLY - sort existing splats if camera moved
+                    const pos = scene.camera.position;
+                    const forward = scene.camera.forward;
+                    if (!last_pos.equals(pos) || !last_forward.equals(forward)) {
+                        last_pos.copy(pos);
+                        last_forward.copy(forward);
+
+                        const splats = (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
+                        await sortAndWait(splats);
+                    }
+                }
+
+                return newSplat;
+            };
+
             // capture the current video frame
             const captureFrame = async (frameTime: number) => {
-                const { renderTarget } = scene.camera.entity.camera;
-                const { workRenderTarget } = scene.camera;
+                const { mainTarget, workTarget } = scene.camera;
 
-                scene.dataProcessor.copyRt(renderTarget, workRenderTarget);
+                scene.dataProcessor.copyRt(mainTarget, workTarget);
 
                 // read the rendered frame
-                await workRenderTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workRenderTarget, data });
+                await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
 
                 // flip the buffer vertically
                 for (let y = 0; y < height / 2; y++) {
@@ -354,6 +335,20 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     timestamp: Math.floor(1e6 * frameTime),
                     duration: Math.floor(1e6 / frameRate)
                 });
+
+                // wait for encoder queue to drain if necessary (backpressure handling)
+                while (encoder.encodeQueueSize > 5) {
+                    await new Promise<void>((resolve) => {
+                        setTimeout(resolve, 1);
+                    });
+                }
+
+                // check for encoder errors
+                if (encoderError) {
+                    videoFrame.close();
+                    throw encoderError;
+                }
+
                 encoder.encode(videoFrame);
                 videoFrame.close();
             };
@@ -362,7 +357,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             const duration = (endFrame - startFrame) / animFrameRate;
 
             for (let frameTime = 0; frameTime <= duration; frameTime += 1.0 / frameRate) {
-                // special case the first frame
+                // prepare the frame (loads PLY if needed, updates camera, sorts)
                 await prepareFrame(startFrame + frameTime * animFrameRate);
 
                 // render a frame
@@ -389,7 +384,8 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
             // Download
             if (!fileStream) {
-                downloadFile((output.target as BufferTarget).buffer, `${removeExtension(splats[0]?.name ?? 'supersplat')}.${fileExtension}`);
+                const currentSplats = (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
+                downloadFile((output.target as BufferTarget).buffer, `${removeExtension(currentSplats[0]?.name ?? 'supersplat')}.${fileExtension}`);
             }
 
             return true;
@@ -403,7 +399,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
             scene.gizmoLayer.enabled = true;
-            scene.camera.entity.camera.clearColor.set(0, 0, 0, 0);
+            scene.camera.clearPass.setClearColor(nullClr);
             scene.lockedRenderMode = false;
             scene.forceRender = true;       // camera likely moved, finish with normal render
 
