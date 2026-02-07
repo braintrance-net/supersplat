@@ -11,14 +11,21 @@ const cacheUrls = [
     './index.html',
     './index.js',
     './index.js.map',
-    './jszip.js',
     './manifest.json',
     './static/icons/logo-192.png',
     './static/icons/logo-512.png',
     './static/images/screenshot-narrow.jpg',
     './static/images/screenshot-wide.jpg',
     './static/lib/lodepng/lodepng.js',
-    './static/lib/lodepng/lodepng.wasm'
+    './static/lib/lodepng/lodepng.wasm',
+    './static/lib/webp/webp.mjs',
+    './static/lib/webp/webp.wasm',
+    './static/locales/de.json',
+    './static/locales/en.json',
+    './static/locales/fr.json',
+    './static/locales/ja.json',
+    './static/locales/ko.json',
+    './static/locales/zh-CN.json'
 ];
 
 self.addEventListener('install', (event) => {

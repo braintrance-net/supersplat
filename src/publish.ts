@@ -1,7 +1,36 @@
+import type { FileSystem, Writer } from '@playcanvas/splat-transform';
+
 import { Events } from './events';
-import { Writer, GZipWriter } from './serialize/writer';
-import { serializePlyCompressed, serializePly, ExperienceSettings, SerializeSettings } from './splat-serialize';
+import { GZipWriter } from './io';
+import { serializePly, ExperienceSettings, SerializeSettings } from './splat-serialize';
 import { localize } from './ui/localization';
+
+/**
+ * Simple FileSystem wrapper around a single Writer.
+ * Used for cases like GZip compression where we need FileSystem semantics
+ * but only have a single Writer to wrap.
+ * The wrapper makes close() a no-op since the caller manages the writer lifecycle.
+ */
+class WriterFileSystem implements FileSystem {
+    private writer: Writer;
+
+    constructor(writer: Writer) {
+        this.writer = writer;
+    }
+
+    createWriter(_filename: string): Writer {
+        // Return a wrapper that delegates write but makes close a no-op
+        // The caller is responsible for closing the underlying writer
+        return {
+            write: (data: Uint8Array) => this.writer.write(data),
+            close: () => Promise.resolve()
+        };
+    }
+
+    mkdir(_path: string): Promise<void> {
+        return Promise.resolve();
+    }
+}
 
 type User = {
     id: string;
@@ -30,7 +59,6 @@ type PublishSettings = {
     listed: boolean;
     serializeSettings: SerializeSettings;
     experienceSettings: ExperienceSettings;
-    format: 'compressed.ply' | 'sog';
     overwriteId?: string;   // for republishing an existing scene
 };
 
@@ -185,7 +213,8 @@ class PublishWriter implements Writer {
                     description: publishSettings.description,
                     listed: publishSettings.listed,
                     settings: publishSettings.experienceSettings,
-                    format: publishSettings.format
+                    sourceFormat: 'ply',
+                    publishFormat: 'sog'
                 }),
                 headers: {
                     'Authorization': `Bearer ${user.token}`,
@@ -198,7 +227,8 @@ class PublishWriter implements Writer {
                 body: JSON.stringify({
                     s3Key: startJson.key,
                     settings: publishSettings.experienceSettings,
-                    format: publishSettings.format
+                    sourceFormat: 'ply',
+                    publishFormat: 'sog'
                 }),
                 headers: {
                     'Authorization': `Bearer ${user.token}`,
@@ -242,7 +272,7 @@ const registerPublishEvents = (events: Events) => {
         try {
             events.fire('progressStart', 'Publishing...');
             events.fire('progressUpdate', {
-                text: localize('publish.converting'),
+                text: localize('popup.publish.converting', { ellipsis: true }),
                 progress: 0
             });
 
@@ -253,7 +283,7 @@ const registerPublishEvents = (events: Events) => {
 
             const progressFunc = (loaded: number, total: number) => {
                 events.fire('progressUpdate', {
-                    text: localize('publish.uploading'),
+                    text: localize('popup.publish.uploading', { ellipsis: true }),
                     progress: 100 * loaded / total
                 });
             };
@@ -264,15 +294,9 @@ const registerPublishEvents = (events: Events) => {
 
             const splats = events.invoke('scene.splats');
 
-            // serialize
-            switch (publishSettings.format) {
-                case 'compressed.ply':
-                    await serializePlyCompressed(splats, publishSettings.serializeSettings, gzipWriter, progressFunc);
-                    break;
-                case 'sog':
-                    await serializePly(splats, publishSettings.serializeSettings, gzipWriter, progressFunc);
-                    break;
-            }
+            // serialize using WriterFileSystem wrapper (close is managed by caller)
+            const fs = new WriterFileSystem(gzipWriter);
+            await serializePly(splats, publishSettings.serializeSettings, fs, 'output.ply', progressFunc);
 
             await gzipWriter.close();
             const response = await publishWriter.close();
@@ -280,21 +304,21 @@ const registerPublishEvents = (events: Events) => {
             if (!response) {
                 await events.invoke('showPopup', {
                     type: 'error',
-                    header: localize('publish.failed'),
-                    message: localize('publish.please-try-again')
+                    header: localize('popup.publish.failed'),
+                    message: localize('popup.publish.please-try-again')
                 });
             } else {
                 await events.invoke('showPopup', {
                     type: 'info',
-                    header: localize('publish.succeeded'),
-                    message: localize('publish.message'),
+                    header: localize('popup.publish.succeeded'),
+                    message: localize('popup.publish.message'),
                     link: response.url
                 });
             }
         } catch (error) {
             await events.invoke('showPopup', {
                 type: 'error',
-                header: localize('publish.failed'),
+                header: localize('popup.publish.failed'),
                 message: `'${error.message ?? error}'`
             });
         } finally {

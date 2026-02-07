@@ -3,6 +3,7 @@ import { Mat4, path, Vec3 } from 'playcanvas';
 
 import { DataPanel } from './data-panel';
 import { Events } from '../events';
+import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
@@ -41,8 +42,6 @@ class EditorUI {
     popup: Popup;
 
     constructor(events: Events) {
-        localizeInit();
-
         // favicon
         const link = document.createElement('link');
         link.rel = 'icon';
@@ -167,7 +166,7 @@ class EditorUI {
         const popup = new Popup(tooltips);
 
         // shortcuts popup
-        const shortcutsPopup = new ShortcutsPopup();
+        const shortcutsPopup = new ShortcutsPopup(events);
 
         // export popup
         const exportPopup = new ExportPopup(events);
@@ -181,16 +180,20 @@ class EditorUI {
         // video settings
         const videoSettingsDialog = new VideoSettingsDialog(events);
 
+        // about popup
+        const aboutPopup = new AboutPopup();
+
         topContainer.append(popup);
         topContainer.append(exportPopup);
         topContainer.append(publishSettingsDialog);
         topContainer.append(imageSettingsDialog);
         topContainer.append(videoSettingsDialog);
+        topContainer.append(shortcutsPopup);
+        topContainer.append(aboutPopup);
 
         appContainer.append(editorContainer);
         appContainer.append(topContainer);
         appContainer.append(tooltipsContainer);
-        appContainer.append(shortcutsPopup);
 
         this.appContainer = appContainer;
         this.topContainer = topContainer;
@@ -217,7 +220,7 @@ class EditorUI {
                 await events.invoke('showPopup', {
                     type: 'error',
                     header: localize('popup.error'),
-                    message: localize('publish.please-log-in')
+                    message: localize('popup.publish.please-log-in')
                 });
                 return false;
             }
@@ -316,30 +319,32 @@ class EditorUI {
             }
         });
 
-        events.function('show.about', () => {
-            return this.popup.show({
-                type: 'info',
-                header: 'About',
-                message: `SUPERSPLAT v${version}`
-            });
+        events.on('show.about', () => {
+            aboutPopup.hidden = false;
         });
 
         events.function('showPopup', (options: ShowOptions) => {
             return this.popup.show(options);
         });
 
-        // spinner
-
+        // spinner with reference counting to handle nested operations
         const spinner = new Spinner();
-
         topContainer.append(spinner);
 
+        let spinnerCount = 0;
+
         events.on('startSpinner', () => {
-            spinner.hidden = false;
+            spinnerCount++;
+            if (spinnerCount === 1) {
+                spinner.hidden = false;
+            }
         });
 
         events.on('stopSpinner', () => {
-            spinner.hidden = true;
+            spinnerCount = Math.max(0, spinnerCount - 1);
+            if (spinnerCount === 0) {
+                spinner.hidden = true;
+            }
         });
 
         // progress
@@ -353,9 +358,13 @@ class EditorUI {
             progress.setHeader(header);
         });
 
-        events.on('progressUpdate', (options: { text: string, progress: number }) => {
-            progress.setText(options.text);
-            progress.setProgress(options.progress);
+        events.on('progressUpdate', (options: { text?: string, progress?: number }) => {
+            if (options.text !== undefined) {
+                progress.setText(options.text);
+            }
+            if (options.progress !== undefined) {
+                progress.setProgress(options.progress);
+            }
         });
 
         events.on('progressEnd', () => {

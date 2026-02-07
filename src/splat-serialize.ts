@@ -1,19 +1,34 @@
-import { html as indexHtml, css as indexCss, js as indexJs } from '@playcanvas/supersplat-viewer';
+import {
+    Column,
+    DataTable,
+    logger as splatTransformLogger,
+    MemoryFileSystem,
+    writeHtml,
+    writeSog as writeSogInternal,
+    ZipFileSystem,
+    type FileSystem,
+    type Logger,
+    type ProgressNode,
+    type Writer
+} from '@playcanvas/splat-transform';
 import {
     Color,
     GSplatData,
     Mat3,
     Mat4,
+    PIXELFORMAT_BGRA8,
     Quat,
-    Vec3
+    Texture,
+    Vec3,
+    WebgpuGraphicsDevice
 } from 'playcanvas';
 
+import { version } from '../package.json';
+import { Events } from './events';
+import { ProgressWriter } from './io';
 import { SHRotation } from './sh-utils';
 import { Splat } from './splat';
 import { State } from './splat-state';
-import { version } from '../package.json';
-import { BufferWriter, ProgressWriter, Writer } from './serialize/writer';
-import { ZipWriter } from './serialize/zip-writer';
 
 type SerializeSettings = {
     maxSHBands?: number;            // specifies the maximum number of bands to be exported
@@ -62,6 +77,7 @@ type ExperienceSettings = {
 type ViewerExportSettings = {
     type: 'html' | 'zip';
     experienceSettings: ExperienceSettings;
+    events?: Events;
 };
 
 type ProgressFunc = (loaded: number, total: number) => void;
@@ -111,14 +127,12 @@ class GaussianFilter {
                 const { splatData } = splat;
 
                 // check if any property of the gaussian is NaN/Infinity
-                for (let j = 0; j < splatData.elements.length; ++j) {
-                    const element = splatData.elements[j];
-                    for (let k = 0; k < element.properties.length; ++k) {
-                        const prop = element.properties[k];
-                        const { storage } = prop;
-                        if (storage && !Number.isFinite(storage[i])) {
-                            return false;
-                        }
+                const element = splatData.getElement('vertex');
+                for (let k = 0; k < element.properties.length; ++k) {
+                    const prop = element.properties[k];
+                    const { storage } = prop;
+                    if (storage && !Number.isFinite(storage[i])) {
+                        return false;
                     }
                 }
             }
@@ -467,7 +481,7 @@ class SingleSplat {
     }
 }
 
-const serializePly = async (splats: Splat[], serializeSettings: SerializeSettings, writer: Writer, progress?: ProgressFunc): Promise<any> => {
+const serializePly = async (splats: Splat[], serializeSettings: SerializeSettings, fs: FileSystem, filename = 'output.ply', progress?: ProgressFunc): Promise<void> => {
     const { maxSHBands, keepStateData } = serializeSettings;
 
     // create filter and count total gaussians
@@ -513,6 +527,9 @@ const serializePly = async (splats: Splat[], serializeSettings: SerializeSetting
 
     const header = new TextEncoder().encode(headerText);
 
+    // create writer from filesystem
+    const writer = await fs.createWriter(filename);
+
     // construct a progress writer over the writer
     const progressWriter = new ProgressWriter(writer, header.byteLength + totalGaussians * gaussianSizeBytes, progress);
 
@@ -553,7 +570,8 @@ const serializePly = async (splats: Splat[], serializeSettings: SerializeSetting
         await progressWriter.write(new Uint8Array(buf.buffer, 0, offset));
     }
 
-    await progressWriter.close();
+    progressWriter.close();
+    await writer.close();
 };
 
 interface CompressedIndex {
@@ -812,7 +830,7 @@ const sortSplats = (splats: Splat[], indices: CompressedIndex[]) => {
     indices.sort((a, b) => morton[a.globalIndex] - morton[b.globalIndex]);
 };
 
-const serializePlyCompressed = async (splats: Splat[], options: SerializeSettings, writer: Writer, progress?: ProgressFunc): Promise<any> => {
+const serializePlyCompressed = async (splats: Splat[], options: SerializeSettings, fs: FileSystem, progress?: ProgressFunc): Promise<void> => {
     const { maxSHBands } = options;
 
     // create filter and count total gaussians
@@ -834,6 +852,9 @@ const serializePlyCompressed = async (splats: Splat[], options: SerializeSetting
         console.error('nothing to export');
         return;
     }
+
+    // create writer from filesystem
+    const writer = await fs.createWriter('output.compressed.ply');
 
     const numSplats = indices.length;
     const numChunks = Math.ceil(numSplats / 256);
@@ -1001,10 +1022,13 @@ const serializePlyCompressed = async (splats: Splat[], options: SerializeSetting
         await progressWriter.write(num === 256 ? shData : new Uint8Array(shData.buffer, 0, num * outputSHCoeffs * 3));
     }
 
-    await progressWriter.close();
+    progressWriter.close();
+    await writer.close();
 };
 
-const serializeSplat = async (splats: Splat[], options: SerializeSettings, writer: Writer) => {
+const serializeSplat = async (splats: Splat[], options: SerializeSettings, fs: FileSystem): Promise<void> => {
+    // create writer from filesystem
+    const writer = await fs.createWriter('output.splat');
     // create filter and count total gaussians
     const filter = new GaussianFilter(options);
     const totalGaussians = countGaussians(splats, filter);
@@ -1058,55 +1082,210 @@ const serializeSplat = async (splats: Splat[], options: SerializeSettings, write
     }
 
     await writer.write(result);
+    await writer.close();
 };
 
-const encodeBase64 = (bytes: Uint8Array[]) => {
-    let binary = '';
-    for (let i = 0; i < bytes.length; i++) {
-        const thisBytes = bytes[i];
-        const thisLen = thisBytes.byteLength;
-        for (let j = 0; j < thisLen; j++) {
-            binary += String.fromCharCode(thisBytes[j]);
+// Cached WebGPU device for SOG compression
+let cachedGpuDevice: WebgpuGraphicsDevice | null = null;
+let cachedBackbuffer: Texture | null = null;
+
+const createGpuDevice = async (): Promise<WebgpuGraphicsDevice> => {
+    if (cachedGpuDevice) {
+        return cachedGpuDevice;
+    }
+
+    if (!navigator.gpu) {
+        throw new Error('WebGPU is not available in this browser');
+    }
+
+    // Create a minimal canvas for the graphics device
+    const canvas = document.createElement('canvas');
+    canvas.width = 1024;
+    canvas.height = 512;
+
+    const graphicsDevice = new WebgpuGraphicsDevice(canvas, {
+        antialias: false,
+        depth: false,
+        stencil: false
+    });
+
+    await graphicsDevice.createDevice();
+
+    // Create external backbuffer (required by PlayCanvas)
+    cachedBackbuffer = new Texture(graphicsDevice, {
+        width: 1024,
+        height: 512,
+        name: 'SogComputeBackbuffer',
+        mipmaps: false,
+        format: PIXELFORMAT_BGRA8
+    });
+
+    // @ts-ignore - externalBackbuffer is an internal property
+    graphicsDevice.externalBackbuffer = cachedBackbuffer;
+
+    cachedGpuDevice = graphicsDevice;
+    return graphicsDevice;
+};
+
+/**
+ * Extract Splat data into a DataTable for use with splat-transform writers.
+ * This is shared between serializeSog and serializeViewer.
+ */
+const extractDataTable = (splats: Splat[], settings: SerializeSettings): DataTable => {
+    const { maxSHBands = 3 } = settings;
+
+    // Determine which members to extract
+    const shCoeffs = [0, 3, 8, 15][maxSHBands];
+    const memberNames = [
+        'x', 'y', 'z',
+        'scale_0', 'scale_1', 'scale_2',
+        'f_dc_0', 'f_dc_1', 'f_dc_2', 'opacity',
+        'rot_0', 'rot_1', 'rot_2', 'rot_3',
+        ...shNames.slice(0, shCoeffs * 3)
+    ];
+
+    // Create SingleSplat for data extraction
+    const singleSplat = new SingleSplat(memberNames, settings);
+
+    // Create filter
+    const filter = new GaussianFilter(settings);
+
+    // Count total gaussians to export
+    let totalCount = 0;
+    for (const splat of splats) {
+        filter.set(splat);
+        for (let i = 0; i < splat.splatData.numSplats; ++i) {
+            if (filter.test(i)) {
+                totalCount++;
+            }
         }
     }
-    return window.btoa(binary);
+
+    if (totalCount === 0) {
+        throw new Error('No gaussians to export');
+    }
+
+    // Create DataTable columns
+    const columns = memberNames.map(name => new Column(name, new Float32Array(totalCount)));
+    const dataTable = new DataTable(columns);
+
+    // Extract data into DataTable
+    let idx = 0;
+    for (const splat of splats) {
+        filter.set(splat);
+        for (let i = 0; i < splat.splatData.numSplats; ++i) {
+            if (!filter.test(i)) continue;
+
+            singleSplat.read(splat, i);
+
+            for (let j = 0; j < memberNames.length; ++j) {
+                (columns[j].data as Float32Array)[idx] = singleSplat.data[memberNames[j]] ?? 0;
+            }
+            idx++;
+        }
+    }
+
+    return dataTable;
 };
 
-const serializeViewer = async (splats: Splat[], serializeSettings: SerializeSettings, options: ViewerExportSettings, writer: Writer) => {
-    const { experienceSettings } = options;
+// Create a logger that bridges splat-transform progress to supersplat's events
+const createProgressLogger = (header: string, events?: Events): Logger => ({
+    log: () => {},
+    warn: console.warn,
+    error: console.error,
+    debug: () => {},
+    output: () => {},
+    onProgress: (node: ProgressNode) => {
+        if (node.depth === 0) {
+            if (node.step === 0) {
+                // begin() was called
+                events?.fire('progressStart', header);
+            } else {
+                // Fire update with 0% progress for this step
+                events?.fire('progressUpdate', {
+                    text: `Step ${node.step} of ${node.totalSteps}: ${node.stepName ?? ''}`,
+                    progress: 0
+                });
 
-    // create compressed PLY data
-    const plyWriter = new BufferWriter();
-    await serializePlyCompressed(splats, serializeSettings, plyWriter);
-    const plyBuffers = plyWriter.close();
+                // Final step = done
+                if (node.step === node.totalSteps) {
+                    events?.fire('progressEnd');
+                }
+            }
+        } else {
+            // Nested level - update progress bar with sub-step progress
+            events?.fire('progressUpdate', {
+                progress: 100 * node.step / node.totalSteps
+            });
+        }
+    }
+});
+
+const serializeViewer = async (splats: Splat[], serializeSettings: SerializeSettings, options: ViewerExportSettings, fs: FileSystem): Promise<void> => {
+    const { experienceSettings, events } = options;
+
+    splatTransformLogger.setLogger(createProgressLogger('Exporting HTML', events));
+
+    // Extract splat data to DataTable
+    const dataTable = extractDataTable(splats, serializeSettings);
 
     if (options.type === 'html') {
-        const pad = (text: string, spaces: number) => {
-            const whitespace = ' '.repeat(spaces);
-            return text.split('\n').map(line => whitespace + line).join('\n');
-        };
-
-        const style = '<link rel="stylesheet" href="./index.css">';
-        const script = 'import { main } from \'./index.js\';';
-        const settings = 'settings: fetch(settingsUrl).then(response => response.json())';
-        const content = 'fetch(contentUrl)';
-
-        const html = indexHtml
-        .replace(style, `<style>\n${pad(indexCss, 12)}\n        </style>`)
-        .replace(script, indexJs)
-        .replace(settings, `settings: ${JSON.stringify(experienceSettings)}`)
-        .replace(content, `fetch("data:application/ply;base64,${encodeBase64(plyBuffers)}")`);
-
-        await writer.write(new TextEncoder().encode(html));
+        // Bundled HTML - writeHtml handles everything
+        await writeHtml({
+            filename: 'output.html',
+            dataTable,
+            viewerSettingsJson: experienceSettings,
+            bundle: true,
+            iterations: 10,
+            createDevice: createGpuDevice
+        }, fs);
     } else {
-        const zipWriter = new ZipWriter(writer);
-        await zipWriter.file('index.html', indexHtml);
-        await zipWriter.file('index.css', indexCss);
-        await zipWriter.file('index.js', indexJs);
-        await zipWriter.file('settings.json', JSON.stringify(experienceSettings, null, 4));
-        await zipWriter.file('scene.compressed.ply', plyBuffers);
-        await zipWriter.close();
+        // Package - use unbundled mode into a MemoryFileSystem, then ZIP
+        const memFs = new MemoryFileSystem();
+        await writeHtml({
+            filename: 'index.html',
+            dataTable,
+            viewerSettingsJson: experienceSettings,
+            bundle: false,
+            iterations: 10,
+            createDevice: createGpuDevice
+        }, memFs);
+
+        // Create ZIP from memory filesystem results
+        const zipWriter = await fs.createWriter('output.zip');
+        const zipFs = new ZipFileSystem(zipWriter);
+        for (const [filename, data] of memFs.results.entries()) {
+            const writer = await zipFs.createWriter(filename);
+            await writer.write(data);
+            await writer.close();
+        }
+        await zipFs.close();
     }
+};
+
+// SOG serialization using splat-transform library
+
+type SogSettings = SerializeSettings & {
+    iterations: number;
+    events?: Events;
+};
+
+const serializeSog = async (splats: Splat[], settings: SogSettings, fs: FileSystem): Promise<void> => {
+    const { iterations = 10, events } = settings;
+
+    splatTransformLogger.setLogger(createProgressLogger('Exporting SOG', events));
+
+    // Extract splat data to DataTable
+    const dataTable = extractDataTable(splats, settings);
+
+    // Call splat-transform's writeSog
+    await writeSogInternal({
+        filename: 'output.sog',
+        dataTable,
+        bundle: true,
+        iterations,
+        createDevice: createGpuDevice
+    }, fs);
 };
 
 export {
@@ -1114,9 +1293,11 @@ export {
     serializePly,
     serializePlyCompressed,
     serializeSplat,
+    serializeSog,
     serializeViewer,
     AnimTrack,
     ExperienceSettings,
     SerializeSettings,
+    SogSettings,
     ViewerExportSettings
 };

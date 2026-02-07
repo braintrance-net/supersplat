@@ -56,10 +56,10 @@ const application = {
                     }
                 },
                 { src: 'src/manifest.json' },
-                { src: 'node_modules/jszip/dist/jszip.js' },
                 { src: 'static/images', dest: 'static' },
                 { src: 'static/icons', dest: 'static' },
                 { src: 'static/lib', dest: 'static' },
+                { src: 'static/locales', dest: 'static' },
                 { src: 'static/env/VertebraeHDRI_v1_512.png', dest: 'static/env' }
             ]
         }),
@@ -84,7 +84,8 @@ const application = {
                 .then(result => result.css);
             },
             fileName: 'index.css',
-            includePaths: [`${PCUI_DIR}/dist`]
+            includePaths: [`${PCUI_DIR}/dist`],
+            watch: 'src/ui/scss'
         }),
         BUILD_TYPE === 'release' &&
         strip({
