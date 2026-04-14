@@ -1,16 +1,21 @@
-import { Vec3 } from 'playcanvas';
-
+import { SelectOp } from '../edit-ops';
 import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
 const SAM3_BACKEND_URL = (import.meta as any).env?.VITE_SAM3_BACKEND_URL || 'http://localhost:47824';
 
-// Throttling for live tracking.
-const MOVE_THRESHOLD_NDC = 0.02;   // re-run SAM 3 once the camera's up-vector or forward has moved > this in world-space angular units
-const MIN_INTERVAL_MS = 250;       // and at most ~4 Hz so we don't bombard the GPU
+// Region-growing radius, scaled to the click's camera depth so we get the
+// right spatial granularity regardless of scene scale.
+//   eps = clamp(click_cam_z * EPS_FRAC_OF_DEPTH, EPS_MIN_M, EPS_MAX_M)
+// For a click at 2 m depth with EPS_FRAC_OF_DEPTH=0.01 this gives 2 cm, which
+// is almost always below the gap between a foreground object and background
+// surfaces behind it while staying above typical dense-GS splat spacing.
+const EPS_FRAC_OF_DEPTH = 0.01;
+const EPS_MIN_M = 0.005;
+const EPS_MAX_M = 0.05;
 
-// Per-frame render target → base64 PNG of the live scene view.
+// Capture the current scene as a base64 PNG via SuperSplat's offscreen render.
 const captureScene = async (events: Events, width: number, height: number): Promise<string> => {
     const rgba: Uint8Array = await events.invoke('render.offscreen', width, height);
     const off = document.createElement('canvas');
@@ -23,10 +28,7 @@ const captureScene = async (events: Events, width: number, height: number): Prom
     return off.toDataURL('image/png').split(',')[1];
 };
 
-// Decode a base64 grayscale PNG into an HTMLCanvasElement aligned to the
-// provided (width, height). That canvas is what SuperSplat's select.byMask
-// event expects.
-const maskPngToCanvas = async (b64: string, width: number, height: number): Promise<{canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D}> => {
+const maskPngToArray = async (b64: string, width: number, height: number): Promise<Uint8Array> => {
     const img = new Image();
     await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
@@ -37,70 +39,150 @@ const maskPngToCanvas = async (b64: string, width: number, height: number): Prom
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d')!;
-    // Draw as alpha: SuperSplat's mask shader uses texture.a; supplying grayscale
-    // directly makes RGB=mask and A=255, so we need to explicitly write the mask
-    // to the alpha channel. Easiest path: draw, pull imageData, copy R→A.
     ctx.drawImage(img, 0, 0, width, height);
     const id = ctx.getImageData(0, 0, width, height);
-    for (let i = 0; i < id.data.length; i += 4) {
-        id.data[i + 3] = id.data[i]; // alpha = red channel of grayscale mask
-    }
-    ctx.putImageData(id, 0, 0);
-    return { canvas, ctx };
+    const out = new Uint8Array(width * height);
+    for (let i = 0, j = 0; i < id.data.length; i += 4, j++) out[j] = id.data[i];
+    return out;
 };
 
-// Compute the 3D centroid of the currently-selected splats (state bit 1 set).
-// Returns null if no splats are selected.
-const selectedCentroid = (splat: Splat): Vec3 | null => {
-    const state: Uint8Array = splat.splatData.getProp('state') as Uint8Array;
+const extractIntrinsics = (cam: any, w: number, h: number) => {
+    const fovRad = (cam.fov * Math.PI) / 180;
+    const f = cam.horizontalFov
+        ? w / (2 * Math.tan(fovRad / 2))
+        : h / (2 * Math.tan(fovRad / 2));
+    return { fx: f, fy: f, cx: w / 2, cy: h / 2 };
+};
+
+// Collect (world position, splat index, camera-z) for every splat whose center
+// projects inside the SAM 3 mask. No depth filtering yet — that's what region
+// growing handles.
+type Candidate = { idx: number; wx: number; wy: number; wz: number; cz: number; u: number; v: number };
+
+const collectMaskCandidates = (
+    splat: Splat,
+    scene: Scene,
+    mask: Uint8Array, maskW: number, maskH: number,
+    imgW: number, imgH: number,
+    intrinsics: { fx: number; fy: number; cx: number; cy: number },
+): Candidate[] => {
     const sorter: any = splat.entity.gsplat?.instance?.sorter;
-    if (!state || !sorter?.centers) return null;
+    const centers: Float32Array = sorter?.centers;
+    if (!centers) return [];
 
-    const centers: Float32Array = sorter.centers;
     const wm = splat.entity.getWorldTransform().data as Float32Array;
+    const v = scene.camera.camera.viewMatrix.data as Float32Array;
+    const { fx, fy, cx, cy } = intrinsics;
 
-    let sx = 0, sy = 0, sz = 0, n = 0;
-    for (let i = 0; i < state.length; i++) {
-        if ((state[i] & 1) === 0) continue; // not selected
+    // mask pixel -> image pixel scaling. Our mask came back at the same size as
+    // the rendered image, so sx = sy = 1, but keep this general.
+    const msx = maskW / imgW;
+    const msy = maskH / imgH;
+
+    const out: Candidate[] = [];
+    const n = centers.length / 3;
+    for (let i = 0; i < n; i++) {
         const lx = centers[i * 3], ly = centers[i * 3 + 1], lz = centers[i * 3 + 2];
-        sx += wm[0] * lx + wm[4] * ly + wm[8]  * lz + wm[12];
-        sy += wm[1] * lx + wm[5] * ly + wm[9]  * lz + wm[13];
-        sz += wm[2] * lx + wm[6] * ly + wm[10] * lz + wm[14];
-        n++;
+        const wx = wm[0] * lx + wm[4] * ly + wm[8]  * lz + wm[12];
+        const wy = wm[1] * lx + wm[5] * ly + wm[9]  * lz + wm[13];
+        const wz = wm[2] * lx + wm[6] * ly + wm[10] * lz + wm[14];
+        const ogZ = v[2] * wx + v[6] * wy + v[10] * wz + v[14];
+        const cz = -ogZ;
+        if (cz <= 0) continue;
+        const ogX = v[0] * wx + v[4] * wy + v[8]  * wz + v[12];
+        const ogY = v[1] * wx + v[5] * wy + v[9]  * wz + v[13];
+        const u = Math.round(fx * ogX / cz + cx);
+        const vp = Math.round(fy * (-ogY) / cz + cy);
+        if (u < 0 || u >= imgW || vp < 0 || vp >= imgH) continue;
+        // Translate to mask pixel coords.
+        const mu = Math.min(maskW - 1, Math.round(u * msx));
+        const mv = Math.min(maskH - 1, Math.round(vp * msy));
+        if (mask[mv * maskW + mu] === 0) continue;
+        out.push({ idx: i, wx, wy, wz, cz, u, v: vp });
     }
-    if (n === 0) return null;
-    return new Vec3(sx / n, sy / n, sz / n);
+    return out;
 };
 
-// Project a world point through a PlayCanvas camera and return a pixel (x, y)
-// in canvas client coordinates, or null if behind the camera.
-const projectWorldToPixel = (
-    world: Vec3,
-    cam: any,
-    w: number,
-    h: number
-): [number, number] | null => {
-    const p = cam.projectionMatrix.data as Float32Array;
-    const v = cam.viewMatrix.data as Float32Array;
-    const wx = world.x, wy = world.y, wz = world.z;
-    const cx = p[0] * (v[0] * wx + v[4] * wy + v[8]  * wz + v[12]) +
-               p[4] * (v[1] * wx + v[5] * wy + v[9]  * wz + v[13]) +
-               p[8] * (v[2] * wx + v[6] * wy + v[10] * wz + v[14]) +
-               p[12] * (v[3] * wx + v[7] * wy + v[11] * wz + v[15]);
-    const cy = p[1] * (v[0] * wx + v[4] * wy + v[8]  * wz + v[12]) +
-               p[5] * (v[1] * wx + v[5] * wy + v[9]  * wz + v[13]) +
-               p[9] * (v[2] * wx + v[6] * wy + v[10] * wz + v[14]) +
-               p[13] * (v[3] * wx + v[7] * wy + v[11] * wz + v[15]);
-    const cw = p[3] * (v[0] * wx + v[4] * wy + v[8]  * wz + v[12]) +
-               p[7] * (v[1] * wx + v[5] * wy + v[9]  * wz + v[13]) +
-               p[11] * (v[2] * wx + v[6] * wy + v[10] * wz + v[14]) +
-               p[15] * (v[3] * wx + v[7] * wy + v[11] * wz + v[15]);
-    if (cw <= 0) return null;
-    const ndcX = cx / cw, ndcY = cy / cw;
-    if (ndcX < -1 || ndcX > 1 || ndcY < -1 || ndcY > 1) return null;
-    const px = Math.round((ndcX + 1) * 0.5 * w);
-    const py = Math.round((1 - ndcY) * 0.5 * h);
-    return [px, py];
+// Pick a seed candidate: the front-most (smallest camera-z) splat whose
+// projection lies within `radius` pixels of the click. This avoids anchoring
+// the region grow on a background splat that merely projects close to the
+// click pixel. Falls back to the nearest-in-2D candidate if no splat lies
+// within the radius (tiny masks, etc.).
+const findSeedOnRay = (
+    c: Candidate[],
+    clickX: number,
+    clickY: number,
+    radius = 6
+): number => {
+    const r2 = radius * radius;
+    let ray = -1;
+    let rayZ = Infinity;
+    let fallback = -1;
+    let fallbackD2 = Infinity;
+    for (let i = 0; i < c.length; i++) {
+        const du = c[i].u - clickX, dv = c[i].v - clickY;
+        const d2 = du * du + dv * dv;
+        if (d2 < fallbackD2) { fallbackD2 = d2; fallback = i; }
+        if (d2 <= r2 && c[i].cz < rayZ) { rayZ = c[i].cz; ray = i; }
+    }
+    return ray >= 0 ? ray : fallback;
+};
+
+// 3D spatial hash for candidates. Cells are eps-sized cubes keyed by a mixed
+// integer hash of (ix, iy, iz). Neighbor lookups iterate the 3×3×3 surrounding
+// cells and test true Euclidean distance.
+const buildHash = (c: Candidate[], eps: number): Map<number, number[]> => {
+    const cells = new Map<number, number[]>();
+    const inv = 1 / eps;
+    for (let i = 0; i < c.length; i++) {
+        const ix = Math.floor(c[i].wx * inv) | 0;
+        const iy = Math.floor(c[i].wy * inv) | 0;
+        const iz = Math.floor(c[i].wz * inv) | 0;
+        const key = (ix * 73856093) ^ (iy * 19349663) ^ (iz * 83492791);
+        const bucket = cells.get(key);
+        if (bucket) bucket.push(i); else cells.set(key, [i]);
+    }
+    return cells;
+};
+
+// BFS through candidate graph: edges where Euclidean distance ≤ eps. Returns
+// the set of candidate indices reachable from `seed`.
+const regionGrow = (c: Candidate[], seed: number, eps: number): Set<number> => {
+    const cells = buildHash(c, eps);
+    const visited = new Uint8Array(c.length);
+    const queue = [seed];
+    visited[seed] = 1;
+    const inv = 1 / eps;
+    const eps2 = eps * eps;
+
+    while (queue.length > 0) {
+        const i = queue.pop()!;
+        const p = c[i];
+        const ix = Math.floor(p.wx * inv) | 0;
+        const iy = Math.floor(p.wy * inv) | 0;
+        const iz = Math.floor(p.wz * inv) | 0;
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (let dz = -1; dz <= 1; dz++) {
+                    const key = ((ix + dx) * 73856093) ^ ((iy + dy) * 19349663) ^ ((iz + dz) * 83492791);
+                    const bucket = cells.get(key);
+                    if (!bucket) continue;
+                    for (const j of bucket) {
+                        if (visited[j]) continue;
+                        const q = c[j];
+                        const ddx = p.wx - q.wx, ddy = p.wy - q.wy, ddz = p.wz - q.wz;
+                        if (ddx * ddx + ddy * ddy + ddz * ddz > eps2) continue;
+                        visited[j] = 1;
+                        queue.push(j);
+                    }
+                }
+            }
+        }
+    }
+
+    const out = new Set<number>();
+    for (let i = 0; i < c.length; i++) if (visited[i]) out.add(i);
+    return out;
 };
 
 class Sam3Selection {
@@ -111,32 +193,7 @@ class Sam3Selection {
     constructor(events: Events, scene: Scene, parent: HTMLElement) {
         const canvas = scene.canvas;
         let busy = false;
-        // The 3D anchor we've locked onto after the first click. On subsequent
-        // frames we project this to 2D and re-prompt SAM 3 with the new pixel.
-        let anchorWorld: Vec3 | null = null;
-        let lastSentAt = 0;
-        let lastSentPose: Float32Array | null = null;
-
-        const runOnce = async (
-            image_b64: string,
-            click_xy: [number, number],
-            w: number,
-            h: number
-        ) => {
-            const res = await fetch(`${SAM3_BACKEND_URL}/api/sam3/segment`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ image: image_b64, click_xy, label: 1 })
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                throw new Error(`SAM3 ${res.status}: ${err.error || res.statusText}`);
-            }
-            const data = await res.json() as { mask: string, width: number, height: number };
-            const { canvas: maskCanvas, ctx } = await maskPngToCanvas(data.mask, w, h);
-            // Accumulate into the splat's persistent selection.
-            await events.invoke('select.byMask', 'add', maskCanvas, ctx);
-        };
+        let abort: AbortController | null = null;
 
         const pointerHandler = async (e: PointerEvent) => {
             if (!this.active || busy) return;
@@ -151,86 +208,84 @@ class Sam3Selection {
             const clickX = Math.round(e.clientX - rect.left);
             const clickY = Math.round(e.clientY - rect.top);
             busy = true;
+            abort = new AbortController();
             parent.style.cursor = 'wait';
             try {
                 const w = canvas.clientWidth;
                 const h = canvas.clientHeight;
+                const cam = scene.camera.camera;
+                const intr = extractIntrinsics(cam, w, h);
+
                 const img = await captureScene(events, w, h);
+                if (!this.active) return;
                 console.log(`[SAM3] click=(${clickX},${clickY})`);
-                await runOnce(img, [clickX, clickY], w, h);
-                // Lock onto the 3D centroid of whatever's selected now — that
-                // becomes the anchor we reproject on subsequent frames.
-                const c = selectedCentroid(splat);
-                if (c) {
-                    anchorWorld = c;
-                    console.log(`[SAM3] anchor=(${c.x.toFixed(2)},${c.y.toFixed(2)},${c.z.toFixed(2)})`);
+
+                const res = await fetch(`${SAM3_BACKEND_URL}/api/sam3/segment`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: img, click_xy: [clickX, clickY], label: 1 }),
+                    signal: abort.signal
+                });
+                if (!this.active) return;
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    console.error(`[SAM3] ${res.status}: ${err.error || res.statusText}`);
+                    return;
                 }
-                lastSentAt = performance.now();
-                lastSentPose = new Float32Array(scene.camera.camera.viewMatrix.data as Float32Array);
-            } catch (err) {
+                const data = await res.json() as { mask: string; width: number; height: number };
+                if (!this.active) return;
+                const mask = await maskPngToArray(data.mask, data.width, data.height);
+                if (!this.active) return;
+
+                const t0 = performance.now();
+                const candidates = collectMaskCandidates(
+                    splat, scene, mask, data.width, data.height, w, h, intr
+                );
+                if (candidates.length === 0) {
+                    console.log('[SAM3] no splats projected into mask');
+                    return;
+                }
+
+                const seed = findSeedOnRay(candidates, clickX, clickY);
+                if (seed < 0) { console.warn('[SAM3] no seed'); return; }
+                const clickDepth = candidates[seed].cz;
+                const eps = Math.min(EPS_MAX_M, Math.max(EPS_MIN_M, clickDepth * EPS_FRAC_OF_DEPTH));
+                const kept = regionGrow(candidates, seed, eps);
+
+                const pickedIdx = new Set<number>();
+                for (const k of kept) pickedIdx.add(candidates[k].idx);
+
+                console.log(
+                    `[SAM3] candidates=${candidates.length} click_depth=${clickDepth.toFixed(2)}` +
+                    ` eps=${eps.toFixed(3)} seed=${seed} kept=${kept.size}` +
+                    ` (${(performance.now() - t0).toFixed(0)}ms)`
+                );
+
+                const op = new SelectOp(splat, 'add', (i: number) => pickedIdx.has(i));
+                events.fire('edit.add', op);
+            } catch (err: any) {
+                if (err?.name === 'AbortError') return;
                 console.error('[SAM3] click failed:', err);
             } finally {
                 busy = false;
-                parent.style.cursor = 'crosshair';
+                abort = null;
+                if (this.active) parent.style.cursor = 'crosshair';
             }
-        };
-
-        // Decide whether the camera has moved enough since the last send to
-        // warrant another mask. Uses the L1 diff of the viewMatrix rotation part.
-        const poseChangedEnough = (): boolean => {
-            if (!lastSentPose) return true;
-            const v = scene.camera.camera.viewMatrix.data as Float32Array;
-            let d = 0;
-            for (let i = 0; i < 12; i++) d += Math.abs(v[i] - lastSentPose[i]);
-            return d > MOVE_THRESHOLD_NDC;
-        };
-
-        const onUpdate = () => {
-            if (!this.active || busy || !anchorWorld) return;
-            if (performance.now() - lastSentAt < MIN_INTERVAL_MS) return;
-            if (!poseChangedEnough()) return;
-
-            const splat = events.invoke('selection') as Splat;
-            if (!splat) return;
-
-            const cam = scene.camera.camera;
-            const w = canvas.clientWidth;
-            const h = canvas.clientHeight;
-            const pt = projectWorldToPixel(anchorWorld, cam, w, h);
-            if (!pt) return; // object left the view frustum
-
-            busy = true;
-            const poseAtCapture = new Float32Array(cam.viewMatrix.data as Float32Array);
-            (async () => {
-                try {
-                    const img = await captureScene(events, w, h);
-                    await runOnce(img, pt, w, h);
-                    const c = selectedCentroid(splat);
-                    if (c) anchorWorld = c; // refine the anchor as selection grows
-                    lastSentAt = performance.now();
-                    lastSentPose = poseAtCapture;
-                } catch (err) {
-                    console.error('[SAM3] track frame failed:', err);
-                } finally {
-                    busy = false;
-                }
-            })();
         };
 
         this.activate = () => {
             this.active = true;
             parent.style.cursor = 'crosshair';
             parent.addEventListener('pointerdown', pointerHandler, true);
-            scene.app.on('update', onUpdate);
         };
 
         this.deactivate = () => {
             this.active = false;
             parent.style.cursor = '';
             parent.removeEventListener('pointerdown', pointerHandler, true);
-            scene.app.off('update', onUpdate);
-            // Leave `anchorWorld` alone so re-activation can resume. Selection
-            // itself is stored in the splat state; nothing to clean up there.
+            abort?.abort();
+            abort = null;
+            busy = false;
         };
     }
 }
