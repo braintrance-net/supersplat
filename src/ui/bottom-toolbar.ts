@@ -81,6 +81,12 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const boxer = new Button({
+            id: 'bottom-toolbar-boxer',
+            class: 'bottom-toolbar-tool',
+            text: 'AI'
+        });
+
         const eyedropper = new Button({
             id: 'bottom-toolbar-eyedropper',
             class: 'bottom-toolbar-tool'
@@ -151,6 +157,7 @@ class BottomToolbar extends Container {
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(sphere);
         this.append(box);
+        this.append(boxer);
         // this.append(crop);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(translate);
@@ -171,6 +178,7 @@ class BottomToolbar extends Container {
         eyedropper.dom.addEventListener('click', () => events.fire('tool.eyedropperSelection'));
         sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
         box.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
+        boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
         translate.dom.addEventListener('click', () => events.fire('tool.move'));
         rotate.dom.addEventListener('click', () => events.fire('tool.rotate'));
         scale.dom.addEventListener('click', () => events.fire('tool.scale'));
@@ -193,6 +201,7 @@ class BottomToolbar extends Container {
             lasso.class[toolName === 'lassoSelection' ? 'add' : 'remove']('active');
             sphere.class[toolName === 'sphereSelection' ? 'add' : 'remove']('active');
             box.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
+            boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
             translate.class[toolName === 'move' ? 'add' : 'remove']('active');
             rotate.class[toolName === 'rotate' ? 'add' : 'remove']('active');
             scale.class[toolName === 'scale' ? 'add' : 'remove']('active');

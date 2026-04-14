@@ -256,6 +256,21 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     });
 
+    events.on('select.byOBB', async (
+        op: 'add'|'remove'|'set',
+        obb: { center: number[], dimensions: number[], rotation: number[][] }
+    ) => {
+        for (const splat of selectedSplats()) {
+            await intersectCenters(splat, op, {
+                obb: {
+                    x: obb.center[0], y: obb.center[1], z: obb.center[2],
+                    lenx: obb.dimensions[0], leny: obb.dimensions[1], lenz: obb.dimensions[2],
+                    rotation: obb.rotation
+                }
+            });
+        }
+    });
+
     events.function('select.rect', async (op: 'add'|'remove'|'set', rect: any) => {
         const mode = events.invoke('camera.mode');
 

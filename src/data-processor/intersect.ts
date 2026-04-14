@@ -32,7 +32,18 @@ type BoxOptions = {
     box: { x: number, y: number, z: number, lenx: number, leny: number, lenz: number };
 };
 
-type IntersectOptions = MaskOptions | RectOptions | SphereOptions | BoxOptions;
+type OBBOptions = {
+    obb: {
+        x: number, y: number, z: number,
+        lenx: number, leny: number, lenz: number,
+        rotation: number[][] // 3x3 row-major, obb-to-world
+    };
+};
+
+type IntersectOptions = MaskOptions | RectOptions | SphereOptions | BoxOptions | OBBOptions;
+
+// identity 3x3 column-major
+const IDENTITY_MAT3 = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
 
 const resolve = (scope: ScopeSpace, values: any) => {
     for (const key in values) {
@@ -183,6 +194,7 @@ class Intersect {
         }
 
         const boxOptions = options as BoxOptions;
+        const obbOptions = options as OBBOptions;
         if (boxOptions.box) {
             resolve(scope, {
                 mode: 3,
@@ -197,12 +209,33 @@ class Intersect {
                     boxOptions.box.leny * 0.5,
                     boxOptions.box.lenz * 0.5,
                     0
-                ]
+                ],
+                obb_rotation: IDENTITY_MAT3
+            });
+        } else if (obbOptions.obb) {
+            // Row-major R from backend → column-major mat3 (column i = row i of R^T)
+            const r = obbOptions.obb.rotation;
+            const colMajor = new Float32Array([
+                r[0][0], r[1][0], r[2][0],  // col 0
+                r[0][1], r[1][1], r[2][1],  // col 1
+                r[0][2], r[1][2], r[2][2]   // col 2
+            ]);
+            resolve(scope, {
+                mode: 4,
+                box_params: [obbOptions.obb.x, obbOptions.obb.y, obbOptions.obb.z, 0],
+                aabb_params: [
+                    obbOptions.obb.lenx * 0.5,
+                    obbOptions.obb.leny * 0.5,
+                    obbOptions.obb.lenz * 0.5,
+                    0
+                ],
+                obb_rotation: colMajor
             });
         } else {
             resolve(scope, {
                 box_params: [0, 0, 0, 0],
-                aabb_params: [0, 0, 0, 0]
+                aabb_params: [0, 0, 0, 0],
+                obb_rotation: IDENTITY_MAT3
             });
         }
 
@@ -219,4 +252,4 @@ class Intersect {
     }
 }
 
-export { Intersect, IntersectOptions, MaskOptions, RectOptions, SphereOptions, BoxOptions };
+export { Intersect, IntersectOptions, MaskOptions, RectOptions, SphereOptions, BoxOptions, OBBOptions };

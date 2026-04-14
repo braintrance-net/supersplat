@@ -33,6 +33,9 @@ const fragmentShader = /* glsl */ `
     uniform vec4 box_params;                     // box x, y, z
     uniform vec4 aabb_params;                    // len x, y, z
 
+    // obb params (mode 4 reuses box_params as center and aabb_params as half-extents)
+    uniform mat3 obb_rotation;                   // rotation (obb-to-world), column-major
+
     void main(void) {
         // calculate output id
         uvec2 outputUV = uvec2(gl_FragCoord);
@@ -102,6 +105,12 @@ const fragmentShader = /* glsl */ `
                         isInsideCube = false;
                     }
                     clr[i] = isInsideCube ? 1.0 : 0.0;
+                } else if (mode == 4) {
+                    // select by oriented bounding box (OBB)
+                    // rel * R = R^T * rel: transform world offset into OBB local frame
+                    vec3 rel = world - box_params.xyz;
+                    vec3 local = rel * obb_rotation;
+                    clr[i] = all(lessThan(abs(local), aabb_params.xyz)) ? 1.0 : 0.0;
                 }
             }
         }
