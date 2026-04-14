@@ -99,4 +99,4 @@ class DataProcessor {
 
 export { DataProcessor };
 export type { IntersectOptions };
-export { MaskOptions, RectOptions, SphereOptions, BoxOptions } from './intersect';
+export { MaskOptions, RectOptions, SphereOptions, BoxOptions, OBBOptions } from './intersect';
