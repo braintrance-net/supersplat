@@ -247,6 +247,17 @@
     pointer-events: all;
 }
 
+.entity-action-label {
+    font-size: 11px;
+    color: $text-secondary;
+    padding: 0 6px;
+    max-width: 120px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 30px;
+}
+
 .entity-action-btn {
     display: flex;
     align-items: center;

@@ -1,16 +1,14 @@
 import { Events } from '../events';
 import { VoiceCommands } from './voice-commands';
 
-const REALTIME_MODEL = 'gpt-4o-mini-realtime-preview';
-
 class VoiceController {
     private events: Events;
     private commands: VoiceCommands;
     private apiKey: string;
 
-    private pc: RTCPeerConnection | null = null;
-    private dc: RTCDataChannel | null = null;
     private stream: MediaStream | null = null;
+    private recorder: MediaRecorder | null = null;
+    private chunks: Blob[] = [];
     private active = false;
 
     constructor(events: Events) {
@@ -37,42 +35,6 @@ class VoiceController {
         }
 
         try {
-            // Step 1: Create an ephemeral session token
-            const sessionResponse = await fetch('https://api.openai.com/v1/realtime/sessions', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    model: REALTIME_MODEL,
-                    modalities: ['text', 'audio'],
-                    input_audio_transcription: {
-                        model: 'gpt-4o-mini-transcribe'
-                    },
-                    turn_detection: {
-                        type: 'server_vad',
-                        threshold: 0.5,
-                        prefix_padding_ms: 300,
-                        silence_duration_ms: 700
-                    }
-                })
-            });
-
-            if (!sessionResponse.ok) {
-                const errText = await sessionResponse.text();
-                throw new Error(`Session creation failed: ${sessionResponse.status} ${errText}`);
-            }
-
-            const sessionData = await sessionResponse.json();
-            const ephemeralKey = sessionData.client_secret?.value;
-            if (!ephemeralKey) {
-                throw new Error('No ephemeral key in session response');
-            }
-
-            console.log('[VoiceController] Got ephemeral key');
-
-            // Step 2: Get microphone
             this.stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: true,
@@ -81,49 +43,23 @@ class VoiceController {
                 }
             });
 
-            // Step 3: Create WebRTC peer connection
-            this.pc = new RTCPeerConnection();
+            this.chunks = [];
+            this.recorder = new MediaRecorder(this.stream, { mimeType: 'audio/webm;codecs=opus' });
 
-            // Add audio track
-            this.stream.getAudioTracks().forEach(track => {
-                this.pc!.addTrack(track, this.stream!);
-            });
+            this.recorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    this.chunks.push(e.data);
+                }
+            };
 
-            // Add a silent audio receiver so we get the remote audio track
-            // (required even if we only care about transcription)
-            this.pc.addTransceiver('audio', { direction: 'sendrecv' });
+            this.recorder.onstop = () => {
+                this.transcribe();
+            };
 
-            // Set up data channel for events
-            this.dc = this.pc.createDataChannel('oai-events');
-            this.dc.onmessage = (event) => this.handleDataChannelMessage(event);
-
-            // Step 4: Create offer and exchange SDP with ephemeral key
-            const offer = await this.pc.createOffer();
-            await this.pc.setLocalDescription(offer);
-
-            const connectResponse = await fetch(`https://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${ephemeralKey}`,
-                    'Content-Type': 'application/sdp'
-                },
-                body: offer.sdp
-            });
-
-            if (!connectResponse.ok) {
-                const errText = await connectResponse.text();
-                throw new Error(`WebRTC connect failed: ${connectResponse.status} ${errText}`);
-            }
-
-            const answerSdp = await connectResponse.text();
-            await this.pc.setRemoteDescription({
-                type: 'answer',
-                sdp: answerSdp
-            });
-
+            this.recorder.start();
             this.active = true;
             this.events.fire('voice.active', true);
-            console.log('[VoiceController] Started');
+            console.log('[VoiceController] Recording started');
 
         } catch (err) {
             console.error('[VoiceController] Start failed:', err);
@@ -132,42 +68,70 @@ class VoiceController {
     }
 
     private stop() {
-        this.cleanup();
+        if (this.recorder && this.recorder.state === 'recording') {
+            this.recorder.stop(); // triggers onstop → transcribe()
+        }
         this.active = false;
         this.events.fire('voice.active', false);
-        console.log('[VoiceController] Stopped');
+        console.log('[VoiceController] Recording stopped');
+    }
+
+    private async transcribe() {
+        if (this.chunks.length === 0) {
+            this.cleanup();
+            return;
+        }
+
+        const blob = new Blob(this.chunks, { type: 'audio/webm' });
+        this.chunks = [];
+        this.cleanup();
+
+        // Skip tiny recordings (< 0.5s of audio is usually noise)
+        if (blob.size < 5000) {
+            console.log('[VoiceController] Recording too short, skipping');
+            return;
+        }
+
+        this.events.fire('voice.transcribing', true);
+
+        try {
+            const formData = new FormData();
+            formData.append('file', blob, 'recording.webm');
+            formData.append('model', 'gpt-4o-mini-transcribe');
+            formData.append('response_format', 'text');
+
+            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errText = await response.text();
+                throw new Error(`Transcription failed: ${response.status} ${errText}`);
+            }
+
+            const transcript = (await response.text()).trim();
+            if (transcript) {
+                console.log(`[VoiceController] Transcript: "${transcript}"`);
+                this.events.fire('voice.transcript', transcript);
+                await this.commands.processTranscript(transcript);
+            }
+        } catch (err) {
+            console.error('[VoiceController] Transcription failed:', err);
+        } finally {
+            this.events.fire('voice.transcribing', false);
+        }
     }
 
     private cleanup() {
-        if (this.dc) {
-            this.dc.close();
-            this.dc = null;
-        }
-        if (this.pc) {
-            this.pc.close();
-            this.pc = null;
-        }
         if (this.stream) {
             this.stream.getTracks().forEach(t => t.stop());
             this.stream = null;
         }
-    }
-
-    private handleDataChannelMessage(event: MessageEvent) {
-        try {
-            const msg = JSON.parse(event.data);
-
-            if (msg.type === 'conversation.item.input_audio_transcription.completed') {
-                const transcript = msg.transcript?.trim();
-                if (transcript) {
-                    console.log(`[VoiceController] Transcript: "${transcript}"`);
-                    this.events.fire('voice.transcript', transcript);
-                    this.commands.processTranscript(transcript);
-                }
-            }
-        } catch (err) {
-            // Ignore non-JSON or unknown messages
-        }
+        this.recorder = null;
     }
 }
 

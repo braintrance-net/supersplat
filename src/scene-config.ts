@@ -1,7 +1,7 @@
 type Color = { r: number, g: number, b: number, a: number };
 
 const DEFAULT_BG_CLR: Color = { r: 0, g: 0, b: 0, a: 1 };
-const DEFAULT_SELECTED_CLR: Color = { r: 1, g: 1, b: 0, a: 1 };
+const DEFAULT_SELECTED_CLR: Color = { r: 0.8, g: 0.9, b: 1.0, a: 0.6 };
 const DEFAULT_UNSELECTED_CLR: Color = { r: 0, g: 0, b: 1, a: 0.5 };
 const DEFAULT_LOCKED_CLR: Color = { r: 0, g: 0, b: 0, a: 0.05 };
 

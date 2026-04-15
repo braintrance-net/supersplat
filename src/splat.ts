@@ -348,8 +348,6 @@ class Splat extends Element {
 
         if (!selected) {
             material.setParameter('selectedClr', [0, 0, 0, 0]);
-        } else if (events.invoke('view.outlineSelection')) {
-            material.setParameter('selectedClr', [0, 0, 0, 0]);
         } else {
             material.setParameter('selectedClr', [selectedClr.r, selectedClr.g, selectedClr.b, selectedClr.a * this.selectionAlpha]);
         }
