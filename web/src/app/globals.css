@@ -1,9 +1,17 @@
 @import "tailwindcss";
 
+@font-face {
+  font-family: "nasalization";
+  src: url("/fonts/nasalization.otf") format("opentype");
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme inline {
   --color-background: #ffffff;
   --color-foreground: #171717;
-  --font-sans: "nasalization", "nasalization Fallback", sans-serif;
+  --font-sans: "nasalization", sans-serif;
 }
 
 body {
