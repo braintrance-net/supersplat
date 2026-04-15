@@ -1,0 +1,63 @@
+src/splat.ts
+  4a34c259eda505e2 377
+src/ui/svg/asset-browser.svg
+  4d88b5fcbece7568 1-7
+src/ui/scss/bottom-toolbar.scss
+  4a34c259eda505e2 103-133
+  13ed62db597ec930 72-77,96-97
+src/ui/bottom-toolbar.ts
+  13ed62db597ec930 13,88,153
+  4a34c259eda505e2 172-205,257-260
+src/tools/boxer-selection.ts
+  13ed62db597ec930 303-307,315
+  4a34c259eda505e2 442-443,446-459,461-462,465-467,469-493,513-578,583,590
+src/tools/sam3-selection.ts
+  13ed62db597ec930 12,14,273-277,285
+  4a34c259eda505e2 193-271,324,336-337,339-368,371-374,376,379-380,392,399
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0ad14c413608afaa3e19920bcf85491cb44a0f29",
+  "prompts": {
+    "13ed62db597ec930": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78768997-fa5b-41ae-8acf-6a356f59d974",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 30,
+      "total_deletions": 8,
+      "accepted_lines": 25,
+      "overriden_lines": 0
+    },
+    "4a34c259eda505e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8faa3715-9d2a-4862-ab1f-6aad60797463",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 401,
+      "total_deletions": 159,
+      "accepted_lines": 318,
+      "overriden_lines": 0
+    },
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 7,
+      "total_deletions": 0,
+      "accepted_lines": 7,
+      "overriden_lines": 0
+    }
+  }
+}
