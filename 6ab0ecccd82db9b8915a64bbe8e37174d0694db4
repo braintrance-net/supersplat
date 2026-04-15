@@ -1,0 +1,38 @@
+web/src/app/editor/page.tsx
+  f0ab20671f4bb23b 1-29
+ops/sessions/20260415-220550.json
+  6865f8e25fa99d5c 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "6ab0ecccd82db9b8915a64bbe8e37174d0694db4",
+  "prompts": {
+    "6865f8e25fa99d5c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d9321-75ed-7450-8405-6acfb193fef7",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 29,
+      "total_deletions": 0,
+      "accepted_lines": 35,
+      "overriden_lines": 0
+    }
+  }
+}
