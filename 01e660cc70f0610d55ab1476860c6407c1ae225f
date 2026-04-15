@@ -1,0 +1,23 @@
+src/ui/sam-icon.svg
+  b913e4c9dfb14d90 2,4,6-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "01e660cc70f0610d55ab1476860c6407c1ae225f",
+  "prompts": {
+    "b913e4c9dfb14d90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab4a3750-6869-4b43-86df-9de981cc54ba",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 9,
+      "total_deletions": 13,
+      "accepted_lines": 9,
+      "overriden_lines": 0
+    }
+  }
+}
