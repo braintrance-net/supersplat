@@ -1,5 +1,5 @@
 import { Container } from '@playcanvas/pcui';
-import { AppBase, Asset, Entity } from 'playcanvas';
+import { AppBase, Asset, BoundingBox, Entity, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Tooltips } from './tooltips';
@@ -340,34 +340,43 @@ class AssetBrowser extends Container {
 
             entity.name = model.name;
 
-            // Position at the camera's focal point so it appears where the user is looking
+            // Add to scene first so transforms are resolved
+            app.root.addChild(entity);
+
+            // Calculate the model's world-space bounding box from all render components
+            const bbox = this.computeEntityBounds(entity);
+            const size = new Vec3();
+            bbox.getHalfExtents(size);
+            const maxExtent = Math.max(size.x, size.y, size.z) * 2;
+
+            console.log('[AssetBrowser] Model bounds center:', bbox.center.toString());
+            console.log('[AssetBrowser] Model bounds size:', (size.x * 2).toFixed(3), (size.y * 2).toFixed(3), (size.z * 2).toFixed(3));
+            console.log('[AssetBrowser] Max extent:', maxExtent.toFixed(3));
+
+            // Auto-scale so the model is ~2 units tall (reasonable size in most scenes)
+            const targetSize = 2.0;
+            if (maxExtent > 0 && (maxExtent < 0.01 || maxExtent > 100)) {
+                const scaleFactor = targetSize / maxExtent;
+                entity.setLocalScale(scaleFactor, scaleFactor, scaleFactor);
+                console.log('[AssetBrowser] Auto-scaled by:', scaleFactor.toFixed(4));
+            }
+
+            // Position at the camera's focal point
             const scene = (window as any).scene;
             if (scene?.camera?.focalPoint) {
                 const fp = scene.camera.focalPoint;
                 entity.setPosition(fp.x, fp.y, fp.z);
                 console.log('[AssetBrowser] Placed at focal point:', fp.x.toFixed(2), fp.y.toFixed(2), fp.z.toFixed(2));
-            } else {
-                console.warn('[AssetBrowser] No focal point available, placed at origin');
             }
 
-            app.root.addChild(entity);
+            // Ensure render components are on the world layer
+            const worldLayerId = scene?.worldLayer?.id;
+            if (worldLayerId !== undefined) {
+                this.setLayerRecursive(entity, worldLayerId);
+            }
 
-            // Debug: log entity hierarchy and bounding info
-            console.log('[AssetBrowser] Entity added to scene:', entity.name);
-            console.log('[AssetBrowser] Entity position:', entity.getPosition().toString());
-            console.log('[AssetBrowser] Entity scale:', entity.getLocalScale().toString());
-            console.log('[AssetBrowser] Entity children:', entity.children.length);
-
-            // Walk children to find render components and log their bounding boxes
-            const logChildren = (e: Entity, depth: number) => {
-                const prefix = '  '.repeat(depth);
-                const components = Object.keys((e as any).c || {});
-                console.log(`[AssetBrowser] ${prefix}${e.name} [components: ${components.join(', ') || 'none'}] pos: ${e.getLocalPosition().toString()} scale: ${e.getLocalScale().toString()}`);
-                for (const child of e.children) {
-                    logChildren(child as Entity, depth + 1);
-                }
-            };
-            logChildren(entity, 0);
+            // Force a render update
+            if (scene) scene.forceRender = true;
 
             URL.revokeObjectURL(blobUrl);
 
@@ -405,6 +414,46 @@ class AssetBrowser extends Container {
         // Pick ~200px wide thumbnail for grid
         const target = sorted.find(i => i.width >= 200) || sorted[sorted.length - 1];
         return target?.url || '';
+    }
+
+    private computeEntityBounds(entity: Entity): BoundingBox {
+        const bounds = new BoundingBox();
+        let first = true;
+
+        const walk = (e: Entity) => {
+            if ((e as any).render?.meshInstances) {
+                for (const mi of (e as any).render.meshInstances) {
+                    if (first) {
+                        bounds.copy(mi.aabb);
+                        first = false;
+                    } else {
+                        bounds.add(mi.aabb);
+                    }
+                }
+            }
+            for (const child of e.children) {
+                walk(child as Entity);
+            }
+        };
+
+        walk(entity);
+
+        if (first) {
+            // No render components found — return a small box at entity position
+            bounds.center.copy(entity.getPosition());
+            bounds.halfExtents.set(0.5, 0.5, 0.5);
+        }
+
+        return bounds;
+    }
+
+    private setLayerRecursive(entity: Entity, layerId: number) {
+        if ((entity as any).render) {
+            (entity as any).render.layers = [layerId];
+        }
+        for (const child of entity.children) {
+            this.setLayerRecursive(child as Entity, layerId);
+        }
     }
 
     private async getDownloadUrl(uid: string): Promise<string | null> {

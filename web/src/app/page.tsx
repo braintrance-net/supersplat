@@ -25,7 +25,7 @@ export default function Home() {
     <div className="relative h-screen w-full overflow-hidden">
       {/* Background image */}
       <Image
-        src="/images/polaroids.jpg"
+        src="/images/polaroids2.webp"
         alt="Scattered polaroid photographs"
         fill
         className="object-cover"
