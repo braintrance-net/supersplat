@@ -33,29 +33,46 @@ export default function Home() {
       />
 
       {/* Dark overlay for legibility */}
-      <div className="absolute inset-0 bg-black/40" />
+      <div className="absolute inset-0 bg-black/50" />
 
       {/* Content centered on top */}
       <div className="relative z-10 flex h-full flex-col items-center justify-center px-6">
-        <h1 className="text-6xl font-bold tracking-tight text-white sm:text-8xl">
+        <h1 className="text-7xl font-bold tracking-wide text-white sm:text-9xl">
           BrainTrance
         </h1>
-        <p className="mt-4 text-lg text-white/70 sm:text-xl">
-          Freeze the feeling.
+        <p className="mt-3 text-xl font-light tracking-widest uppercase text-white/60 sm:text-2xl">
+          Freeze the feeling
         </p>
 
-        <div className="mt-10 flex flex-col items-center gap-4 sm:flex-row">
+        <div className="mt-12 flex flex-col items-center gap-4 sm:flex-row">
+          {/* Upload — primary liquid glass button */}
           <button
             onClick={handleUpload}
-            className="flex h-12 items-center justify-center rounded-full bg-white px-8 text-base font-medium text-black transition-colors hover:bg-neutral-200"
+            className="group relative flex h-14 items-center justify-center rounded-xl px-10 text-lg font-semibold tracking-wide text-white backdrop-blur-xl transition-all duration-300 hover:scale-105"
+            style={{
+              background: "rgba(252, 252, 255, 0.15)",
+              border: "1px solid rgba(255, 255, 255, 0.25)",
+              boxShadow:
+                "inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(255,255,255,0.1), 0 8px 32px rgba(0,0,0,0.2)",
+            }}
           >
-            Upload
+            <span className="relative z-10">Upload</span>
+            <div className="pointer-events-none absolute inset-0 rounded-xl bg-gradient-to-b from-white/20 to-transparent opacity-60" />
           </button>
+
+          {/* Try Demo — secondary liquid glass button */}
           <button
             onClick={handleTest}
-            className="flex h-12 items-center justify-center rounded-full border border-white/30 px-8 text-base font-medium text-white transition-colors hover:bg-white/10"
+            className="group relative flex h-14 items-center justify-center rounded-xl px-10 text-lg font-semibold tracking-wide text-white/70 backdrop-blur-xl transition-all duration-300 hover:scale-105 hover:text-white"
+            style={{
+              background: "rgba(255, 255, 255, 0.06)",
+              border: "1px solid rgba(255, 255, 255, 0.12)",
+              boxShadow:
+                "inset 0 1px 0 rgba(255,255,255,0.15), 0 4px 24px rgba(0,0,0,0.15)",
+            }}
           >
-            Try Demo
+            <span className="relative z-10">Try Demo</span>
+            <div className="pointer-events-none absolute inset-0 rounded-xl bg-gradient-to-b from-white/10 to-transparent opacity-40" />
           </button>
         </div>
 
