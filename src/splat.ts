@@ -522,7 +522,7 @@ class Splat extends Element {
     }
 
     // get pivot position/rotation/scale (caller should have awaited operation that changed data)
-    getPivot(mode: 'center' | 'boundCenter', selection: boolean, result: Transform) {
+    getPivot(mode: 'center' | 'boundCenter' | 'boundFloor', selection: boolean, result: Transform) {
         const { entity } = this;
         switch (mode) {
             case 'center':
@@ -531,6 +531,14 @@ class Splat extends Element {
             case 'boundCenter': {
                 const bound = selection ? this.selectionBound : this.localBound;
                 entity.getLocalTransform().transformPoint(bound.center, vec);
+                result.set(vec, entity.getLocalRotation(), entity.getLocalScale());
+                break;
+            }
+            case 'boundFloor': {
+                const bound = selection ? this.selectionBound : this.localBound;
+                vec.copy(bound.center);
+                vec.y = bound.center.y - bound.halfExtents.y;
+                entity.getLocalTransform().transformPoint(vec, vec);
                 result.set(vec, entity.getLocalRotation(), entity.getLocalScale());
                 break;
             }

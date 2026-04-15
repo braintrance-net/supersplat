@@ -43,9 +43,9 @@ const maskPngToArray = async (b64: string, width: number, height: number): Promi
 
 const extractIntrinsics = (cam: any, w: number, h: number) => {
     const fovRad = (cam.fov * Math.PI) / 180;
-    const f = cam.horizontalFov
-        ? w / (2 * Math.tan(fovRad / 2))
-        : h / (2 * Math.tan(fovRad / 2));
+    const f = cam.horizontalFov ?
+        w / (2 * Math.tan(fovRad / 2)) :
+        h / (2 * Math.tan(fovRad / 2));
     return { fx: f, fy: f, cx: w / 2, cy: h / 2 };
 };
 
@@ -56,7 +56,7 @@ const collectMaskCandidates = (
     scene: Scene,
     mask: Uint8Array, maskW: number, maskH: number,
     imgW: number, imgH: number,
-    intrinsics: { fx: number; fy: number; cx: number; cy: number },
+    intrinsics: { fx: number; fy: number; cx: number; cy: number }
 ): Candidate[] => {
     const sorter: any = splat.entity.gsplat?.instance?.sorter;
     const centers: Float32Array = sorter?.centers;

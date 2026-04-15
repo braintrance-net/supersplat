@@ -263,8 +263,12 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         for (const splat of selectedSplats()) {
             await intersectCenters(splat, op, {
                 obb: {
-                    x: obb.center[0], y: obb.center[1], z: obb.center[2],
-                    lenx: obb.dimensions[0], leny: obb.dimensions[1], lenz: obb.dimensions[2],
+                    x: obb.center[0],
+                    y: obb.center[1],
+                    z: obb.center[2],
+                    lenx: obb.dimensions[0],
+                    leny: obb.dimensions[1],
+                    lenz: obb.dimensions[2],
                     rotation: obb.rotation
                 }
             });

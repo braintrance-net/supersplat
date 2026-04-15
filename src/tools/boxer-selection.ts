@@ -31,9 +31,9 @@ type OBBResult = {
 // SuperSplat toggles horizontalFov based on viewport aspect, so we must read it.
 const extractIntrinsics = (cam: any, w: number, h: number) => {
     const fovRad = (cam.fov * Math.PI) / 180;
-    const f = cam.horizontalFov
-        ? w / (2 * Math.tan(fovRad / 2))
-        : h / (2 * Math.tan(fovRad / 2));
+    const f = cam.horizontalFov ?
+        w / (2 * Math.tan(fovRad / 2)) :
+        h / (2 * Math.tan(fovRad / 2));
     return { fx: f, fy: f, cx: w / 2, cy: h / 2, width: w, height: h };
 };
 
@@ -250,7 +250,9 @@ class BoxerSelection {
             svgText.setAttribute('y', String(oy + Math.max(14, y0 - 4)));
             svgText.textContent = label;
         };
-        const hide2DBox = () => { svg.style.display = 'none'; };
+        const hide2DBox = () => {
+            svg.style.display = 'none';
+        };
 
         // Draw the OBB wireframe every frame while it is set.
         // WebGL gl.lineWidth is capped at 1, so fake thickness by offsetting
