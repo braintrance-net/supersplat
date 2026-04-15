@@ -1,0 +1,65 @@
+rollup.config.mjs
+  4d88b5fcbece7568 2-4
+.gitignore
+  4d88b5fcbece7568 7
+src/ui/asset-browser.ts
+  4d88b5fcbece7568 1-2,36,54,256-259,262,267,269,275-280,282,285-288,290,292-297,299-302,304-306,308-309,311,313-318,321-330,332-339,341-364
+src/ui/scss/asset-browser.scss
+  4d88b5fcbece7568 13-16,136-137,142,146-148,155-156,162-166,170-172,176,180-185,189,195,206-209
+src/ui/bottom-toolbar.ts
+  4d88b5fcbece7568 222-223
+web/src/app/globals.css
+  f0ab20671f4bb23b 4-5,11-12
+ops/sessions/20260415-213946.json
+  f0ab20671f4bb23b 1
+package.json
+  4d88b5fcbece7568 31,46
+src/ui/scss/bottom-toolbar.scss
+  13ed62db597ec930 73
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0490a0c96ba82fac87269f2b585ad49bc8ecd8f9",
+  "prompts": {
+    "13ed62db597ec930": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78768997-fa5b-41ae-8acf-6a356f59d974",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 3,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 140,
+      "total_deletions": 252,
+      "accepted_lines": 139,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 17,
+      "accepted_lines": 11,
+      "overriden_lines": 0
+    }
+  }
+}
