@@ -52,7 +52,6 @@ class AssetBrowser extends Container {
     };
     private currentGizmoType: 'translate' | 'rotate' | 'scale' | null = null;
     private pendingPlacement: { entity: Entity; card: HTMLElement; actionEl: Element | null } | null = null;
-    private entityActionBar: HTMLDivElement | null = null;
 
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -176,38 +175,6 @@ class AssetBrowser extends Container {
 
         this.dom.appendChild(panel);
 
-        // Entity action bar — floating controls for selected placed entities
-        this.entityActionBar = document.createElement('div');
-        this.entityActionBar.className = 'entity-action-bar';
-        this.entityActionBar.style.display = 'none';
-
-        // Stop events from reaching canvas
-        ['pointerdown', 'pointerup', 'pointermove', 'click'].forEach((evt) => {
-            this.entityActionBar.addEventListener(evt, (e: Event) => e.stopPropagation());
-        });
-
-        const entityLabel = document.createElement('span');
-        entityLabel.className = 'entity-action-label';
-        entityLabel.textContent = '';
-
-        const deselectBtn = document.createElement('button');
-        deselectBtn.className = 'entity-action-btn';
-        deselectBtn.title = 'Deselect (drop to surface)';
-        deselectBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"/></svg>`;
-        deselectBtn.addEventListener('click', () => this.deselectEntity());
-
-        const deleteBtn = document.createElement('button');
-        deleteBtn.className = 'entity-action-btn entity-action-delete';
-        deleteBtn.title = 'Delete entity';
-        deleteBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M8.5 4h3a1.5 1.5 0 00-3 0zm-1 0a2.5 2.5 0 015 0h4.25a.75.75 0 010 1.5h-.92l-.89 10.69A2.5 2.5 0 0112.47 18H7.53a2.5 2.5 0 01-2.47-2.19L4.17 5.5h-.92a.75.75 0 010-1.5H7.5zm2.5 3.75a.75.75 0 00-1.5 0v5.5a.75.75 0 001.5 0v-5.5zm2.75-.75a.75.75 0 00-.75.75v5.5a.75.75 0 001.5 0v-5.5a.75.75 0 00-.75-.75z"/></svg>`;
-        deleteBtn.addEventListener('click', () => this.deleteSelectedEntity());
-
-        this.entityActionBar.appendChild(entityLabel);
-        this.entityActionBar.appendChild(deselectBtn);
-        this.entityActionBar.appendChild(deleteBtn);
-
-        document.body.appendChild(this.entityActionBar);
-
         // Events
         events.on('assetBrowser.toggleVisible', () => {
             this.hidden = !this.hidden;
@@ -235,6 +202,14 @@ class AssetBrowser extends Container {
         // Let placed entities be re-selected by event
         events.on('assetBrowser.selectEntity', (entity: Entity) => {
             this.selectEntity(entity);
+        });
+
+        // Toolbar deselect/delete buttons
+        events.on('selection.deselect', () => {
+            this.deselectEntity();
+        });
+        events.on('selection.delete', () => {
+            this.deleteSelectedEntity();
         });
 
         // Voice command: search and place first result
@@ -294,15 +269,8 @@ class AssetBrowser extends Container {
         this.selectedEntity = entity;
         this.ensureGizmos();
 
-        // Show action bar with entity name
-        if (this.entityActionBar) {
-            this.entityActionBar.style.display = 'flex';
-            const label = this.entityActionBar.querySelector('.entity-action-label');
-            if (label) label.textContent = entity.name || 'Entity';
-            console.log('[AssetBrowser] Action bar shown for:', entity.name, 'parent:', this.entityActionBar.parentElement?.tagName);
-        } else {
-            console.warn('[AssetBrowser] entityActionBar is null!');
-        }
+        // Notify toolbar to show deselect/delete buttons
+        this.events.fire('assetBrowser.entitySelected', entity);
 
         // If a transform tool is active, attach the gizmo
         if (this.currentGizmoType) {
@@ -317,15 +285,10 @@ class AssetBrowser extends Container {
     private deselectEntity() {
         if (!this.selectedEntity) return;
 
-        const entity = this.selectedEntity;
         this.detachGizmo();
         this.selectedEntity = null;
         this.currentGizmoType = null;
-
-        // Hide action bar
-        if (this.entityActionBar) {
-            this.entityActionBar.style.display = 'none';
-        }
+        this.events.fire('assetBrowser.entitySelected', null);
     }
 
     private deleteSelectedEntity() {
@@ -335,17 +298,12 @@ class AssetBrowser extends Container {
         this.detachGizmo();
         this.selectedEntity = null;
         this.currentGizmoType = null;
+        this.events.fire('assetBrowser.entitySelected', null);
 
-        // Hide action bar
-        if (this.entityActionBar) {
-            this.entityActionBar.style.display = 'none';
-        }
-
-        // Remove from tracking
+        // Remove from tracking and destroy
         const idx = this.placedEntities.indexOf(entity);
         if (idx !== -1) this.placedEntities.splice(idx, 1);
 
-        // Destroy the entity
         entity.destroy();
 
         const scene = (window as any).scene;

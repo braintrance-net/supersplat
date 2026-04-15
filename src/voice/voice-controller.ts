@@ -1,6 +1,10 @@
 import { Events } from '../events';
 import { VoiceCommands } from './voice-commands';
 
+const SILENCE_THRESHOLD = 0.01;
+const SILENCE_DURATION_MS = 2000;
+const ANALYSIS_INTERVAL_MS = 100;
+
 class VoiceController {
     private events: Events;
     private commands: VoiceCommands;
@@ -10,6 +14,13 @@ class VoiceController {
     private recorder: MediaRecorder | null = null;
     private chunks: Blob[] = [];
     private active = false;
+
+    // Silence detection
+    private audioContext: AudioContext | null = null;
+    private analyser: AnalyserNode | null = null;
+    private silenceTimer: ReturnType<typeof setTimeout> | null = null;
+    private analysisInterval: ReturnType<typeof setInterval> | null = null;
+    private hasSpoken = false;
 
     constructor(events: Events) {
         this.events = events;
@@ -44,6 +55,7 @@ class VoiceController {
             });
 
             this.chunks = [];
+            this.hasSpoken = false;
             this.recorder = new MediaRecorder(this.stream, { mimeType: 'audio/webm;codecs=opus' });
 
             this.recorder.ondataavailable = (e) => {
@@ -56,10 +68,15 @@ class VoiceController {
                 this.transcribe();
             };
 
-            this.recorder.start();
+            // Request data every 250ms so we accumulate chunks while recording
+            this.recorder.start(250);
             this.active = true;
             this.events.fire('voice.active', true);
-            console.log('[VoiceController] Recording started');
+
+            // Set up silence detection
+            this.startSilenceDetection();
+
+            console.log('[VoiceController] Recording started (auto-stop on silence)');
 
         } catch (err) {
             console.error('[VoiceController] Start failed:', err);
@@ -67,13 +84,71 @@ class VoiceController {
         }
     }
 
+    private startSilenceDetection() {
+        if (!this.stream) return;
+
+        this.audioContext = new AudioContext();
+        const source = this.audioContext.createMediaStreamSource(this.stream);
+        this.analyser = this.audioContext.createAnalyser();
+        this.analyser.fftSize = 512;
+        source.connect(this.analyser);
+
+        const dataArray = new Float32Array(this.analyser.fftSize);
+
+        this.analysisInterval = setInterval(() => {
+            if (!this.analyser) return;
+
+            this.analyser.getFloatTimeDomainData(dataArray);
+
+            // RMS volume
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+                sum += dataArray[i] * dataArray[i];
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+
+            if (rms > SILENCE_THRESHOLD) {
+                // Sound detected
+                this.hasSpoken = true;
+                if (this.silenceTimer) {
+                    clearTimeout(this.silenceTimer);
+                    this.silenceTimer = null;
+                }
+            } else if (this.hasSpoken && !this.silenceTimer) {
+                // Silence after speech — start countdown
+                this.silenceTimer = setTimeout(() => {
+                    console.log('[VoiceController] Silence detected, auto-stopping');
+                    this.stop();
+                }, SILENCE_DURATION_MS);
+            }
+        }, ANALYSIS_INTERVAL_MS);
+    }
+
     private stop() {
+        this.stopSilenceDetection();
+
         if (this.recorder && this.recorder.state === 'recording') {
             this.recorder.stop(); // triggers onstop → transcribe()
         }
         this.active = false;
         this.events.fire('voice.active', false);
         console.log('[VoiceController] Recording stopped');
+    }
+
+    private stopSilenceDetection() {
+        if (this.analysisInterval) {
+            clearInterval(this.analysisInterval);
+            this.analysisInterval = null;
+        }
+        if (this.silenceTimer) {
+            clearTimeout(this.silenceTimer);
+            this.silenceTimer = null;
+        }
+        if (this.audioContext) {
+            this.audioContext.close();
+            this.audioContext = null;
+        }
+        this.analyser = null;
     }
 
     private async transcribe() {
@@ -127,6 +202,7 @@ class VoiceController {
     }
 
     private cleanup() {
+        this.stopSilenceDetection();
         if (this.stream) {
             this.stream.getTracks().forEach(t => t.stop());
             this.stream = null;

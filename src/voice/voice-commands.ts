@@ -239,7 +239,7 @@ class VoiceCommands {
                 content: `You are a voice command interpreter for a 3D Gaussian Splat editor. Convert spoken commands into tool calls.
 
 Rules:
-- Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Default distance is 0.5 units.
+- Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Use the scene_scale value provided below to choose reasonable distances — "a little" ≈ 0.05×scale, default ≈ 0.1×scale, "a lot" ≈ 0.3×scale.
 - You can chain multiple tool calls for compound commands like "move left then up".
 - To select a specific object by description (e.g. "select the can", "click the chair"), use select_object with a short description. This activates AI-powered segmentation (SAM3) to find and select the object. Set use_boxer=true only if the user explicitly says "boxer".
 - Only use editor_action select_all when the user explicitly says "select all" or "select everything".
@@ -248,7 +248,7 @@ Rules:
             },
             {
                 role: 'user',
-                content: text
+                content: `${text}\n\n[scene_scale=${this.getSceneScale().toFixed(3)}]`
             }
         ];
 
@@ -341,6 +341,28 @@ Rules:
             default:
                 return `Unknown tool: ${name}`;
         }
+    }
+
+    private getSceneScale(): number {
+        const scene = (window as any).scene;
+        if (!scene) return 1;
+
+        // Use scene bounding box radius as the scale reference
+        try {
+            const bound = scene.bound;
+            if (bound) {
+                const radius = bound.halfExtents.length();
+                if (radius > 0) return radius;
+            }
+        } catch { /* fall through */ }
+
+        // Fallback: camera distance
+        try {
+            const dist = scene.camera?.distance;
+            if (dist > 0) return dist;
+        } catch { /* fall through */ }
+
+        return 1;
     }
 
     private async executeSelectObject(description: string, useBoxer: boolean): Promise<string> {

@@ -230,6 +230,47 @@ class BottomToolbar extends Container {
         this.append(assetBrowserBtn);
         this.append(mic);
 
+        // Deselect + Delete buttons — visible when something is selected
+        const selectionSep = new Element({ id: 'bottom-toolbar-selection-sep', class: 'bottom-toolbar-separator' });
+        selectionSep.hidden = true;
+
+        const deselect = new Button({
+            id: 'bottom-toolbar-deselect',
+            class: 'bottom-toolbar-tool',
+            icon: 'E132'
+        });
+        deselect.hidden = true;
+
+        const deleteBtn = new Button({
+            id: 'bottom-toolbar-delete',
+            class: 'bottom-toolbar-tool',
+            icon: 'E120'
+        });
+        deleteBtn.hidden = true;
+
+        this.append(selectionSep);
+        this.append(deselect);
+        this.append(deleteBtn);
+
+        deselect.dom.addEventListener('click', () => events.fire('selection.deselect'));
+        deleteBtn.dom.addEventListener('click', () => events.fire('selection.delete'));
+
+        // Show/hide based on selection state
+        const updateSelectionButtons = (hasSelection: boolean) => {
+            selectionSep.hidden = !hasSelection;
+            deselect.hidden = !hasSelection;
+            deleteBtn.hidden = !hasSelection;
+        };
+
+        events.on('selection.changed', () => {
+            const sel = events.invoke('selection');
+            updateSelectionButtons(!!sel);
+        });
+
+        events.on('assetBrowser.entitySelected', (entity: any) => {
+            updateSelectionButtons(!!entity);
+        });
+
         // Voice transcript overlay
         const transcriptEl = document.createElement('div');
         transcriptEl.id = 'voice-transcript';
@@ -342,6 +383,8 @@ class BottomToolbar extends Container {
         tooltips.register(coordSpace, tooltip('tooltip.bottom-toolbar.local-space', 'tool.toggleCoordSpace'));
         tooltips.register(origin, tooltip('tooltip.bottom-toolbar.bound-center'));
         tooltips.register(eyedropper, tooltip('tooltip.bottom-toolbar.eyedropper', 'tool.eyedropperSelection'));
+        tooltips.register(deselect, 'Deselect');
+        tooltips.register(deleteBtn, 'Delete');
     }
 }
 
