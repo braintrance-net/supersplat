@@ -12,16 +12,19 @@ function EditorFrame() {
     ? `http://localhost:3000?load=${encodeURIComponent(load)}`
     : "http://localhost:3000";
 
-  const handleIframeLoad = useCallback(() => {
+  const handleIframeLoad = useCallback(async () => {
     const file = (window as any).__pendingFile as File | undefined;
     if (!file) return;
     delete (window as any).__pendingFile;
 
+    const data = await file.arrayBuffer();
+
     // Give the editor time to initialize
     setTimeout(() => {
       iframeRef.current?.contentWindow?.postMessage(
-        { type: "supersplat:load-file", file },
-        "*"
+        { type: "supersplat:load-file", filename: file.name, data },
+        "*",
+        [data] // transfer the ArrayBuffer for performance
       );
     }, 2000);
   }, []);

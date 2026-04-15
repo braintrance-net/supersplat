@@ -1,5 +1,5 @@
 import { Container } from '@playcanvas/pcui';
-import { AppBase, Asset, BoundingBox, Color, Entity, LIGHTTYPE_DIRECTIONAL, Vec3 } from 'playcanvas';
+import { AppBase, Asset, BoundingBox, Color, Entity, LIGHTTYPE_DIRECTIONAL, RotateGizmo, ScaleGizmo, TransformGizmo, TranslateGizmo, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Tooltips } from './tooltips';
@@ -43,6 +43,14 @@ class AssetBrowser extends Container {
     private searchInput: HTMLInputElement;
     private lightEntity: Entity | null = null;
     private placedEntities: Entity[] = [];
+    private selectedEntity: Entity | null = null;
+    private activeGizmo: TransformGizmo | null = null;
+    private gizmos: { translate: TranslateGizmo | null; rotate: RotateGizmo | null; scale: ScaleGizmo | null } = {
+        translate: null,
+        rotate: null,
+        scale: null
+    };
+    private currentGizmoType: 'translate' | 'rotate' | 'scale' | null = null;
 
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -175,6 +183,93 @@ class AssetBrowser extends Container {
             }
         });
 
+        // Map toolbar tool names to our gizmo types
+        events.on('tool.activated', (toolName: string) => {
+            if (toolName === 'move') {
+                this.switchGizmo('translate');
+            } else if (toolName === 'rotate') {
+                this.switchGizmo('rotate');
+            } else if (toolName === 'scale') {
+                this.switchGizmo('scale');
+            } else {
+                // Non-transform tool activated — detach gizmo but keep selection
+                this.detachGizmo();
+                this.currentGizmoType = null;
+            }
+        });
+
+        // Let placed entities be re-selected by event
+        events.on('assetBrowser.selectEntity', (entity: Entity) => {
+            this.selectEntity(entity);
+        });
+
+    }
+
+    private ensureGizmos() {
+        if (this.gizmos.translate) return;
+
+        const scene = (window as any).scene;
+        if (!scene) return;
+
+        const camera = scene.camera.camera;
+        const layer = scene.gizmoLayer;
+
+        this.gizmos.translate = new TranslateGizmo(camera, layer);
+        this.gizmos.rotate = new RotateGizmo(camera, layer);
+        this.gizmos.scale = new ScaleGizmo(camera, layer);
+
+        // Wire up all gizmos to directly transform the selected entity
+        for (const gizmo of [this.gizmos.translate, this.gizmos.rotate, this.gizmos.scale]) {
+            gizmo.on('render:update', () => {
+                scene.forceRender = true;
+            });
+
+            gizmo.on('transform:move', () => {
+                scene.forceRender = true;
+            });
+        }
+    }
+
+    private selectEntity(entity: Entity) {
+        this.selectedEntity = entity;
+        this.ensureGizmos();
+
+        // If a transform tool is active, attach the gizmo
+        if (this.currentGizmoType) {
+            this.attachGizmo(this.currentGizmoType);
+        } else {
+            // Default to translate when selecting a placed entity
+            this.currentGizmoType = 'translate';
+            this.events.fire('tool.move');
+        }
+    }
+
+    private switchGizmo(type: 'translate' | 'rotate' | 'scale') {
+        this.currentGizmoType = type;
+        if (this.selectedEntity) {
+            this.attachGizmo(type);
+        }
+    }
+
+    private attachGizmo(type: 'translate' | 'rotate' | 'scale') {
+        this.ensureGizmos();
+        this.detachGizmo();
+
+        const gizmo = this.gizmos[type];
+        if (!gizmo || !this.selectedEntity) return;
+
+        gizmo.attach([this.selectedEntity]);
+        this.activeGizmo = gizmo;
+
+        const scene = (window as any).scene;
+        if (scene) scene.forceRender = true;
+    }
+
+    private detachGizmo() {
+        if (this.activeGizmo?.enabled) {
+            this.activeGizmo.detach();
+        }
+        this.activeGizmo = null;
     }
 
     private async search(query: string, cursor?: string) {
@@ -377,6 +472,9 @@ class AssetBrowser extends Container {
                 const pos = entity.getPosition();
                 scene.camera.focus({ focalPoint: pos, radius: 3, speed: 1 });
             }
+
+            // Auto-select entity and activate move gizmo
+            this.selectEntity(entity);
 
             if (actionEl) actionEl.textContent = 'Placed in scene!';
             setTimeout(() => {

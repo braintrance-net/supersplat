@@ -14,7 +14,8 @@ interface IsSceneDirtyResponse {
 
 interface LoadFileMessage {
     type: typeof LOAD_FILE;
-    file: File;
+    filename: string;
+    data: ArrayBuffer;
 }
 
 const isSceneDirtyQuery = (data: any): data is IsSceneDirtyQuery => {
@@ -30,7 +31,8 @@ const isLoadFileMessage = (data: any): data is LoadFileMessage => {
         data &&
         typeof data === 'object' &&
         data.type === LOAD_FILE &&
-        data.file instanceof File
+        typeof data.filename === 'string' &&
+        data.data instanceof ArrayBuffer
     );
 };
 
@@ -50,10 +52,10 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isLoadFileMessage(event.data)) {
-            const file = event.data.file;
+            const file = new File([event.data.data], event.data.filename);
             events.invoke('import', [{
                 filename: file.name,
-                url: URL.createObjectURL(file)
+                contents: file
             }]);
         }
     });
