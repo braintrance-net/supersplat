@@ -11,7 +11,8 @@
 @theme inline {
   --color-background: #ffffff;
   --color-foreground: #171717;
-  --font-sans: "nasalization", sans-serif;
+  --font-sans: "Rajdhani", sans-serif;
+  --font-display: "nasalization", sans-serif;
 }
 
 body {
