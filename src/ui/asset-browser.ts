@@ -345,8 +345,7 @@ class AssetBrowser extends Container {
 
             // Calculate the model's world-space bounding box from all render components
             const bbox = this.computeEntityBounds(entity);
-            const size = new Vec3();
-            bbox.getHalfExtents(size);
+            const size = bbox.halfExtents;
             const maxExtent = Math.max(size.x, size.y, size.z) * 2;
 
             console.log('[AssetBrowser] Model bounds center:', bbox.center.toString());
