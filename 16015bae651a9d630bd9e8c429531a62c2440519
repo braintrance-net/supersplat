@@ -1,0 +1,38 @@
+src/tools/boxer-selection.ts
+  4a34c259eda505e2 416-419,421,440,442-465,468-469
+src/ui/scss/asset-browser.scss
+  4d88b5fcbece7568 1-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "16015bae651a9d630bd9e8c429531a62c2440519",
+  "prompts": {
+    "4a34c259eda505e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8faa3715-9d2a-4862-ab1f-6aad60797463",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 33,
+      "total_deletions": 61,
+      "accepted_lines": 33,
+      "overriden_lines": 0
+    },
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 302,
+      "total_deletions": 0,
+      "accepted_lines": 302,
+      "overriden_lines": 0
+    }
+  }
+}
