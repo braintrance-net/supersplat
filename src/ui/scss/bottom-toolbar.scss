@@ -91,6 +91,14 @@
     }
 }
 
+#bottom-toolbar-delete:hover {
+    background-color: #c0392b !important;
+
+    svg, .font-icon {
+        color: white;
+    }
+}
+
 #bottom-toolbar-sam3,
 #bottom-toolbar-boxer {
     display: flex;

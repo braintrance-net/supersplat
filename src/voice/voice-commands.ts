@@ -1,4 +1,4 @@
-import { Quat, Vec3 } from 'playcanvas';
+import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Pivot } from '../pivot';
@@ -63,13 +63,13 @@ const TOOL_DEFINITIONS = [
         type: 'function' as const,
         function: {
             name: 'translate',
-            description: 'Move the current selection by an offset in 3D space. Units are scene units (roughly meters).',
+            description: 'Move the current selection by a normalized offset. Use 1.0 for a normal move, 0.3 for small, 2.0 for large. The system scales to the scene automatically.',
             parameters: {
                 type: 'object',
                 properties: {
-                    x: { type: 'number', description: 'Offset along X axis (positive = right)' },
-                    y: { type: 'number', description: 'Offset along Y axis (positive = up)' },
-                    z: { type: 'number', description: 'Offset along Z axis (positive = forward/towards camera)' }
+                    x: { type: 'number', description: 'Normalized offset along X axis (positive = right)' },
+                    y: { type: 'number', description: 'Normalized offset along Y axis (positive = up)' },
+                    z: { type: 'number', description: 'Normalized offset along Z axis (positive = forward/towards camera)' }
                 },
                 required: ['x', 'y', 'z']
             }
@@ -239,7 +239,7 @@ class VoiceCommands {
                 content: `You are a voice command interpreter for a 3D Gaussian Splat editor. Convert spoken commands into tool calls.
 
 Rules:
-- Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Use the scene_scale value provided below to choose reasonable distances — "a little" ≈ 0.05×scale, default ≈ 0.1×scale, "a lot" ≈ 0.3×scale.
+- Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Use NORMALIZED units: 1.0 = normal/default move, 0.3 = a little, 2.0 = a lot. The system will scale these to the scene automatically. Do NOT use tiny values like 0.05 or 0.1.
 - You can chain multiple tool calls for compound commands like "move left then up".
 - To select a specific object by description (e.g. "select the can", "click the chair"), use select_object with a short description. This activates AI-powered segmentation (SAM3) to find and select the object. Set use_boxer=true only if the user explicitly says "boxer".
 - Only use editor_action select_all when the user explicitly says "select all" or "select everything".
@@ -248,9 +248,12 @@ Rules:
             },
             {
                 role: 'user',
-                content: `${text}\n\n[scene_scale=${this.getSceneScale().toFixed(3)}]`
+                content: text
             }
         ];
+
+        const scale = this.getSceneScale();
+        console.log(`[VoiceCommands] Scene scale: ${scale.toFixed(3)}, suggested distances: a_little=${(0.05 * scale).toFixed(3)}, default=${(0.1 * scale).toFixed(3)}, a_lot=${(0.3 * scale).toFixed(3)}`);
 
         // Loop up to 6 tool call rounds
         for (let round = 0; round < 6; round++) {
@@ -305,13 +308,13 @@ Rules:
 
         switch (name) {
             case 'translate':
-                return this.executeTranslate(args.x, args.y, args.z);
+                return await this.executeTranslate(args.x, args.y, args.z);
 
             case 'rotate':
-                return this.executeRotate(args.axis, args.degrees);
+                return await this.executeRotate(args.axis, args.degrees);
 
             case 'scale':
-                return this.executeScale(args.factor);
+                return await this.executeScale(args.factor);
 
             case 'activate_tool': {
                 const eventName = TOOL_NAME_MAP[args.tool];
@@ -341,6 +344,32 @@ Rules:
             default:
                 return `Unknown tool: ${name}`;
         }
+    }
+
+    private waitForPivot(): Promise<void> {
+        return new Promise((resolve) => {
+            // Check if pivot already has a valid position (not origin)
+            const pivot = this.events.invoke('pivot') as Pivot;
+            if (pivot && !pivot.transform.position.equals(new Vec3(0, 0, 0))) {
+                resolve();
+                return;
+            }
+
+            // Wait for pivot.placed event
+            const timeout = setTimeout(() => {
+                this.events.off('pivot.placed', onPlaced);
+                console.log('[VoiceCommands] waitForPivot timed out, proceeding anyway');
+                resolve();
+            }, 500);
+
+            const onPlaced = () => {
+                clearTimeout(timeout);
+                this.events.off('pivot.placed', onPlaced);
+                resolve();
+            };
+
+            this.events.on('pivot.placed', onPlaced);
+        });
     }
 
     private getSceneScale(): number {
@@ -417,28 +446,65 @@ Rules:
         return result;
     }
 
-    private executeTranslate(x: number, y: number, z: number): string {
-        // Activate move tool first, then use pivot to transform
+    private async executeTranslate(x: number, y: number, z: number): Promise<string> {
+        // Scale normalized values by scene size (10% of scene radius per 1.0 unit)
+        const sceneFactor = this.getSceneScale() * 0.1;
+
+        // Convert from camera-relative to world space
+        // x = camera right, y = world up, z = camera forward (into screen)
+        const scene = (window as any).scene;
+        const offset = new Vec3();
+
+        if (scene?.camera) {
+            const wtm: Mat4 = scene.camera.worldTransform;
+            const camRight = new Vec3(wtm.data[0], wtm.data[1], wtm.data[2]);
+            const camForward = new Vec3(-wtm.data[8], -wtm.data[9], -wtm.data[10]);
+
+            // Project camera right/forward onto horizontal plane (ignore vertical component)
+            camRight.y = 0;
+            camRight.normalize();
+            camForward.y = 0;
+            camForward.normalize();
+
+            // x → camera right, z → camera forward, y → world up
+            offset.add(camRight.mulScalar(x * sceneFactor));
+            offset.y += y * sceneFactor;
+            offset.add(camForward.mulScalar(z * sceneFactor));
+        } else {
+            // Fallback: world axes
+            offset.set(x * sceneFactor, y * sceneFactor, z * sceneFactor);
+        }
+
+        console.log(`[VoiceCommands] Translate: normalized=(${x}, ${y}, ${z}), sceneFactor=${sceneFactor.toFixed(3)}, world offset=(${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}, ${offset.z.toFixed(3)})`);
+
+        // Activate move tool and wait for pivot to be placed
         this.events.fire('tool.move');
+        await this.waitForPivot();
 
         const pivot = this.events.invoke('pivot') as Pivot;
-        if (!pivot) return 'No pivot available';
+        if (!pivot) {
+            console.warn('[VoiceCommands] No pivot available');
+            return 'No pivot available';
+        }
 
-        const pos = pivot.transform.position.clone();
+        const posBefore = pivot.transform.position.clone();
         const rot = pivot.transform.rotation.clone();
         const scale = pivot.transform.scale.clone();
 
-        pos.add(new Vec3(x, y, z));
+        const posAfter = posBefore.clone().add(offset);
+
+        console.log(`[VoiceCommands] Translate: pivot before=${posBefore.toString()}, after=${posAfter.toString()}`);
 
         pivot.start();
-        pivot.moveTRS(pos, rot, scale);
+        pivot.moveTRS(posAfter, rot, scale);
         pivot.end();
 
-        return `Translated by (${x}, ${y}, ${z})`;
+        return `Translated by world (${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}, ${offset.z.toFixed(3)})`;
     }
 
-    private executeRotate(axis: string, degrees: number): string {
+    private async executeRotate(axis: string, degrees: number): Promise<string> {
         this.events.fire('tool.rotate');
+        await this.waitForPivot();
 
         const pivot = this.events.invoke('pivot') as Pivot;
         if (!pivot) return 'No pivot available';
@@ -462,8 +528,9 @@ Rules:
         return `Rotated ${degrees}° around ${axis} axis`;
     }
 
-    private executeScale(factor: number): string {
+    private async executeScale(factor: number): Promise<string> {
         this.events.fire('tool.scale');
+        await this.waitForPivot();
 
         const pivot = this.events.invoke('pivot') as Pivot;
         if (!pivot) return 'No pivot available';
