@@ -1,0 +1,35 @@
+src/ui/scss/style.scss
+  4d88b5fcbece7568 27
+src/main.ts
+  4d88b5fcbece7568 59
+src/ui/editor.ts
+  4d88b5fcbece7568 4,132,145
+src/ui/bottom-toolbar.ts
+  4d88b5fcbece7568 13,137-141,159,165-166,235,277-280,299
+rollup.config.mjs
+  4d88b5fcbece7568 67-68
+.env
+  4d88b5fcbece7568 1
+src/ui/right-toolbar.ts
+  4d88b5fcbece7568 9,70-74,93,105,128,143,165-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "97d28d86c1cd890dd214ae28ffba1485624bd72d",
+  "prompts": {
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 37,
+      "total_deletions": 1,
+      "accepted_lines": 37,
+      "overriden_lines": 0
+    }
+  }
+}
