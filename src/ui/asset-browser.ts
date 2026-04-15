@@ -1,5 +1,5 @@
 import { Container } from '@playcanvas/pcui';
-import { AppBase, Asset, BoundingBox, Entity, Vec3 } from 'playcanvas';
+import { AppBase, Asset, BoundingBox, Color, Entity, LIGHTTYPE_DIRECTIONAL, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Tooltips } from './tooltips';
@@ -41,6 +41,8 @@ class AssetBrowser extends Container {
     private loadMoreBtn: HTMLButtonElement;
     private statusLabel: HTMLDivElement;
     private searchInput: HTMLInputElement;
+    private lightEntity: Entity | null = null;
+    private placedEntities: Entity[] = [];
 
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -297,11 +299,9 @@ class AssetBrowser extends Container {
             }
 
             // Fetch the GLB binary
-            console.log('[AssetBrowser] Fetching GLB from:', downloadUrl.substring(0, 80) + '...');
             const response = await fetch(downloadUrl);
             if (!response.ok) throw new Error(`Download failed: ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
-            console.log('[AssetBrowser] Downloaded:', (arrayBuffer.byteLength / 1024 / 1024).toFixed(2), 'MB');
 
             // Load into PlayCanvas as a container asset (glTF/GLB)
             const app: AppBase = (window as any).scene?.app;
@@ -320,21 +320,14 @@ class AssetBrowser extends Container {
                 app.assets.load(containerAsset);
             });
 
-            console.log('[AssetBrowser] Asset loaded. Resource:', containerAsset.resource);
-            console.log('[AssetBrowser] Resource type:', typeof containerAsset.resource);
-            console.log('[AssetBrowser] Resource keys:', containerAsset.resource ? Object.keys(containerAsset.resource) : 'null');
-
             // Instantiate the model as an entity in the scene
             const resource = containerAsset.resource as any;
             let entity: Entity;
             if (resource.instantiateRenderEntity) {
                 entity = resource.instantiateRenderEntity();
-                console.log('[AssetBrowser] Used instantiateRenderEntity');
             } else if (resource.instantiateModelEntity) {
                 entity = resource.instantiateModelEntity();
-                console.log('[AssetBrowser] Used instantiateModelEntity');
             } else {
-                console.error('[AssetBrowser] Resource has no instantiate method. Keys:', Object.getOwnPropertyNames(resource));
                 throw new Error('Could not instantiate model from container.');
             }
 
@@ -348,16 +341,11 @@ class AssetBrowser extends Container {
             const size = bbox.halfExtents;
             const maxExtent = Math.max(size.x, size.y, size.z) * 2;
 
-            console.log('[AssetBrowser] Model bounds center:', bbox.center.toString());
-            console.log('[AssetBrowser] Model bounds size:', (size.x * 2).toFixed(3), (size.y * 2).toFixed(3), (size.z * 2).toFixed(3));
-            console.log('[AssetBrowser] Max extent:', maxExtent.toFixed(3));
-
             // Auto-scale so the model is ~2 units tall (reasonable size in most scenes)
             const targetSize = 2.0;
             if (maxExtent > 0 && (maxExtent < 0.01 || maxExtent > 100)) {
                 const scaleFactor = targetSize / maxExtent;
                 entity.setLocalScale(scaleFactor, scaleFactor, scaleFactor);
-                console.log('[AssetBrowser] Auto-scaled by:', scaleFactor.toFixed(4));
             }
 
             // Position at the camera's focal point
@@ -365,7 +353,6 @@ class AssetBrowser extends Container {
             if (scene?.camera?.focalPoint) {
                 const fp = scene.camera.focalPoint;
                 entity.setPosition(fp.x, fp.y, fp.z);
-                console.log('[AssetBrowser] Placed at focal point:', fp.x.toFixed(2), fp.y.toFixed(2), fp.z.toFixed(2));
             }
 
             // Ensure render components are on the world layer
@@ -374,13 +361,22 @@ class AssetBrowser extends Container {
                 this.setLayerRecursive(entity, worldLayerId);
             }
 
+            // Add scene lighting if not already present (splat scenes have no lights)
+            this.ensureSceneLighting(app, worldLayerId);
+
+            // Track the placed entity
+            this.placedEntities.push(entity);
+
             // Force a render update
             if (scene) scene.forceRender = true;
 
             URL.revokeObjectURL(blobUrl);
 
-            // Activate the move tool so the user can reposition immediately
-            this.events.fire('tool.move');
+            // Focus the camera on the placed entity so the user can see it
+            if (scene?.camera) {
+                const pos = entity.getPosition();
+                scene.camera.focus({ focalPoint: pos, radius: 3, speed: 1 });
+            }
 
             if (actionEl) actionEl.textContent = 'Placed in scene!';
             setTimeout(() => {
@@ -444,6 +440,44 @@ class AssetBrowser extends Container {
         }
 
         return bounds;
+    }
+
+    private ensureSceneLighting(app: AppBase, worldLayerId?: number) {
+        if (this.lightEntity) return;
+
+        // Set ambient light on the scene
+        app.scene.ambientLight = new Color(0.3, 0.3, 0.3);
+
+        // Add a key directional light
+        const light = new Entity('AssetBrowser_KeyLight');
+        light.addComponent('light', {
+            type: 'directional',
+            color: new Color(1, 1, 1),
+            intensity: 1.2,
+            castShadows: false
+        });
+        light.setEulerAngles(45, 135, 0);
+        if (worldLayerId !== undefined) {
+            (light as any).light.layers = [worldLayerId];
+        }
+        app.root.addChild(light);
+
+        // Add a fill light from the opposite side
+        const fill = new Entity('AssetBrowser_FillLight');
+        fill.addComponent('light', {
+            type: 'directional',
+            color: new Color(0.7, 0.8, 1.0),
+            intensity: 0.5,
+            castShadows: false
+        });
+        fill.setEulerAngles(30, -45, 0);
+        if (worldLayerId !== undefined) {
+            (fill as any).light.layers = [worldLayerId];
+        }
+        app.root.addChild(fill);
+
+        this.lightEntity = light;
+        console.log('[AssetBrowser] Added scene lighting');
     }
 
     private setLayerRecursive(entity: Entity, layerId: number) {
