@@ -1,12 +1,5 @@
 import type { Metadata } from "next";
-import { Rajdhani } from "next/font/google";
 import "./globals.css";
-
-const rajdhani = Rajdhani({
-  variable: "--font-rajdhani",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
 
 export const metadata: Metadata = {
   title: "BrainTrance",
@@ -19,7 +12,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${rajdhani.variable} antialiased`}>
+    <html lang="en" className="antialiased">
       <body>{children}</body>
     </html>
   );
