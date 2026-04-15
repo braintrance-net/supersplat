@@ -220,12 +220,25 @@ void main(void) {
         bool selected = texCoord_flags.z != 0.0 && texCoord_flags.w == 0.0;
 
         if (outlineMode) {
-            pcFragColor0 = vec4(color.xyz * alpha, alpha);
-            pcFragColor1 = vec4(0.0, 0.0, 0.0, selected ? norm : 0.0);
+            if (selected) {
+                // liquid glass: fresnel rim glow at edges of each splat
+                float rim = smoothstep(0.3, 0.95, A);
+                // chromatic edge tint — cool blue-white at the rim
+                vec3 rimClr = vec3(0.7, 0.85, 1.0);
+                vec3 glassed = color.xyz + rimClr * rim * 0.5;
+                pcFragColor0 = vec4(glassed * alpha, alpha);
+                pcFragColor1 = vec4(0.0, 0.0, 0.0, norm);
+            } else {
+                pcFragColor0 = vec4(color.xyz * alpha, alpha);
+                pcFragColor1 = vec4(0.0, 0.0, 0.0, 0.0);
+            }
         } else {
             if (selected) {
-                pcFragColor0 = vec4(color.xyz * alpha * 0.8, alpha);
-                pcFragColor1 = vec4(color.xyz * alpha * 0.2, alpha);
+                float rim = smoothstep(0.3, 0.95, A);
+                vec3 rimClr = vec3(0.7, 0.85, 1.0);
+                vec3 glassed = color.xyz + rimClr * rim * 0.5;
+                pcFragColor0 = vec4(glassed * alpha * 0.8, alpha);
+                pcFragColor1 = vec4(glassed * alpha * 0.2, alpha);
             } else {
                 pcFragColor0 = vec4(color.xyz * alpha, alpha);
                 pcFragColor1 = vec4(0.0, 0.0, 0.0, 0.0);
