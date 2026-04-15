@@ -37,15 +37,29 @@ export default function Home() {
 
       {/* Content */}
       <div className="relative z-10 flex h-full flex-col items-center justify-center px-6">
-        <h1 className="text-7xl font-bold tracking-wide text-white sm:text-9xl">
+        {/* Logo */}
+        <img
+          src="/images/logo.svg"
+          alt="BrainTrance logo"
+          className="mb-6 h-16 w-auto text-white"
+          style={{ filter: "brightness(0) invert(1)" }}
+        />
+
+        {/* Title — nasalization font */}
+        <h1
+          className="text-7xl font-bold tracking-wide text-white sm:text-9xl"
+          style={{ fontFamily: "var(--font-display)" }}
+        >
           BrainTrance
         </h1>
+
+        {/* Subtitle — Rajdhani */}
         <p className="mt-3 text-xl font-light tracking-widest uppercase text-white/60 sm:text-2xl">
           Freeze the feeling
         </p>
 
         <div className="mt-12 flex flex-col items-center gap-4 sm:flex-row">
-          {/* Upload — solid white button */}
+          {/* Upload — solid white */}
           <button
             onClick={handleUpload}
             className="flex h-14 items-center justify-center rounded-xl bg-white px-10 text-lg font-semibold tracking-wide text-black transition-all duration-200 hover:bg-neutral-200 hover:scale-105"
@@ -53,7 +67,7 @@ export default function Home() {
             Upload
           </button>
 
-          {/* Try Demo — ghost outline button */}
+          {/* Try Demo — ghost outline */}
           <button
             onClick={handleTest}
             className="flex h-14 items-center justify-center rounded-xl border border-white/30 px-10 text-lg font-semibold tracking-wide text-white/70 transition-all duration-200 hover:border-white/60 hover:text-white hover:scale-105"
