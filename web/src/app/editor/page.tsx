@@ -8,9 +8,14 @@ function EditorFrame() {
   const load = searchParams.get("load");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const editorUrl = load
-    ? `http://localhost:3000?load=${encodeURIComponent(load)}`
-    : "http://localhost:3000";
+  const hasPendingFile = typeof window !== "undefined" && !!(window as any).__pendingFile;
+
+  let editorUrl = "http://localhost:3000";
+  if (load) {
+    editorUrl += `?load=${encodeURIComponent(load)}`;
+  } else if (hasPendingFile) {
+    editorUrl += "?skipDefault";
+  }
 
   const handleIframeLoad = useCallback(async () => {
     const file = (window as any).__pendingFile as File | undefined;

@@ -164,6 +164,11 @@
         opacity: 0.6;
         pointer-events: none;
     }
+
+    &.pending-place {
+        border-color: $clr-hover-border;
+        background: rgba(0, 120, 255, 0.08);
+    }
 }
 
 .asset-browser-thumb {

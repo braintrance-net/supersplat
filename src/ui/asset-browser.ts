@@ -51,6 +51,7 @@ class AssetBrowser extends Container {
         scale: null
     };
     private currentGizmoType: 'translate' | 'rotate' | 'scale' | null = null;
+    private pendingPlacement: { entity: Entity; card: HTMLElement; actionEl: Element | null } | null = null;
 
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -431,55 +432,30 @@ class AssetBrowser extends Container {
             // Add to scene first so transforms are resolved
             app.root.addChild(entity);
 
-            // Calculate the model's world-space bounding box from all render components
-            const bbox = this.computeEntityBounds(entity);
-            const size = bbox.halfExtents;
-            const maxExtent = Math.max(size.x, size.y, size.z) * 2;
+            // Scale relative to scene bounds for natural sizing
+            this.autoScaleEntity(entity);
 
-            // Auto-scale so the model is ~2 units tall (reasonable size in most scenes)
-            const targetSize = 2.0;
-            if (maxExtent > 0 && (maxExtent < 0.01 || maxExtent > 100)) {
-                const scaleFactor = targetSize / maxExtent;
-                entity.setLocalScale(scaleFactor, scaleFactor, scaleFactor);
-            }
-
-            // Position at the camera's focal point
-            const scene = (window as any).scene;
-            if (scene?.camera?.focalPoint) {
-                const fp = scene.camera.focalPoint;
-                entity.setPosition(fp.x, fp.y, fp.z);
-            }
+            // Hide entity until placed — position offscreen
+            entity.setPosition(1e6, 1e6, 1e6);
 
             // Ensure render components are on the world layer
+            const scene = (window as any).scene;
             const worldLayerId = scene?.worldLayer?.id;
             if (worldLayerId !== undefined) {
                 this.setLayerRecursive(entity, worldLayerId);
             }
 
-            // Add scene lighting if not already present (splat scenes have no lights)
             this.ensureSceneLighting(app, worldLayerId);
-
-            // Track the placed entity
-            this.placedEntities.push(entity);
-
-            // Force a render update
-            if (scene) scene.forceRender = true;
 
             URL.revokeObjectURL(blobUrl);
 
-            // Focus the camera on the placed entity so the user can see it
-            if (scene?.camera) {
-                const pos = entity.getPosition();
-                scene.camera.focus({ focalPoint: pos, radius: 3, speed: 1 });
-            }
+            // Enter click-to-place mode
+            this.pendingPlacement = { entity, card, actionEl };
+            if (actionEl) actionEl.textContent = 'Click on scene to place...';
+            card.classList.remove('loading');
+            card.classList.add('pending-place');
 
-            // Auto-select entity and activate move gizmo
-            this.selectEntity(entity);
-
-            if (actionEl) actionEl.textContent = 'Placed in scene!';
-            setTimeout(() => {
-                if (actionEl) actionEl.textContent = 'Click to place again';
-            }, 2000);
+            this.startPlacementMode();
 
         } catch (error: any) {
             console.error('Asset placement error:', error);
@@ -489,10 +465,119 @@ class AssetBrowser extends Container {
                 message: error.message || String(error)
             });
             if (actionEl) actionEl.textContent = 'Click to place in scene';
-        } finally {
             card.classList.remove('loading');
+        } finally {
             this.events.fire('stopSpinner');
         }
+    }
+
+    private autoScaleEntity(entity: Entity) {
+        const bbox = this.computeEntityBounds(entity);
+        const size = bbox.halfExtents;
+        const maxExtent = Math.max(size.x, size.y, size.z) * 2;
+        if (maxExtent <= 0) return;
+
+        // Scale model to ~15% of scene radius for natural fit
+        const scene = (window as any).scene;
+        let targetSize = 2.0;
+        if (scene?.bound) {
+            const sceneRadius = scene.bound.halfExtents.length();
+            if (sceneRadius > 0) {
+                targetSize = sceneRadius * 0.15;
+            }
+        }
+
+        const scaleFactor = targetSize / maxExtent;
+        entity.setLocalScale(scaleFactor, scaleFactor, scaleFactor);
+    }
+
+    private startPlacementMode() {
+        const scene = (window as any).scene;
+        if (!scene) return;
+
+        const canvas = scene.canvas as HTMLCanvasElement;
+        canvas.style.cursor = 'crosshair';
+
+        const onPointerDown = async (e: PointerEvent) => {
+            if (!this.pendingPlacement) return;
+            // Ignore right-click / middle-click
+            if (e.button !== 0) return;
+
+            e.stopPropagation();
+            e.preventDefault();
+
+            const rect = canvas.getBoundingClientRect();
+            const nx = (e.clientX - rect.left) / rect.width;
+            const ny = (e.clientY - rect.top) / rect.height;
+
+            // Try depth-based intersection with the splat surface
+            const result = await scene.camera.intersect(nx, ny);
+
+            const { entity, card, actionEl } = this.pendingPlacement;
+
+            // Compute how far the model's bottom is below its origin
+            // so we can sit the base on the surface, not the center
+            const bbox = this.computeEntityBounds(entity);
+            const entityPos = entity.getPosition();
+            const boundsBottom = bbox.center.y - bbox.halfExtents.y;
+            const bottomOffset = entityPos.y - boundsBottom;
+
+            if (result) {
+                entity.setPosition(
+                    result.position.x,
+                    result.position.y + bottomOffset,
+                    result.position.z
+                );
+            } else {
+                if (scene.camera?.focalPoint) {
+                    const fp = scene.camera.focalPoint;
+                    entity.setPosition(fp.x, fp.y + bottomOffset, fp.z);
+                } else {
+                    entity.setPosition(0, bottomOffset, 0);
+                }
+            }
+
+            // Finalize placement
+            this.placedEntities.push(entity);
+            scene.forceRender = true;
+
+            // Focus camera on placed entity
+            const pos = entity.getPosition();
+            if (scene.camera) {
+                scene.camera.focus({ focalPoint: pos, radius: 3, speed: 1 });
+            }
+
+            // Auto-select with move gizmo
+            this.selectEntity(entity);
+
+            // Clean up placement mode
+            canvas.style.cursor = '';
+            canvas.removeEventListener('pointerdown', onPointerDown, true);
+            canvas.removeEventListener('keydown', onEscape, true);
+
+            card.classList.remove('pending-place');
+            if (actionEl) actionEl.textContent = 'Placed! Click to place another';
+            this.pendingPlacement = null;
+        };
+
+        const onEscape = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape' || !this.pendingPlacement) return;
+
+            // Cancel placement — remove the entity
+            const { entity, card, actionEl } = this.pendingPlacement;
+            entity.destroy();
+            canvas.style.cursor = '';
+            canvas.removeEventListener('pointerdown', onPointerDown, true);
+            canvas.removeEventListener('keydown', onEscape, true);
+
+            card.classList.remove('pending-place');
+            if (actionEl) actionEl.textContent = 'Click to place in scene';
+            this.pendingPlacement = null;
+        };
+
+        // Use capture phase so we get the click before orbit controls
+        canvas.addEventListener('pointerdown', onPointerDown, true);
+        canvas.addEventListener('keydown', onEscape, true);
     }
 
     private getThumbnail(model: SketchfabModel, large = false): string {

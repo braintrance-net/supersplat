@@ -92,8 +92,8 @@ void main(void) {
     float revealT = 1.0;
     if (revealActive == 1 && texelFetch(revealMask, splat.uv, 0).r > 0.5) {
         float dist = length(modelCenter - revealCenter) / max(revealRadius, 0.001);
-        float splatDelay = dist * 0.6;
-        revealT = clamp((revealTime - splatDelay) / 0.4, 0.0, 1.0);
+        float splatDelay = dist * 0.3;
+        revealT = clamp((revealTime - splatDelay) / 0.3, 0.0, 1.0);
         revealT = 1.0 - (1.0 - revealT) * (1.0 - revealT);
         corner.offset *= revealT;
     }

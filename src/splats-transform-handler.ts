@@ -138,9 +138,8 @@ class SplatsTransformHandler implements TransformHandler {
             transformPalette.setTransform(newIdx, mat);
         });
 
-        splat.selectionAlpha = 0;
+        splat.selectionAlpha = 0.3;
         splat.scene.outline.enabled = false;
-        splat.scene.underlay.enabled = false;
     }
 
     update(transform: Transform) {
@@ -170,7 +169,6 @@ class SplatsTransformHandler implements TransformHandler {
         await splat.updatePositions();
         splat.selectionAlpha = 1;
         splat.scene.outline.enabled = true;
-        splat.scene.underlay.enabled = true;
 
         // create op for splat transform
         const top = new SplatsTransformOp({

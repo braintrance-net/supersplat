@@ -272,7 +272,8 @@ const main = async () => {
     // handle load params
     const loadList = url.searchParams.getAll('load');
     const filenameList = url.searchParams.getAll('filename');
-    const useDefaultLoad = loadList.length === 0 && !!devConfig.defaultLoadUrl;
+    const skipDefault = url.searchParams.has('skipDefault');
+    const useDefaultLoad = loadList.length === 0 && !skipDefault && !!devConfig.defaultLoadUrl;
     if (useDefaultLoad) {
         loadList.push(devConfig.defaultLoadUrl);
     }
