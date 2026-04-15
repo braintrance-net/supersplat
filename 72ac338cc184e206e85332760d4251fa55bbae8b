@@ -1,0 +1,40 @@
+src/ui/asset-browser.ts
+  4d88b5fcbece7568 2,44-45,364-369,375-379,445-482
+web/next.config.ts
+  f0ab20671f4bb23b 3
+ops/sessions/20260415-220320.json
+  4d88b5fcbece7568 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "72ac338cc184e206e85332760d4251fa55bbae8b",
+  "prompts": {
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 54,
+      "total_deletions": 19,
+      "accepted_lines": 53,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 14,
+      "accepted_lines": 7,
+      "overriden_lines": 0
+    }
+  }
+}
