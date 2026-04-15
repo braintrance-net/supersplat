@@ -1,0 +1,59 @@
+web/src/app/globals.css
+  f0ab20671f4bb23b 14
+src/ui/asset-browser.ts
+  4d88b5fcbece7568 348
+web/next.config.ts
+  f0ab20671f4bb23b 4-15
+ops/sessions/20260415-215625.json
+  6865f8e25fa99d5c 1
+ops/sessions/20260415-215705.json
+  6865f8e25fa99d5c 1
+ops/sessions/20260415-215821.json
+  6865f8e25fa99d5c 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "1aefd68390d5705ed5409ebbe74f81cd41c3df57",
+  "prompts": {
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 2,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "6865f8e25fa99d5c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d9321-75ed-7450-8405-6acfb193fef7",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 13,
+      "total_deletions": 2,
+      "accepted_lines": 19,
+      "overriden_lines": 0
+    }
+  }
+}
