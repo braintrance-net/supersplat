@@ -1,0 +1,25 @@
+src/ui/editor.ts
+  13ed62db597ec930 23
+src/ui/scss/style.scss
+  13ed62db597ec930 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "a6b97239620491934d411427e2fe01a318b39694",
+  "prompts": {
+    "13ed62db597ec930": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78768997-fa5b-41ae-8acf-6a356f59d974",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
