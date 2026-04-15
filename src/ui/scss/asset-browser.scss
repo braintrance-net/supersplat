@@ -10,6 +10,10 @@
     z-index: 10;
     display: flex;
     flex-direction: column;
+
+    &.pcui-hidden {
+        display: none !important;
+    }
 }
 
 .asset-browser-panel {
@@ -129,47 +133,66 @@
 }
 
 .asset-browser-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
+    display: flex;
+    flex-direction: column;
     gap: 8px;
     padding: 0 12px 12px;
     overflow-y: auto;
     flex: 1;
+    min-height: 0;
 }
 
 .asset-browser-card {
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
     background: $bcg-secondary;
     border-radius: 6px;
     overflow: hidden;
     cursor: pointer;
     border: 1px solid transparent;
     transition: border-color 0.15s, box-shadow 0.15s;
+    flex-shrink: 0;
+    min-height: 80px;
 
     &:hover {
         border-color: $clr-hover-border;
         box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
     }
+
+    &.loading {
+        opacity: 0.6;
+        pointer-events: none;
+    }
 }
 
 .asset-browser-thumb {
-    width: 100%;
-    aspect-ratio: 4 / 3;
+    width: 110px;
+    min-width: 110px;
+    height: 80px;
     object-fit: cover;
     display: block;
     background: $bcg-darker;
+    flex-shrink: 0;
 }
 
 .asset-browser-card-info {
-    padding: 6px 8px;
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    overflow: hidden;
+    flex: 1;
 }
 
 .asset-browser-card-name {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: bold;
     color: $text-primary;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    margin-bottom: 2px;
 }
 
 .asset-browser-card-author {
@@ -178,6 +201,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.asset-browser-card-action {
+    font-size: 10px;
+    color: $clr-hover-border;
+    margin-top: 4px;
 }
 
 .asset-browser-load-more {
@@ -197,106 +226,3 @@
     }
 }
 
-// Detail overlay
-.asset-browser-detail {
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.4);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 20;
-}
-
-.asset-browser-detail-inner {
-    background: $bcg-primary;
-    border-radius: 8px;
-    width: 320px;
-    max-height: 90%;
-    overflow-y: auto;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
-    position: relative;
-    padding-bottom: 12px;
-}
-
-.asset-browser-detail-close {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-    background: none;
-    border: none;
-    font-size: 22px;
-    color: white;
-    cursor: pointer;
-    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-    z-index: 1;
-
-    &:hover {
-        opacity: 0.8;
-    }
-}
-
-.asset-browser-detail-img {
-    width: 100%;
-    aspect-ratio: 16 / 10;
-    object-fit: cover;
-    display: block;
-    border-radius: 8px 8px 0 0;
-}
-
-.asset-browser-detail-title {
-    padding: 10px 12px 2px;
-    font-size: 14px;
-    font-weight: bold;
-    color: $text-primary;
-}
-
-.asset-browser-detail-author {
-    padding: 0 12px;
-    font-size: 11px;
-    color: $text-secondary;
-}
-
-.asset-browser-detail-license {
-    padding: 4px 12px 0;
-    font-size: 10px;
-    color: $text-darkest;
-}
-
-.asset-browser-detail-buttons {
-    display: flex;
-    gap: 8px;
-    padding: 12px 12px 0;
-}
-
-.asset-browser-detail-btn {
-    flex: 1;
-    padding: 8px 12px;
-    border: 1px solid $bcg-darkest;
-    border-radius: 4px;
-    background: $bcg-secondary;
-    color: $text-primary;
-    font-size: 11px;
-    font-weight: bold;
-    cursor: pointer;
-    white-space: nowrap;
-
-    &:hover {
-        background: $bcg-darker;
-    }
-
-    &.primary {
-        background: $clr-hilight;
-        color: $clr-active;
-        border-color: $clr-hilight;
-
-        &:hover {
-            opacity: 0.85;
-        }
-
-        &:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-    }
-}

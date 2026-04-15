@@ -1,4 +1,5 @@
-import { Container, Button, Label, TextInput } from '@playcanvas/pcui';
+import { Container } from '@playcanvas/pcui';
+import { AppBase, Asset, Entity } from 'playcanvas';
 
 import { Events } from '../events';
 import { Tooltips } from './tooltips';
@@ -32,6 +33,7 @@ interface SearchResult {
 }
 
 class AssetBrowser extends Container {
+    private events: Events;
     private apiToken: string;
     private nextCursor: string | null = null;
     private currentQuery = '';
@@ -49,6 +51,7 @@ class AssetBrowser extends Container {
 
         super(args);
 
+        this.events = events;
         const devConfig = (window as any).supersplatConfig ?? {};
         this.apiToken = devConfig.sketchfabApiToken || '';
 
@@ -170,45 +173,6 @@ class AssetBrowser extends Container {
             }
         });
 
-        // Handle model download + import
-        events.on('assetBrowser.import', async (model: SketchfabModel) => {
-            if (!this.apiToken) {
-                await events.invoke('showPopup', {
-                    type: 'error',
-                    header: 'API Token Required',
-                    message: 'Set SKETCHFAB_API_TOKEN env var to download models.'
-                });
-                return;
-            }
-
-            events.fire('startSpinner');
-            try {
-                const downloadUrl = await this.getDownloadUrl(model.uid);
-                if (!downloadUrl) {
-                    throw new Error('Model is not downloadable or requires purchase.');
-                }
-
-                // Fetch the glTF/GLB file
-                const response = await fetch(downloadUrl);
-                if (!response.ok) throw new Error(`Download failed: ${response.status}`);
-                const blob = await response.blob();
-
-                // Import into scene as a PLY-like file (the engine handles glTF)
-                const file = new File([blob], `${model.name}.glb`, { type: 'model/gltf-binary' });
-                await events.invoke('import', [{
-                    filename: `${model.name}.glb`,
-                    url: downloadUrl
-                }]);
-            } catch (error: any) {
-                await events.invoke('showPopup', {
-                    type: 'error',
-                    header: 'Download Failed',
-                    message: error.message || String(error)
-                });
-            } finally {
-                events.fire('stopSpinner');
-            }
-        });
     }
 
     private async search(query: string, cursor?: string) {
@@ -289,122 +253,115 @@ class AssetBrowser extends Container {
         author.className = 'asset-browser-card-author';
         author.textContent = model.user?.displayName || '';
 
+        const action = document.createElement('div');
+        action.className = 'asset-browser-card-action';
+        action.textContent = 'Click to place in scene';
+
         info.appendChild(name);
         info.appendChild(author);
+        info.appendChild(action);
 
         card.appendChild(img);
         card.appendChild(info);
 
-        // Click to view on Sketchfab (open in new tab) — since direct import
-        // of glTF into a splat editor has format limitations, we give the user
-        // a preview link + download option
+        // Click to download and place in scene
         card.addEventListener('click', () => {
-            this.showModelDetail(model);
+            this.placeInScene(model, card);
         });
 
         return card;
     }
 
-    private showModelDetail(model: SketchfabModel) {
-        // Show a detail overlay within the panel
-        const existing = this.dom.querySelector('.asset-browser-detail');
-        if (existing) existing.remove();
-
-        const detail = document.createElement('div');
-        detail.className = 'asset-browser-detail';
-
-        const detailInner = document.createElement('div');
-        detailInner.className = 'asset-browser-detail-inner';
-
-        // Close button
-        const closeBtn = document.createElement('button');
-        closeBtn.className = 'asset-browser-detail-close';
-        closeBtn.textContent = '\u00D7';
-        closeBtn.addEventListener('click', () => detail.remove());
-        detailInner.appendChild(closeBtn);
-
-        // Preview image
-        const img = document.createElement('img');
-        img.className = 'asset-browser-detail-img';
-        img.src = this.getThumbnail(model, true);
-        img.alt = model.name;
-        img.draggable = false;
-        detailInner.appendChild(img);
-
-        // Title
-        const title = document.createElement('div');
-        title.className = 'asset-browser-detail-title';
-        title.textContent = model.name;
-        detailInner.appendChild(title);
-
-        // Author
-        const author = document.createElement('div');
-        author.className = 'asset-browser-detail-author';
-        author.textContent = `by ${model.user?.displayName || 'Unknown'}`;
-        detailInner.appendChild(author);
-
-        // License
-        if (model.license) {
-            const license = document.createElement('div');
-            license.className = 'asset-browser-detail-license';
-            license.textContent = model.license.label;
-            detailInner.appendChild(license);
-        }
-
-        // Buttons
-        const btnRow = document.createElement('div');
-        btnRow.className = 'asset-browser-detail-buttons';
-
-        const viewBtn = document.createElement('button');
-        viewBtn.className = 'asset-browser-detail-btn';
-        viewBtn.textContent = 'View on Sketchfab';
-        viewBtn.addEventListener('click', () => {
-            window.open(model.viewerUrl, '_blank');
-        });
-        btnRow.appendChild(viewBtn);
-
-        if (this.apiToken) {
-            const downloadBtn = document.createElement('button');
-            downloadBtn.className = 'asset-browser-detail-btn primary';
-            downloadBtn.textContent = 'Download GLB';
-            downloadBtn.addEventListener('click', async () => {
-                downloadBtn.textContent = 'Downloading...';
-                downloadBtn.disabled = true;
-                try {
-                    const downloadUrl = await this.getDownloadUrl(model.uid);
-                    if (!downloadUrl) {
-                        throw new Error('Not downloadable');
-                    }
-                    // Trigger browser download
-                    const a = document.createElement('a');
-                    a.href = downloadUrl;
-                    a.download = `${model.name}.glb`;
-                    a.target = '_blank';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    downloadBtn.textContent = 'Downloaded!';
-                } catch (err: any) {
-                    downloadBtn.textContent = 'Download Failed';
-                    console.error('Download error:', err);
-                }
-                setTimeout(() => {
-                    downloadBtn.textContent = 'Download GLB';
-                    downloadBtn.disabled = false;
-                }, 2000);
+    private async placeInScene(model: SketchfabModel, card: HTMLElement) {
+        if (!this.apiToken) {
+            await this.events.invoke('showPopup', {
+                type: 'error',
+                header: 'API Token Required',
+                message: 'Set SKETCHFAB_API_TOKEN in .env to download models.'
             });
-            btnRow.appendChild(downloadBtn);
+            return;
         }
 
-        detailInner.appendChild(btnRow);
-        detail.appendChild(detailInner);
+        // Show loading state on the card
+        card.classList.add('loading');
+        const actionEl = card.querySelector('.asset-browser-card-action');
+        if (actionEl) actionEl.textContent = 'Downloading...';
 
-        // Close on backdrop click
-        detail.addEventListener('click', (e) => {
-            if (e.target === detail) detail.remove();
-        });
+        this.events.fire('startSpinner');
 
-        this.dom.appendChild(detail);
+        try {
+            // Get download URL from Sketchfab
+            const downloadUrl = await this.getDownloadUrl(model.uid);
+            if (!downloadUrl) {
+                throw new Error('Model is not downloadable or requires purchase.');
+            }
+
+            // Fetch the GLB binary
+            const response = await fetch(downloadUrl);
+            if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+            const arrayBuffer = await response.arrayBuffer();
+
+            // Load into PlayCanvas as a container asset (glTF/GLB)
+            const app: AppBase = (window as any).scene?.app;
+            if (!app) throw new Error('PlayCanvas app not available.');
+
+            const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
+            const blobUrl = URL.createObjectURL(blob);
+
+            const containerAsset = new Asset(model.name, 'container', { url: blobUrl, filename: `${model.name}.glb` });
+
+            app.assets.add(containerAsset);
+
+            await new Promise<void>((resolve, reject) => {
+                containerAsset.on('load', () => resolve());
+                containerAsset.on('error', (err: string) => reject(new Error(err)));
+                app.assets.load(containerAsset);
+            });
+
+            // Instantiate the model as an entity in the scene
+            const resource = containerAsset.resource as any;
+            let entity: Entity;
+            if (resource.instantiateRenderEntity) {
+                entity = resource.instantiateRenderEntity();
+            } else if (resource.instantiateModelEntity) {
+                entity = resource.instantiateModelEntity();
+            } else {
+                throw new Error('Could not instantiate model from container.');
+            }
+
+            entity.name = model.name;
+
+            // Position at the camera's focal point so it appears where the user is looking
+            const scene = (window as any).scene;
+            if (scene?.camera?.focalPoint) {
+                const fp = scene.camera.focalPoint;
+                entity.setPosition(fp.x, fp.y, fp.z);
+            }
+
+            app.root.addChild(entity);
+
+            URL.revokeObjectURL(blobUrl);
+
+            // Activate the move tool so the user can reposition immediately
+            this.events.fire('tool.move');
+
+            if (actionEl) actionEl.textContent = 'Placed in scene!';
+            setTimeout(() => {
+                if (actionEl) actionEl.textContent = 'Click to place again';
+            }, 2000);
+
+        } catch (error: any) {
+            console.error('Asset placement error:', error);
+            await this.events.invoke('showPopup', {
+                type: 'error',
+                header: 'Placement Failed',
+                message: error.message || String(error)
+            });
+            if (actionEl) actionEl.textContent = 'Click to place in scene';
+        } finally {
+            card.classList.remove('loading');
+            this.events.fire('stopSpinner');
+        }
     }
 
     private getThumbnail(model: SketchfabModel, large = false): string {

@@ -70,9 +70,7 @@
     }
 
     &:hover:not(.active):not(.disabled) {
-        svg {
-            color: $clr-icon-hilight;
-        }
+        background-color: $bg-light-hover !important;
     }
 
     &.active {

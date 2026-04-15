@@ -162,8 +162,6 @@ class BottomToolbar extends Container {
 
         // crop.dom.appendChild(createSvg(cropSvg));
 
-        this.append(assetBrowserBtn);
-        this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(undo);
         this.append(redo);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
@@ -221,6 +219,8 @@ class BottomToolbar extends Container {
         this.append(measure);
         this.append(coordSpace);
         this.append(origin);
+        this.append(new Element({ class: 'bottom-toolbar-separator' }));
+        this.append(assetBrowserBtn);
 
         undo.dom.addEventListener('click', () => events.fire('edit.undo'));
         redo.dom.addEventListener('click', () => events.fire('edit.redo'));

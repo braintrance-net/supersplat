@@ -1,4 +1,7 @@
 import path from 'path';
+import { config as dotenvConfig } from 'dotenv';
+
+dotenvConfig();
 
 import alias from '@rollup/plugin-alias';
 import image from '@rollup/plugin-image';
