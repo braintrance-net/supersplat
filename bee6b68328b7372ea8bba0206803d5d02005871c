@@ -1,0 +1,57 @@
+src/ui/bottom-toolbar.ts
+  4d88b5fcbece7568 233-273,386-387
+src/ui/asset-browser.ts
+  4d88b5fcbece7568 207-214,272-273,291,301,303
+src/voice/voice-commands.ts
+  f09db0d8a0dd1f52 242,251,346-367
+src/shaders/splat-shader.ts
+  f0ab20671f4bb23b 158-159,219-225,227-228
+src/voice/voice-controller.ts
+  f09db0d8a0dd1f52 4-7,18-24,58,71-72,75-79,87-126,128-129,138-153,205
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "bee6b68328b7372ea8bba0206803d5d02005871c",
+  "prompts": {
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 56,
+      "total_deletions": 55,
+      "accepted_lines": 56,
+      "overriden_lines": 0
+    },
+    "f09db0d8a0dd1f52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b5534b-3093-4a8b-b623-24980e4b38a2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 102,
+      "total_deletions": 4,
+      "accepted_lines": 102,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 11,
+      "total_deletions": 18,
+      "accepted_lines": 17,
+      "overriden_lines": 0
+    }
+  }
+}
