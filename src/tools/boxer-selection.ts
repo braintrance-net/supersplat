@@ -413,35 +413,12 @@ class BoxerSelection {
                     }
                 }
 
-                // DEBUG: project the returned OBB center back to 2D with the
-                // SAME intrinsics/extrinsics we sent. Landing near the click
-                // proves the camera frame round-trips correctly.
+                // Place OBB at the click pixel's actual surface depth.
+                // BoxerNet's depth estimation is unreliable — we trust its
+                // 2D detection, rotation, and dimensions, but override depth
+                // using our client-side splat depth buffer.
                 {
-                    const e = extrinsics;
-                    // world-to-OCV-camera = inverse of OCV cam-to-world
-                    // rotation part (columns 0..2 of e), t = column 3
-                    // For rigid: inv = [R^T | -R^T*t]
-                    const r00 = e[0], r10 = e[1], r20 = e[2];
-                    const r01 = e[4], r11 = e[5], r21 = e[6];
-                    const r02 = e[8], r12 = e[9], r22 = e[10];
-                    const tx = e[12], ty = e[13], tz = e[14];
-                    const cx_w = obb.center[0], cy_w = obb.center[1], cz_w = obb.center[2];
-                    // cam-space = R^T * (world - t)
-                    const wx = cx_w - tx, wy = cy_w - ty, wz = cz_w - tz;
-                    const xc = r00 * wx + r10 * wy + r20 * wz;
-                    const yc = r01 * wx + r11 * wy + r21 * wz;
-                    const zc = r02 * wx + r12 * wy + r22 * wz;
-                    const u = intrinsics.fx * xc / zc + intrinsics.cx;
-                    const v_px = intrinsics.fy * yc / zc + intrinsics.cy;
-                    console.log(
-                        `[Boxer] OBB center world=(${cx_w.toFixed(2)},${cy_w.toFixed(2)},${cz_w.toFixed(2)})` +
-                        ` cam_ocv=(${xc.toFixed(2)},${yc.toFixed(2)},${zc.toFixed(2)})` +
-                        ` reprojected=(${u.toFixed(0)},${v_px.toFixed(0)}) click=(${clickX},${clickY})`
-                    );
-
-                    // Snap OBB along the camera ray to the actual splat surface.
-                    // Sample depth using a median kernel to handle 1/3-res depth buffer.
-                    const sampleDepthArea = (imgU: number, imgV: number, radius = 2) => {
+                    const sampleDepthArea = (imgU: number, imgV: number, radius = 3) => {
                         const du = Math.round(imgU * depth.width / w);
                         const dv = Math.round(imgV * depth.height / h);
                         const values: number[] = [];
@@ -459,42 +436,37 @@ class BoxerSelection {
                         values.sort((a, b) => a - b);
                         return values[Math.floor(values.length / 2)];
                     };
-                    let surfaceDepth = sampleDepthArea(u, v_px);
-                    if (!(surfaceDepth > 0)) surfaceDepth = sampleDepthArea(clickX, clickY);
 
-                    if (surfaceDepth > 0 && zc > 0) {
-                        // Cap snap distance to 2x OBB diagonal to reject absurd shifts
-                        const obbDiag = Math.sqrt(
-                            obb.dimensions[0] ** 2 + obb.dimensions[1] ** 2 + obb.dimensions[2] ** 2
+                    const surfaceDepth = sampleDepthArea(clickX, clickY);
+
+                    if (surfaceDepth > 0) {
+                        // Unproject click pixel to world at surface depth.
+                        // OCV camera coords from click pixel:
+                        const cvX = (clickX - intrinsics.cx) / intrinsics.fx * surfaceDepth;
+                        const cvY = (clickY - intrinsics.cy) / intrinsics.fy * surfaceDepth;
+                        const cvZ = surfaceDepth;
+
+                        // OCV camera → world using extrinsics (cam-to-world matrix)
+                        const e = extrinsics;
+                        const newCx = e[0] * cvX + e[4] * cvY + e[8] * cvZ + e[12];
+                        const newCy = e[1] * cvX + e[5] * cvY + e[9] * cvZ + e[13];
+                        const newCz = e[2] * cvX + e[6] * cvY + e[10] * cvZ + e[14];
+
+                        const oldCx = obb.center[0], oldCy = obb.center[1], oldCz = obb.center[2];
+                        const dx = newCx - oldCx;
+                        const dy = newCy - oldCy;
+                        const dz = newCz - oldCz;
+                        obb.center = [newCx, newCy, newCz];
+                        obb.corners = obb.corners.map(c => [c[0] + dx, c[1] + dy, c[2] + dz]);
+
+                        console.log(
+                            `[Boxer] reposition: click depth=${surfaceDepth.toFixed(2)}m` +
+                            ` world=(${newCx.toFixed(2)},${newCy.toFixed(2)},${newCz.toFixed(2)})` +
+                            ` shift=(${dx.toFixed(2)},${dy.toFixed(2)},${dz.toFixed(2)})`
                         );
-                        const maxSnap = Math.max(obbDiag * 2, 1.0);
-                        const shift = surfaceDepth - zc;
-
-                        if (Math.abs(shift) > maxSnap) {
-                            console.warn(
-                                `[Boxer] snap: shift ${shift.toFixed(2)}m exceeds max ${maxSnap.toFixed(2)}m; skipping snap`
-                            );
-                        } else {
-                            // Translate along the camera ray (not the forward axis)
-                            // to preserve the OBB's screen-space position.
-                            const camX = tx, camY = ty, camZ = tz;
-                            const ratio = surfaceDepth / zc;
-                            const newCx = camX + (cx_w - camX) * ratio;
-                            const newCy = camY + (cy_w - camY) * ratio;
-                            const newCz = camZ + (cz_w - camZ) * ratio;
-                            const dx = newCx - cx_w;
-                            const dy = newCy - cy_w;
-                            const dz = newCz - cz_w;
-                            obb.center = [newCx, newCy, newCz];
-                            obb.corners = obb.corners.map(c => [c[0] + dx, c[1] + dy, c[2] + dz]);
-                            console.log(
-                                `[Boxer] snap: obb_depth=${zc.toFixed(2)}m -> splat_depth=${surfaceDepth.toFixed(2)}m` +
-                                ` shift=${shift.toFixed(2)}m ratio=${ratio.toFixed(3)}`
-                            );
-                        }
                     } else {
-                        console.warn('[Boxer] snap: no valid splat depth near OBB; leaving OBB where Boxer placed it.');
-                        events.fire('toast', 'Could not snap box to surface', 'warning');
+                        console.warn('[Boxer] no valid splat depth at click; using BoxerNet position.');
+                        events.fire('toast', 'Could not determine surface depth', 'warning');
                     }
                 }
 

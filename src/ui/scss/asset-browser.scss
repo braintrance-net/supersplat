@@ -1,0 +1,302 @@
+@use 'colors.scss' as *;
+
+#asset-browser {
+    position: absolute;
+    right: 0;
+    top: 0;
+    width: 380px;
+    height: 100%;
+    pointer-events: all;
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+}
+
+.asset-browser-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background-color: $bcg-primary;
+    border-left: 1px solid $bcg-darkest;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+}
+
+.asset-browser-header {
+    padding: 12px;
+    background-color: $bcg-secondary;
+    border-bottom: 1px solid $bcg-darkest;
+    flex-shrink: 0;
+}
+
+.asset-browser-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.asset-browser-title {
+    font-weight: bold;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    color: $text-primary;
+    text-transform: uppercase;
+}
+
+.asset-browser-close {
+    background: none;
+    border: none;
+    font-size: 20px;
+    line-height: 1;
+    color: $text-secondary;
+    cursor: pointer;
+    padding: 0 4px;
+
+    &:hover {
+        color: $text-primary;
+    }
+}
+
+.asset-browser-search-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.asset-browser-search {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid $bcg-darkest;
+    border-radius: 4px;
+    background: $bcg-primary;
+    color: $text-primary;
+    font-size: 12px;
+    outline: none;
+
+    &:focus {
+        border-color: $clr-hover-border;
+    }
+
+    &::placeholder {
+        color: $text-darkest;
+    }
+}
+
+.asset-browser-search-btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 4px;
+    background-color: $clr-hilight;
+    color: $clr-active;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover {
+        opacity: 0.85;
+    }
+}
+
+.asset-browser-categories {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.asset-browser-chip {
+    padding: 3px 10px;
+    border: 1px solid $bcg-darkest;
+    border-radius: 12px;
+    background: $bcg-primary;
+    color: $text-secondary;
+    font-size: 10px;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover {
+        background: $bcg-darker;
+        color: $text-primary;
+    }
+}
+
+.asset-browser-status {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: $text-secondary;
+    flex-shrink: 0;
+}
+
+.asset-browser-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    padding: 0 12px 12px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.asset-browser-card {
+    background: $bcg-secondary;
+    border-radius: 6px;
+    overflow: hidden;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: border-color 0.15s, box-shadow 0.15s;
+
+    &:hover {
+        border-color: $clr-hover-border;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+    }
+}
+
+.asset-browser-thumb {
+    width: 100%;
+    aspect-ratio: 4 / 3;
+    object-fit: cover;
+    display: block;
+    background: $bcg-darker;
+}
+
+.asset-browser-card-info {
+    padding: 6px 8px;
+}
+
+.asset-browser-card-name {
+    font-size: 11px;
+    font-weight: bold;
+    color: $text-primary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.asset-browser-card-author {
+    font-size: 10px;
+    color: $text-secondary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.asset-browser-load-more {
+    display: block;
+    margin: 8px auto 16px;
+    padding: 8px 24px;
+    border: 1px solid $bcg-darkest;
+    border-radius: 4px;
+    background: $bcg-secondary;
+    color: $text-primary;
+    font-size: 12px;
+    cursor: pointer;
+    flex-shrink: 0;
+
+    &:hover {
+        background: $bcg-darker;
+    }
+}
+
+// Detail overlay
+.asset-browser-detail {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+}
+
+.asset-browser-detail-inner {
+    background: $bcg-primary;
+    border-radius: 8px;
+    width: 320px;
+    max-height: 90%;
+    overflow-y: auto;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+    position: relative;
+    padding-bottom: 12px;
+}
+
+.asset-browser-detail-close {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+    background: none;
+    border: none;
+    font-size: 22px;
+    color: white;
+    cursor: pointer;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+    z-index: 1;
+
+    &:hover {
+        opacity: 0.8;
+    }
+}
+
+.asset-browser-detail-img {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    display: block;
+    border-radius: 8px 8px 0 0;
+}
+
+.asset-browser-detail-title {
+    padding: 10px 12px 2px;
+    font-size: 14px;
+    font-weight: bold;
+    color: $text-primary;
+}
+
+.asset-browser-detail-author {
+    padding: 0 12px;
+    font-size: 11px;
+    color: $text-secondary;
+}
+
+.asset-browser-detail-license {
+    padding: 4px 12px 0;
+    font-size: 10px;
+    color: $text-darkest;
+}
+
+.asset-browser-detail-buttons {
+    display: flex;
+    gap: 8px;
+    padding: 12px 12px 0;
+}
+
+.asset-browser-detail-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid $bcg-darkest;
+    border-radius: 4px;
+    background: $bcg-secondary;
+    color: $text-primary;
+    font-size: 11px;
+    font-weight: bold;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover {
+        background: $bcg-darker;
+    }
+
+    &.primary {
+        background: $clr-hilight;
+        color: $clr-active;
+        border-color: $clr-hilight;
+
+        &:hover {
+            opacity: 0.85;
+        }
+
+        &:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    }
+}
