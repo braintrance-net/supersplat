@@ -1,0 +1,36 @@
+src/voice/voice-commands.ts
+  f09db0d8a0dd1f52 1-387
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "2209e1943a9f8f434becac3eda0a8477a77cf039",
+  "prompts": {
+    "f09db0d8a0dd1f52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b5534b-3093-4a8b-b623-24980e4b38a2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 387,
+      "total_deletions": 0,
+      "accepted_lines": 387,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
