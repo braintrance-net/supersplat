@@ -49,6 +49,9 @@ class EditorUI {
         link.href = logo;
         document.head.appendChild(link);
 
+        // toast notifications
+        new ToastManager(events);
+
         // app
         const appContainer = new Container({
             id: 'app-container'

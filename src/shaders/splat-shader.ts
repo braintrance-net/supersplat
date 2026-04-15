@@ -21,6 +21,12 @@ mediump vec4 discardVec = vec4(0.0, 0.0, 2.0, 1.0);
 
 uniform float saturation;
 
+uniform float revealTime;
+uniform vec3 revealCenter;
+uniform float revealRadius;
+uniform int revealActive;
+uniform sampler2D revealMask;
+
 vec3 applySaturation(vec3 color) {
     vec3 grey = vec3(dot(color, vec3(0.299, 0.587, 0.114)));
     return grey + (color - grey) * saturation;
@@ -80,6 +86,16 @@ void main(void) {
     if (!initCorner(source, center, corner)) {
         gl_Position = discardVec;
         return;
+    }
+
+    // reveal animation: scale newly selected splats from center outward
+    float revealT = 1.0;
+    if (revealActive == 1 && texelFetch(revealMask, splat.uv, 0).r > 0.5) {
+        float dist = length(modelCenter - revealCenter) / max(revealRadius, 0.001);
+        float splatDelay = dist * 0.6;
+        revealT = clamp((revealTime - splatDelay) / 0.4, 0.0, 1.0);
+        revealT = 1.0 - (1.0 - revealT) * (1.0 - revealT);
+        corner.offset *= revealT;
     }
 
     gl_Position = center.proj + vec4(corner.offset, 0.0);

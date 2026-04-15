@@ -49,6 +49,7 @@ class Splat extends Element {
     entity: Entity;
     changedCounter = 0;
     stateTexture: Texture;
+    revealTexture: Texture;
     transformTexture: Texture;
     selectionBoundStorage: BoundingBox;
     localBoundStorage: BoundingBox;
@@ -58,6 +59,12 @@ class Splat extends Element {
     transformPalette: TransformPalette;
 
     selectionAlpha = 1;
+
+    revealActive = false;
+    revealTime = 0;
+    revealCenter = new Vec3();
+    revealRadius = 1;
+    revealStartTime = 0;
 
     _name = '';
     _tintClr = new Color(1, 1, 1);
@@ -131,6 +138,7 @@ class Splat extends Element {
 
         // create the state texture
         this.stateTexture = createTexture('splatState', PIXELFORMAT_R8);
+        this.revealTexture = createTexture('revealMask', PIXELFORMAT_R8);
         this.transformTexture = createTexture('splatTransform', PIXELFORMAT_R16U);
 
         // create the transform palette
@@ -145,6 +153,7 @@ class Splat extends Element {
 
             material.setDefine('SH_BANDS', `${Math.min(bands, (instance.resource as GSplatResource).shBands)}`);
             material.setParameter('splatState', this.stateTexture);
+            material.setParameter('revealMask', this.revealTexture);
             material.setParameter('splatTransform', this.transformTexture);
             material.update();
         };
@@ -362,6 +371,22 @@ class Splat extends Element {
         material.setParameter('saturation', this.saturation);
         material.setParameter('transformPalette', this.transformPalette.texture);
 
+        // reveal animation
+        if (this.revealActive) {
+            const elapsed = (Date.now() - this.revealStartTime) / 1000;
+            const duration = 3.0;
+            this.revealTime = elapsed / duration;
+            if (this.revealTime > 1.6) {
+                this.revealActive = false;
+                this.revealTime = 0;
+            }
+            this.scene.forceRender = true;
+        }
+        material.setParameter('revealActive', this.revealActive ? 1 : 0);
+        material.setParameter('revealTime', this.revealTime);
+        material.setParameter('revealCenter', [this.revealCenter.x, this.revealCenter.y, this.revealCenter.z]);
+        material.setParameter('revealRadius', this.revealRadius);
+
         if (this.visible && selected) {
             // render bounding box
             if (events.invoke('camera.bound')) {
@@ -381,6 +406,22 @@ class Splat extends Element {
         }
 
         this.entity.enabled = this.visible;
+    }
+
+    startReveal(center: Vec3, radius: number, indices: Set<number>) {
+        this.revealActive = true;
+        this.revealTime = 0;
+        this.revealStartTime = Date.now();
+        this.revealCenter.copy(center);
+        this.revealRadius = radius;
+
+        // write reveal mask: 255 for newly selected splats, 0 for everything else
+        const data = this.revealTexture.lock();
+        data.fill(0);
+        for (const idx of indices) {
+            if (idx < data.length) data[idx] = 255;
+        }
+        this.revealTexture.unlock();
     }
 
     focalPoint() {

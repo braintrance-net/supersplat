@@ -1,3 +1,5 @@
+import { Vec3 } from 'playcanvas';
+
 import { SelectOp } from '../edit-ops';
 import { Events } from '../events';
 import { Scene } from '../scene';
@@ -227,6 +229,7 @@ class Sam3Selection {
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     console.error(`[SAM3] ${res.status}: ${err.error || res.statusText}`);
+                    events.fire('toast', 'SAM3 backend error', 'error');
                     return;
                 }
                 const data = await res.json() as { mask: string; width: number; height: number };
@@ -240,12 +243,14 @@ class Sam3Selection {
                 );
                 if (candidates.length === 0) {
                     console.log('[SAM3] no splats projected into mask');
+                    events.fire('toast', 'Nothing detected at that point', 'warning');
                     return;
                 }
 
                 const seed = findSeedOnRay(candidates, clickX, clickY);
                 if (seed < 0) {
                     console.warn('[SAM3] no seed');
+                    events.fire('toast', 'Nothing detected at that point', 'warning');
                     return;
                 }
                 const clickDepth = candidates[seed].cz;
@@ -263,9 +268,31 @@ class Sam3Selection {
 
                 const op = new SelectOp(splat, 'add', (i: number) => pickedIdx.has(i));
                 events.fire('edit.add', op);
+
+                // trigger reveal animation from selection centroid
+                const centers = splat.entity.gsplat.instance.sorter.centers;
+                let cx = 0, cy = 0, cz = 0;
+                for (const idx of pickedIdx) {
+                    cx += centers[idx * 3];
+                    cy += centers[idx * 3 + 1];
+                    cz += centers[idx * 3 + 2];
+                }
+                const n = pickedIdx.size;
+                cx /= n; cy /= n; cz /= n;
+
+                let maxDist = 0;
+                for (const idx of pickedIdx) {
+                    const dx = centers[idx * 3] - cx;
+                    const dy = centers[idx * 3 + 1] - cy;
+                    const dz = centers[idx * 3 + 2] - cz;
+                    maxDist = Math.max(maxDist, Math.sqrt(dx * dx + dy * dy + dz * dz));
+                }
+
+                splat.startReveal(new Vec3(cx, cy, cz), maxDist || 1, pickedIdx);
             } catch (err: any) {
                 if (err?.name === 'AbortError') return;
                 console.error('[SAM3] click failed:', err);
+                events.fire('toast', 'SAM3 request failed', 'error');
             } finally {
                 busy = false;
                 abort = null;

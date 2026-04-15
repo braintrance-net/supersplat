@@ -378,6 +378,7 @@ class BoxerSelection {
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     console.error(`[Boxer] ${res.status}: ${err.error || res.statusText}`);
+                    events.fire('toast', 'Boxer backend error', 'error');
                     return;
                 }
 
@@ -459,6 +460,7 @@ class BoxerSelection {
                         );
                     } else {
                         console.warn('[Boxer] snap: no valid splat depth near OBB; leaving OBB where Boxer placed it.');
+                        events.fire('toast', 'Could not snap box to surface', 'warning');
                     }
                 }
 
@@ -468,6 +470,7 @@ class BoxerSelection {
                 events.fire('select.byOBB', 'set', obb);
             } catch (err) {
                 console.error('[Boxer] Request failed:', err);
+                events.fire('toast', 'Boxer request failed', 'error');
             } finally {
                 busy = false;
                 parent.style.cursor = '';
