@@ -3,7 +3,7 @@
 @theme inline {
   --color-background: #ffffff;
   --color-foreground: #171717;
-  --font-sans: var(--font-rajdhani);
+  --font-sans: "nasalization", "nasalization Fallback", sans-serif;
 }
 
 body {

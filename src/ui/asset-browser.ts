@@ -297,9 +297,11 @@ class AssetBrowser extends Container {
             }
 
             // Fetch the GLB binary
+            console.log('[AssetBrowser] Fetching GLB from:', downloadUrl.substring(0, 80) + '...');
             const response = await fetch(downloadUrl);
             if (!response.ok) throw new Error(`Download failed: ${response.status}`);
             const arrayBuffer = await response.arrayBuffer();
+            console.log('[AssetBrowser] Downloaded:', (arrayBuffer.byteLength / 1024 / 1024).toFixed(2), 'MB');
 
             // Load into PlayCanvas as a container asset (glTF/GLB)
             const app: AppBase = (window as any).scene?.app;
@@ -318,14 +320,21 @@ class AssetBrowser extends Container {
                 app.assets.load(containerAsset);
             });
 
+            console.log('[AssetBrowser] Asset loaded. Resource:', containerAsset.resource);
+            console.log('[AssetBrowser] Resource type:', typeof containerAsset.resource);
+            console.log('[AssetBrowser] Resource keys:', containerAsset.resource ? Object.keys(containerAsset.resource) : 'null');
+
             // Instantiate the model as an entity in the scene
             const resource = containerAsset.resource as any;
             let entity: Entity;
             if (resource.instantiateRenderEntity) {
                 entity = resource.instantiateRenderEntity();
+                console.log('[AssetBrowser] Used instantiateRenderEntity');
             } else if (resource.instantiateModelEntity) {
                 entity = resource.instantiateModelEntity();
+                console.log('[AssetBrowser] Used instantiateModelEntity');
             } else {
+                console.error('[AssetBrowser] Resource has no instantiate method. Keys:', Object.getOwnPropertyNames(resource));
                 throw new Error('Could not instantiate model from container.');
             }
 
@@ -336,9 +345,29 @@ class AssetBrowser extends Container {
             if (scene?.camera?.focalPoint) {
                 const fp = scene.camera.focalPoint;
                 entity.setPosition(fp.x, fp.y, fp.z);
+                console.log('[AssetBrowser] Placed at focal point:', fp.x.toFixed(2), fp.y.toFixed(2), fp.z.toFixed(2));
+            } else {
+                console.warn('[AssetBrowser] No focal point available, placed at origin');
             }
 
             app.root.addChild(entity);
+
+            // Debug: log entity hierarchy and bounding info
+            console.log('[AssetBrowser] Entity added to scene:', entity.name);
+            console.log('[AssetBrowser] Entity position:', entity.getPosition().toString());
+            console.log('[AssetBrowser] Entity scale:', entity.getLocalScale().toString());
+            console.log('[AssetBrowser] Entity children:', entity.children.length);
+
+            // Walk children to find render components and log their bounding boxes
+            const logChildren = (e: Entity, depth: number) => {
+                const prefix = '  '.repeat(depth);
+                const components = Object.keys((e as any).c || {});
+                console.log(`[AssetBrowser] ${prefix}${e.name} [components: ${components.join(', ') || 'none'}] pos: ${e.getLocalPosition().toString()} scale: ${e.getLocalScale().toString()}`);
+                for (const child of e.children) {
+                    logChildren(child as Entity, depth + 1);
+                }
+            };
+            logChildren(entity, 0);
 
             URL.revokeObjectURL(blobUrl);
 
