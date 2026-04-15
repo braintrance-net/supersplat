@@ -2,9 +2,11 @@
 
 import Image from "next/image";
 import { useRef } from "react";
+import { useRouter } from "next/navigation";
 
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   const handleUpload = () => {
     fileInputRef.current?.click();
@@ -14,11 +16,11 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    window.open(`http://localhost:3000?url=${encodeURIComponent(url)}`, "_blank");
+    router.push(`/editor?load=${encodeURIComponent(url)}`);
   };
 
   const handleTest = () => {
-    window.open("http://localhost:3000", "_blank");
+    router.push("/editor");
   };
 
   return (
@@ -41,7 +43,7 @@ export default function Home() {
         <img
           src="/images/logo.svg"
           alt="BrainTrance logo"
-          className="mb-6 h-16 w-auto text-white"
+          className="mb-6 h-16 w-auto"
           style={{ filter: "brightness(0) invert(1)" }}
         />
 
