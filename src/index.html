@@ -13,11 +13,18 @@
         <!-- Service worker -->
         <script>
             const sw = navigator.serviceWorker;
-            if (sw) {
+            const isLocalDevHost =
+                window.location.hostname === 'localhost' ||
+                window.location.hostname === '127.0.0.1';
+
+            if (sw && !isLocalDevHost) {
                 sw.register('./sw.js')
                     .then(reg => console.log('service worker registered', reg))
                     .catch(err => console.log('failed to register service worker', err));
             }
+        </script>
+        <script>
+            window.supersplatConfig = __SUPERSPLAT_CONFIG__;
         </script>
     </head>
 

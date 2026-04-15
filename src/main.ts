@@ -1,5 +1,5 @@
 import { WebPCodec } from '@playcanvas/splat-transform';
-import { Color, createGraphicsDevice } from 'playcanvas';
+import { Color, createGraphicsDevice, Vec3 } from 'playcanvas';
 
 import { registerCameraPosesEvents } from './camera-poses';
 import { registerDocEvents } from './doc';
@@ -19,6 +19,7 @@ import { registerTimelineEvents } from './timeline';
 import { BoxSelection } from './tools/box-selection';
 import { BoxerSelection } from './tools/boxer-selection';
 import { BrushSelection } from './tools/brush-selection';
+import { Sam3Selection } from './tools/sam3-selection';
 import { EyedropperSelection } from './tools/eyedropper-selection';
 import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
@@ -44,6 +45,18 @@ declare global {
             setConsumer: (callback: (launchParams: LaunchParams) => void) => void;
         };
         scene: Scene;
+        supersplatConfig?: {
+            defaultLoadUrl?: string;
+            defaultCamera?: {
+                position: { x: number, y: number, z: number };
+                target: { x: number, y: number, z: number };
+                fov?: number;
+                ortho?: boolean;
+            };
+            boxerBackendUrl?: string;
+            sam3BackendUrl?: string;
+            enableDevTools?: boolean;
+        };
     }
 }
 
@@ -73,12 +86,19 @@ const getURLArgs = () => {
     return config;
 };
 
+const getFilenameFromUrl = (value: string) => {
+    const pathname = new URL(value, window.location.href).pathname;
+    const filename = pathname.split('/').pop();
+    return filename || 'default.ply';
+};
+
 const main = async () => {
     // root events object
     const events = new Events();
 
     // url
     const url = new URL(window.location.href);
+    const devConfig = window.supersplatConfig ?? {};
 
     // edit history
     const editHistory = new EditHistory(events);
@@ -103,6 +123,8 @@ const main = async () => {
 
     // editor ui
     const editorUI = new EditorUI(events);
+
+    events.function('config.devToolsEnabled', () => !!devConfig.enableDevTools);
 
     // create the graphics device
     const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
@@ -225,6 +247,7 @@ const main = async () => {
     toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer));
     toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer));
     toolManager.register('boxerSelection', new BoxerSelection(events, scene, editorUI.canvasContainer.dom));
+    toolManager.register('sam3Selection', new Sam3Selection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('move', new MoveTool(events, scene));
     toolManager.register('rotate', new RotateTool(events, scene));
@@ -248,16 +271,42 @@ const main = async () => {
     // handle load params
     const loadList = url.searchParams.getAll('load');
     const filenameList = url.searchParams.getAll('filename');
+    const useDefaultLoad = loadList.length === 0 && !!devConfig.defaultLoadUrl;
+    if (useDefaultLoad) {
+        loadList.push(devConfig.defaultLoadUrl);
+    }
+
     for (const [i, value] of loadList.entries()) {
         const decoded = decodeURIComponent(value);
         const filename = i < filenameList.length ?
             decodeURIComponent(filenameList[i]) :
-            decoded.split('/').pop();
+            getFilenameFromUrl(decoded);
 
         await events.invoke('import', [{
             filename,
             url: decoded
         }]);
+    }
+
+    if (useDefaultLoad) {
+        const defaultCamera = devConfig.defaultCamera;
+        if (defaultCamera) {
+            scene.camera.setPose(
+                new Vec3(defaultCamera.position.x, defaultCamera.position.y, defaultCamera.position.z),
+                new Vec3(defaultCamera.target.x, defaultCamera.target.y, defaultCamera.target.z),
+                0
+            );
+
+            if (typeof defaultCamera.fov === 'number') {
+                events.fire('camera.setFov', defaultCamera.fov);
+            }
+
+            if (typeof defaultCamera.ortho === 'boolean') {
+                scene.camera.ortho = defaultCamera.ortho;
+            }
+        } else {
+            scene.camera.focus();
+        }
     }
 
 

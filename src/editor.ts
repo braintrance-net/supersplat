@@ -712,6 +712,30 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         };
     });
 
+    events.function('camera.debugState', () => {
+        const camera = scene.camera;
+        const position = camera.position;
+        const focalPoint = camera.focalPoint;
+
+        return {
+            position: {
+                x: position.x,
+                y: position.y,
+                z: position.z
+            },
+            target: {
+                x: focalPoint.x,
+                y: focalPoint.y,
+                z: focalPoint.z
+            },
+            fov: camera.fov,
+            azim: camera.azim,
+            elevation: camera.elevation,
+            distance: camera.distance,
+            ortho: camera.ortho
+        };
+    });
+
     events.on('camera.setPose', (pose: { position: Vec3, target: Vec3 }, speed = 1) => {
         scene.camera.setPose(pose.position, pose.target, speed);
     });

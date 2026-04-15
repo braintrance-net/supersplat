@@ -39,6 +39,12 @@ To initialize a local development environment for SuperSplat, ensure you have [N
    npm run develop
    ```
 
+   For the bundled local test asset and dev camera tools in this branch:
+
+   ```sh
+   npm run develop:desk
+   ```
+
 4. Open a web browser tab and make sure network caching is disabled on the network tab and the other application caches are clear:
 
    - On Safari you can use `Cmd+Option+e` or Develop->Empty Caches.
@@ -49,6 +55,31 @@ To initialize a local development environment for SuperSplat, ensure you have [N
 5. Navigate to `http://localhost:3000`
 
 When changes to the source are detected, SuperSplat is rebuilt automatically. Simply refresh your browser to see your changes.
+
+### Dev Defaults
+
+The dev server can inject a default asset and enable dev-only UI actions through environment variables:
+
+```sh
+DEFAULT_SPLAT_URL=/static/dev-assets/desk.ply \
+DEFAULT_CAMERA_POSITION=-18.953201293945312,21.82550811767578,0.7397304773330688 \
+DEFAULT_CAMERA_TARGET=1.1438245773315447,14.384140968322754,3.0117335319519043 \
+DEFAULT_CAMERA_FOV=75 \
+DEFAULT_CAMERA_ORTHO=false \
+BOXER_BACKEND_URL=http://localhost:47823 \
+SAM3_BACKEND_URL=http://localhost:47824 \
+DEV_TOOLS=true \
+npm run develop
+```
+
+When `DEV_TOOLS=true`, a `Help -> Dev: Log Camera` action appears. It logs the current camera state to the browser console and copies the JSON payload to the clipboard.
+
+The Boxer tool reads its backend from `BOXER_BACKEND_URL`. If unset, it falls back to `https://boxer.4dream.app`.
+The SAM tool reads its backend from `SAM3_BACKEND_URL`. If unset, it falls back to `https://sam3.4dream.app`.
+
+Current hosted API docs:
+- Boxer: `https://boxer.4dream.app/docs`
+- SAM3: `https://sam3.4dream.app/docs`
 
 ## Localizing the SuperSplat Editor
 

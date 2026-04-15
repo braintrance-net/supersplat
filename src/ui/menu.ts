@@ -280,6 +280,23 @@ class Menu extends Container {
             icon: 'E261',
             subMenu: videoTutorialsMenuPanel
         }, {
+            text: 'Dev: Log Camera',
+            icon: 'E210',
+            isVisible: () => events.invoke('config.devToolsEnabled'),
+            onSelect: async () => {
+                const cameraState = events.invoke('camera.debugState');
+                const json = JSON.stringify(cameraState, null, 2);
+                console.log('SuperSplat camera state\n', cameraState);
+                await navigator.clipboard.writeText(json).catch(() => {});
+                await events.invoke('showPopup', {
+                    type: 'info',
+                    header: 'Camera state copied',
+                    message: 'The current camera state was logged to the console and copied to the clipboard.'
+                });
+            }
+        }, {
+            // separator
+        }, {
             text: localize('menu.help.user-guide'),
             icon: 'E232',
             onSelect: () => window.open('https://developer.playcanvas.com/user-manual/gaussian-splatting/editing/supersplat/', '_blank')?.focus()

@@ -24,6 +24,49 @@ const ENGINE_DIR = path.resolve(`node_modules/playcanvas/build/playcanvas${BUILD
 const PCUI_DIR = path.resolve('node_modules/@playcanvas/pcui');
 const HREF = process.env.BASE_HREF || '';
 
+const parseVec3 = (value) => {
+    if (!value) {
+        return undefined;
+    }
+
+    const numbers = value.split(',').map(v => parseFloat(v.trim()));
+    if (numbers.length !== 3 || numbers.some(v => !Number.isFinite(v))) {
+        return undefined;
+    }
+
+    return {
+        x: numbers[0],
+        y: numbers[1],
+        z: numbers[2]
+    };
+};
+
+const parseNumber = (value) => {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    const result = parseFloat(value);
+    return Number.isFinite(result) ? result : undefined;
+};
+
+const defaultCameraPosition = parseVec3(process.env.DEFAULT_CAMERA_POSITION);
+const defaultCameraTarget = parseVec3(process.env.DEFAULT_CAMERA_TARGET);
+const defaultCamera = defaultCameraPosition && defaultCameraTarget ? {
+    position: defaultCameraPosition,
+    target: defaultCameraTarget,
+    fov: parseNumber(process.env.DEFAULT_CAMERA_FOV),
+    ortho: process.env.DEFAULT_CAMERA_ORTHO === undefined ? undefined : process.env.DEFAULT_CAMERA_ORTHO === 'true'
+} : undefined;
+
+const SUPERSPLAT_CONFIG = JSON.stringify({
+    defaultLoadUrl: process.env.DEFAULT_SPLAT_URL || '',
+    defaultCamera,
+    boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
+    sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
+    enableDevTools: process.env.DEV_TOOLS === 'true'
+}).replace(/</g, '\\u003c');
+
 const outputHeader = () => {
     const BLUE_OUT = '\x1b[34m';
     const BOLD_OUT = '\x1b[1m';
@@ -52,7 +95,9 @@ const application = {
                 {
                     src: 'src/index.html',
                     transform: (contents, filename) => {
-                        return contents.toString().replace('__BASE_HREF__', HREF);
+                        return contents.toString()
+                        .replace('__BASE_HREF__', HREF)
+                        .replace('__SUPERSPLAT_CONFIG__', SUPERSPLAT_CONFIG);
                     }
                 },
                 { src: 'src/manifest.json' },
@@ -60,6 +105,7 @@ const application = {
                 { src: 'static/icons', dest: 'static' },
                 { src: 'static/lib', dest: 'static' },
                 { src: 'static/locales', dest: 'static' },
+                { src: 'static/dev-assets', dest: 'static' },
                 { src: 'static/env/VertebraeHDRI_v1_512.png', dest: 'static/env' }
             ]
         }),

@@ -13,6 +13,7 @@ import polygonSvg from './svg/select-poly.svg';
 import sphereSvg from './svg/select-sphere.svg';
 import boxSvg from './svg/show-hide-splats.svg';
 import undoSvg from './svg/undo.svg';
+import samIconSvg from './sam-icon.svg';
 import { Tooltips } from './tooltips';
 // import cropSvg from './svg/crop.svg';
 
@@ -87,6 +88,11 @@ class BottomToolbar extends Container {
             text: 'AI'
         });
 
+        const sam3 = new Button({
+            id: 'bottom-toolbar-sam3',
+            class: 'bottom-toolbar-tool'
+        });
+
         const eyedropper = new Button({
             id: 'bottom-toolbar-eyedropper',
             class: 'bottom-toolbar-tool'
@@ -143,6 +149,9 @@ class BottomToolbar extends Container {
         box.dom.appendChild(createSvg(boxSvg));
         lasso.dom.appendChild(createSvg(lassoSvg));
         eyedropper.dom.appendChild(createSvg(eyedropperSvg));
+
+        sam3.dom.appendChild(createSvg(samIconSvg));
+
         // crop.dom.appendChild(createSvg(cropSvg));
 
         this.append(undo);
@@ -158,6 +167,7 @@ class BottomToolbar extends Container {
         this.append(sphere);
         this.append(box);
         this.append(boxer);
+        this.append(sam3);
         // this.append(crop);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(translate);
@@ -179,6 +189,7 @@ class BottomToolbar extends Container {
         sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
         box.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
+        sam3.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
         translate.dom.addEventListener('click', () => events.fire('tool.move'));
         rotate.dom.addEventListener('click', () => events.fire('tool.rotate'));
         scale.dom.addEventListener('click', () => events.fire('tool.scale'));
@@ -202,6 +213,7 @@ class BottomToolbar extends Container {
             sphere.class[toolName === 'sphereSelection' ? 'add' : 'remove']('active');
             box.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
+            sam3.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
             translate.class[toolName === 'move' ? 'add' : 'remove']('active');
             rotate.class[toolName === 'rotate' ? 'add' : 'remove']('active');
             scale.class[toolName === 'scale' ? 'add' : 'remove']('active');

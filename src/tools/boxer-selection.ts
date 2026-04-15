@@ -12,7 +12,9 @@ const OBB_EDGES: [number, number][] = [
 
 const OBB_COLOR = new Color(0, 0.86, 1, 1); // cyan
 
-const BOXER_BACKEND_URL = (import.meta as any).env?.VITE_BOXER_BACKEND_URL || 'http://localhost:47823';
+const getBoxerBackendUrl = () => {
+    return window.supersplatConfig?.boxerBackendUrl || 'https://boxer.4dream.app';
+};
 
 type OBBResult = {
     center: [number, number, number];
@@ -355,7 +357,8 @@ class BoxerSelection {
                     );
                 }
 
-                const res = await fetch(`${BOXER_BACKEND_URL}/api/boxer-detect`, {
+                const boxerBackendUrl = getBoxerBackendUrl();
+                const res = await fetch(`${boxerBackendUrl}/api/boxer-detect`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
