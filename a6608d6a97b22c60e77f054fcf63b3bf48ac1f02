@@ -1,0 +1,25 @@
+src/iframe-api.ts
+  f0ab20671f4bb23b 4,15-19,28-33,51-57
+web/src/app/editor/page.tsx
+  f0ab20671f4bb23b 4,9,15-35,38,42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "a6608d6a97b22c60e77f054fcf63b3bf48ac1f02",
+  "prompts": {
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 48,
+      "total_deletions": 1,
+      "accepted_lines": 54,
+      "overriden_lines": 0
+    }
+  }
+}
