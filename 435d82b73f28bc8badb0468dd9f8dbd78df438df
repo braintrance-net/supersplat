@@ -1,0 +1,23 @@
+src/ui/scss/toast.scss
+  13ed62db597ec930 1-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "435d82b73f28bc8badb0468dd9f8dbd78df438df",
+  "prompts": {
+    "13ed62db597ec930": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "78768997-fa5b-41ae-8acf-6a356f59d974",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 93,
+      "total_deletions": 0,
+      "accepted_lines": 93,
+      "overriden_lines": 0
+    }
+  }
+}
