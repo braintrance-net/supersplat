@@ -1,0 +1,50 @@
+src/editor.ts
+  bc724b49ed480012 715-738
+src/index.html
+  bc724b49ed480012 16-20,26-28
+rollup.config.mjs
+  bc724b49ed480012 27-68,98-100,108
+src/ui/sam-icon.svg
+  b913e4c9dfb14d90 2-6
+package.json
+  bc724b49ed480012 21-24
+src/main.ts
+  bc724b49ed480012 2,22,48-59,89-94,101,127-128,250,274-278,283,291-309
+src/ui/menu.ts
+  bc724b49ed480012 283-298
+README.md
+  bc724b49ed480012 42-47,59-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "5250409024d0cfd925543883ce21981f2319f564",
+  "prompts": {
+    "b913e4c9dfb14d90": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ab4a3750-6869-4b43-86df-9de981cc54ba",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 5,
+      "total_deletions": 5,
+      "accepted_lines": 5,
+      "overriden_lines": 0
+    },
+    "bc724b49ed480012": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d8dda-b0ea-7242-8465-dbf61d9b8363",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 190,
+      "total_deletions": 12,
+      "accepted_lines": 182,
+      "overriden_lines": 0
+    }
+  }
+}
