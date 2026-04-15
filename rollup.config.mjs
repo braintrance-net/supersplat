@@ -68,7 +68,8 @@ const SUPERSPLAT_CONFIG = JSON.stringify({
     boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
     enableDevTools: process.env.DEV_TOOLS === 'true',
-    sketchfabApiToken: process.env.SKETCHFAB_API_TOKEN || ''
+    sketchfabApiToken: process.env.SKETCHFAB_API_TOKEN || '',
+    openaiApiKey: process.env.OPENAI_API_KEY || ''
 }).replace(/</g, '\\u003c');
 
 const outputHeader = () => {

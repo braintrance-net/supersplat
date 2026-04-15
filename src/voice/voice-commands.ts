@@ -208,13 +208,13 @@ class VoiceCommands {
     private async processWithAI(text: string): Promise<void> {
         console.log('[VoiceCommands] Routing to AI...');
 
-        const messages = [
+        const messages: Array<{ role: string; content: string }> = [
             {
-                role: 'system' as const,
+                role: 'system',
                 content: `You are a voice command interpreter for a 3D Gaussian Splat editor. Convert spoken commands into tool calls. For directional commands: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Default movement distance is 0.5 units. You can chain multiple tool calls for complex commands like "move left then up".`
             },
             {
-                role: 'user' as const,
+                role: 'user',
                 content: text
             }
         ];

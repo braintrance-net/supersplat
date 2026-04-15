@@ -233,6 +233,25 @@ class AssetBrowser extends Container {
             this.selectEntity(entity);
         });
 
+        // Voice command: search and place first result
+        events.on('assetBrowser.searchAndPlace', async (query: string) => {
+            // Show the browser
+            if (this.hidden) {
+                this.hidden = false;
+                events.fire('assetBrowser.visible', true);
+            }
+
+            // Run the search
+            this.searchInput.value = query;
+            await this.search(query);
+
+            // Auto-click first result card
+            const firstCard = this.gridContainer.querySelector('.asset-browser-card') as HTMLElement;
+            if (firstCard) {
+                firstCard.click();
+            }
+        });
+
     }
 
     private ensureGizmos() {

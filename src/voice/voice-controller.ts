@@ -1,6 +1,8 @@
 import { Events } from '../events';
 import { VoiceCommands } from './voice-commands';
 
+const REALTIME_MODEL = 'gpt-4o-mini-realtime-preview';
+
 class VoiceController {
     private events: Events;
     private commands: VoiceCommands;
@@ -35,42 +37,16 @@ class VoiceController {
         }
 
         try {
-            // Get microphone
-            this.stream = await navigator.mediaDevices.getUserMedia({
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    channelCount: 1
-                }
-            });
-
-            // Create peer connection
-            this.pc = new RTCPeerConnection();
-
-            // Add audio track
-            this.stream.getAudioTracks().forEach(track => {
-                this.pc!.addTrack(track, this.stream!);
-            });
-
-            // Set up data channel for events
-            this.dc = this.pc.createDataChannel('oai-events');
-            this.dc.onmessage = (event) => this.handleDataChannelMessage(event);
-
-            // Create and set local offer
-            const offer = await this.pc.createOffer();
-            await this.pc.setLocalDescription(offer);
-
-            // Send SDP to OpenAI Realtime API
-            const sdpResponse = await fetch('https://api.openai.com/v1/realtime/sessions', {
+            // Step 1: Create an ephemeral session token
+            const sessionResponse = await fetch('https://api.openai.com/v1/realtime/sessions', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    model: 'gpt-4o-mini-transcribe',
-                    voice: 'ash',
-                    modalities: ['text'],
+                    model: REALTIME_MODEL,
+                    modalities: ['text', 'audio'],
                     input_audio_transcription: {
                         model: 'gpt-4o-mini-transcribe'
                     },
@@ -83,44 +59,60 @@ class VoiceController {
                 })
             });
 
-            if (!sdpResponse.ok) {
-                throw new Error(`Realtime session failed: ${sdpResponse.status}`);
+            if (!sessionResponse.ok) {
+                const errText = await sessionResponse.text();
+                throw new Error(`Session creation failed: ${sessionResponse.status} ${errText}`);
             }
 
-            const sessionData = await sdpResponse.json();
-
-            // Now connect via WebRTC with the ephemeral key
+            const sessionData = await sessionResponse.json();
             const ephemeralKey = sessionData.client_secret?.value;
             if (!ephemeralKey) {
                 throw new Error('No ephemeral key in session response');
             }
 
-            // Create a new peer connection for the actual WebRTC session
-            this.pc.close();
+            console.log('[VoiceController] Got ephemeral key');
+
+            // Step 2: Get microphone
+            this.stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    channelCount: 1
+                }
+            });
+
+            // Step 3: Create WebRTC peer connection
             this.pc = new RTCPeerConnection();
 
+            // Add audio track
             this.stream.getAudioTracks().forEach(track => {
                 this.pc!.addTrack(track, this.stream!);
             });
 
+            // Add a silent audio receiver so we get the remote audio track
+            // (required even if we only care about transcription)
+            this.pc.addTransceiver('audio', { direction: 'sendrecv' });
+
+            // Set up data channel for events
             this.dc = this.pc.createDataChannel('oai-events');
             this.dc.onmessage = (event) => this.handleDataChannelMessage(event);
 
-            const offer2 = await this.pc.createOffer();
-            await this.pc.setLocalDescription(offer2);
+            // Step 4: Create offer and exchange SDP with ephemeral key
+            const offer = await this.pc.createOffer();
+            await this.pc.setLocalDescription(offer);
 
-            // Exchange SDP with the realtime endpoint using ephemeral key
-            const connectResponse = await fetch('https://api.openai.com/v1/realtime?model=gpt-4o-mini-transcribe', {
+            const connectResponse = await fetch(`https://api.openai.com/v1/realtime?model=${REALTIME_MODEL}`, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${ephemeralKey}`,
                     'Content-Type': 'application/sdp'
                 },
-                body: offer2.sdp
+                body: offer.sdp
             });
 
             if (!connectResponse.ok) {
-                throw new Error(`WebRTC connect failed: ${connectResponse.status}`);
+                const errText = await connectResponse.text();
+                throw new Error(`WebRTC connect failed: ${connectResponse.status} ${errText}`);
             }
 
             const answerSdp = await connectResponse.text();

@@ -34,6 +34,7 @@ import { ToolManager } from './tools/tool-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
 import { localizeInit } from './ui/localization';
+import { VoiceController } from './voice/voice-controller';
 
 declare global {
     interface LaunchParams {
@@ -57,6 +58,7 @@ declare global {
             sam3BackendUrl?: string;
             enableDevTools?: boolean;
             sketchfabApiToken?: string;
+            openaiApiKey?: string;
         };
     }
 }
@@ -265,6 +267,9 @@ const main = async () => {
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
+
+    // voice controller
+    new VoiceController(events);
 
     // load async models
     scene.start();

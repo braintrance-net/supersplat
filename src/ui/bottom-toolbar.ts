@@ -11,6 +11,7 @@ import lassoSvg from './svg/select-lasso.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
 import assetBrowserSvg from './svg/asset-browser.svg';
+import micSvg from './svg/microphone.svg';
 import boxerIconSvg from './svg/select-boxer.svg';
 import samIconSvg from './svg/select-sam.svg';
 import sphereSvg from './svg/select-sphere.svg';
@@ -139,6 +140,11 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const mic = new Button({
+            id: 'bottom-toolbar-mic',
+            class: 'bottom-toolbar-tool'
+        });
+
         const origin = new Button({
             id: 'bottom-toolbar-origin',
             class: ['bottom-toolbar-toggle'],
@@ -157,6 +163,7 @@ class BottomToolbar extends Container {
         eyedropper.dom.appendChild(createSvg(eyedropperSvg));
 
         assetBrowserBtn.dom.appendChild(createSvg(assetBrowserSvg));
+        mic.dom.appendChild(createSvg(micSvg));
         boxer.dom.appendChild(createSvg(boxerIconSvg));
         sam3.dom.appendChild(createSvg(samIconSvg));
 
@@ -221,6 +228,12 @@ class BottomToolbar extends Container {
         this.append(origin);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(assetBrowserBtn);
+        this.append(mic);
+
+        // Voice transcript overlay
+        const transcriptEl = document.createElement('div');
+        transcriptEl.id = 'voice-transcript';
+        document.body.appendChild(transcriptEl);
 
         undo.dom.addEventListener('click', () => events.fire('edit.undo'));
         redo.dom.addEventListener('click', () => events.fire('edit.redo'));
@@ -233,6 +246,7 @@ class BottomToolbar extends Container {
         sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
         box.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         assetBrowserBtn.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
+        mic.dom.addEventListener('click', () => events.fire('voice.toggle'));
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
         sam3.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
         translate.dom.addEventListener('click', () => events.fire('tool.move'));
@@ -282,6 +296,20 @@ class BottomToolbar extends Container {
             origin.dom.classList[o === 'boundCenter' ? 'add' : 'remove']('active');
         });
 
+        events.on('voice.active', (active: boolean) => {
+            mic.dom.classList[active ? 'add' : 'remove']('voice-active');
+        });
+
+        let transcriptTimer: ReturnType<typeof setTimeout> | null = null;
+        events.on('voice.transcript', (text: string) => {
+            transcriptEl.textContent = text;
+            transcriptEl.classList.add('visible');
+            if (transcriptTimer) clearTimeout(transcriptTimer);
+            transcriptTimer = setTimeout(() => {
+                transcriptEl.classList.remove('visible');
+            }, 3000);
+        });
+
         // Helper to compose localized tooltip text with shortcut
         const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
         const tooltip = (localeKey: string, shortcutId?: string) => {
@@ -297,6 +325,7 @@ class BottomToolbar extends Container {
 
         // register tooltips
         tooltips.register(assetBrowserBtn, 'Asset Browser');
+        tooltips.register(mic, 'Voice Control');
         tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
         tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rect', 'tool.rectSelection'));

@@ -155,8 +155,11 @@ void main(void) {
             // locked
             color *= lockedClr;
         } else if ((vertexState & 1u) != 0u) {
-            // selected
-            color.xyz = mix(color.xyz, selectedClr.xyz, selectedClr.a);
+            // selected: liquid glass effect
+            // boost brightness slightly for a glassy sheen
+            float luma = dot(color.xyz, vec3(0.299, 0.587, 0.114));
+            vec3 glassClr = color.xyz + vec3(0.08, 0.12, 0.18) * (1.0 - luma);
+            color.xyz = mix(color.xyz, glassClr, selectedClr.a);
         }
     #endif
 }
