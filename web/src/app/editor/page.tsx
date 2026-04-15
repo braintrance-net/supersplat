@@ -1,7 +1,7 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useEffect, useRef } from "react";
+import { Suspense, useCallback, useRef } from "react";
 
 function EditorFrame() {
   const searchParams = useSearchParams();
@@ -12,19 +12,12 @@ function EditorFrame() {
     ? `http://localhost:3000?load=${encodeURIComponent(load)}`
     : "http://localhost:3000";
 
-  // Send pending file to the editor iframe once it loads
   const handleIframeLoad = useCallback(() => {
-    const pendingFile = sessionStorage.getItem("pendingFile");
-    if (!pendingFile) return;
+    const file = (window as any).__pendingFile as File | undefined;
+    if (!file) return;
+    delete (window as any).__pendingFile;
 
-    sessionStorage.removeItem("pendingFile");
-
-    // Reconstruct the file from the stored data
-    const { name, type, data } = JSON.parse(pendingFile);
-    const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
-    const file = new File([bytes], name, { type });
-
-    // Give the editor a moment to initialize
+    // Give the editor time to initialize
     setTimeout(() => {
       iframeRef.current?.contentWindow?.postMessage(
         { type: "supersplat:load-file", file },

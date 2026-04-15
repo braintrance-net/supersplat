@@ -16,14 +16,8 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Store file data in sessionStorage so the editor page can send it via postMessage
-    const buffer = await file.arrayBuffer();
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-    sessionStorage.setItem(
-      "pendingFile",
-      JSON.stringify({ name: file.name, type: file.type, data: base64 })
-    );
-
+    // Store file in a global so the editor page can access it after navigation
+    (window as any).__pendingFile = file;
     router.push("/editor");
   };
 
