@@ -9,9 +9,9 @@ const getSam3BackendUrl = () => {
     return window.supersplatConfig?.sam3BackendUrl || 'https://sam3.4dream.app';
 };
 
-const EPS_FRAC_OF_DEPTH = 0.01;
+const EPS_FRAC_OF_DEPTH = 0.025;
 const EPS_MIN_M = 0.005;
-const EPS_MAX_M = 0.05;
+const EPS_MAX_M = 1.0;
 
 const captureScene = async (events: Events, width: number, height: number): Promise<string> => {
     const rgba: Uint8Array = await events.invoke('render.offscreen', width, height);
@@ -190,8 +190,91 @@ class Sam3Selection {
         let busy = false;
         let abort: AbortController | null = null;
 
+        // Shared logic: given a mask and optional click point, select splats
+        const processMask = (
+            splat: Splat,
+            mask: Uint8Array, maskW: number, maskH: number,
+            imgW: number, imgH: number,
+            intr: { fx: number; fy: number; cx: number; cy: number },
+            clickX?: number, clickY?: number
+        ) => {
+            const t0 = performance.now();
+            const candidates = collectMaskCandidates(splat, scene, mask, maskW, maskH, imgW, imgH, intr);
+            if (candidates.length === 0) {
+                events.fire('toast', 'Nothing detected', 'warning');
+                return;
+            }
+
+            // For text queries we have no click point — use mask centroid
+            let seedX = clickX ?? 0;
+            let seedY = clickY ?? 0;
+            if (clickX === undefined || clickY === undefined) {
+                let mx = 0, my = 0, count = 0;
+                for (let y = 0; y < maskH; y++) {
+                    for (let x = 0; x < maskW; x++) {
+                        if (mask[y * maskW + x] > 0) {
+                            mx += x * imgW / maskW;
+                            my += y * imgH / maskH;
+                            count++;
+                        }
+                    }
+                }
+                if (count > 0) {
+                    seedX = mx / count;
+                    seedY = my / count;
+                }
+            }
+
+            const seed = findSeedOnRay(candidates, seedX, seedY, 20);
+            if (seed < 0) {
+                events.fire('toast', 'Nothing detected', 'warning');
+                return;
+            }
+            const clickDepth = candidates[seed].cz;
+            const eps = Math.min(EPS_MAX_M, Math.max(EPS_MIN_M, clickDepth * EPS_FRAC_OF_DEPTH));
+            const kept = regionGrow(candidates, seed, eps);
+
+            const pickedIdx = new Set<number>();
+            for (const k of kept) pickedIdx.add(candidates[k].idx);
+            if (pickedIdx.size === 0) {
+                events.fire('toast', 'Nothing detected', 'warning');
+                return;
+            }
+
+            console.log(
+                `[SAM3] candidates=${candidates.length} seed=${seed} kept=${kept.size}` +
+                ` (${(performance.now() - t0).toFixed(0)}ms)`
+            );
+
+            const op = new SelectOp(splat, 'add', i => pickedIdx.has(i));
+            events.fire('edit.add', op);
+
+            // trigger reveal animation
+            const centers = splat.entity.gsplat.instance.sorter.centers;
+            let cx = 0, cy = 0, cz = 0;
+            for (const idx of pickedIdx) {
+                cx += centers[idx * 3];
+                cy += centers[idx * 3 + 1];
+                cz += centers[idx * 3 + 2];
+            }
+            const n = pickedIdx.size;
+            cx /= n; cy /= n; cz /= n;
+            let maxDist = 0;
+            for (const idx of pickedIdx) {
+                const dx = centers[idx * 3] - cx;
+                const dy = centers[idx * 3 + 1] - cy;
+                const dz = centers[idx * 3 + 2] - cz;
+                maxDist = Math.max(maxDist, Math.sqrt(dx * dx + dy * dy + dz * dz));
+            }
+            splat.startReveal(new Vec3(cx, cy, cz), maxDist || 1, pickedIdx);
+        };
+
         const pointerHandler = async (e: PointerEvent) => {
-            if (!this.active || busy) return;
+            if (!this.active) return;
+            if (busy) {
+                events.fire('toast', 'Still processing previous click', 'info');
+                return;
+            }
             if (e.pointerType === 'mouse' && e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
@@ -199,6 +282,7 @@ class Sam3Selection {
             const splat = events.invoke('selection') as Splat;
             if (!splat) {
                 console.warn('[SAM3] No splat selected');
+                events.fire('toast', 'No splat loaded', 'warning');
                 return;
             }
 
@@ -237,58 +321,7 @@ class Sam3Selection {
                 const mask = await maskPngToArray(data.mask, data.width, data.height);
                 if (!this.active) return;
 
-                const t0 = performance.now();
-                const candidates = collectMaskCandidates(
-                    splat, scene, mask, data.width, data.height, w, h, intr
-                );
-                if (candidates.length === 0) {
-                    console.log('[SAM3] no splats projected into mask');
-                    events.fire('toast', 'Nothing detected at that point', 'warning');
-                    return;
-                }
-
-                const seed = findSeedOnRay(candidates, clickX, clickY);
-                if (seed < 0) {
-                    console.warn('[SAM3] no seed');
-                    events.fire('toast', 'Nothing detected at that point', 'warning');
-                    return;
-                }
-                const clickDepth = candidates[seed].cz;
-                const eps = Math.min(EPS_MAX_M, Math.max(EPS_MIN_M, clickDepth * EPS_FRAC_OF_DEPTH));
-                const kept = regionGrow(candidates, seed, eps);
-
-                const pickedIdx = new Set<number>();
-                for (const k of kept) pickedIdx.add(candidates[k].idx);
-
-                console.log(
-                    `[SAM3] candidates=${candidates.length} click_depth=${clickDepth.toFixed(2)}` +
-                    ` eps=${eps.toFixed(3)} seed=${seed} kept=${kept.size}` +
-                    ` (${(performance.now() - t0).toFixed(0)}ms)`
-                );
-
-                const op = new SelectOp(splat, 'add', (i: number) => pickedIdx.has(i));
-                events.fire('edit.add', op);
-
-                // trigger reveal animation from selection centroid
-                const centers = splat.entity.gsplat.instance.sorter.centers;
-                let cx = 0, cy = 0, cz = 0;
-                for (const idx of pickedIdx) {
-                    cx += centers[idx * 3];
-                    cy += centers[idx * 3 + 1];
-                    cz += centers[idx * 3 + 2];
-                }
-                const n = pickedIdx.size;
-                cx /= n; cy /= n; cz /= n;
-
-                let maxDist = 0;
-                for (const idx of pickedIdx) {
-                    const dx = centers[idx * 3] - cx;
-                    const dy = centers[idx * 3 + 1] - cy;
-                    const dz = centers[idx * 3 + 2] - cz;
-                    maxDist = Math.max(maxDist, Math.sqrt(dx * dx + dy * dy + dz * dz));
-                }
-
-                splat.startReveal(new Vec3(cx, cy, cz), maxDist || 1, pickedIdx);
+                processMask(splat, mask, data.width, data.height, w, h, intr, clickX, clickY);
             } catch (err: any) {
                 if (err?.name === 'AbortError') return;
                 console.error('[SAM3] click failed:', err);
@@ -300,16 +333,70 @@ class Sam3Selection {
             }
         };
 
+        const textHandler = async (text: string) => {
+            if (!this.active || busy) return;
+
+            const splat = events.invoke('selection') as Splat;
+            if (!splat) {
+                events.fire('toast', 'No splat loaded', 'warning');
+                return;
+            }
+
+            busy = true;
+            abort = new AbortController();
+            parent.style.cursor = 'wait';
+            try {
+                const w = canvas.clientWidth;
+                const h = canvas.clientHeight;
+                const cam = scene.camera.camera;
+                const intr = extractIntrinsics(cam, w, h);
+                const img = await captureScene(events, w, h);
+                if (!this.active) return;
+
+                console.log(`[SAM3] text="${text}"`);
+                const sam3BackendUrl = getSam3BackendUrl();
+                const res = await fetch(`${sam3BackendUrl}/api/sam3/segment-text`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ image: img, text }),
+                    signal: abort.signal
+                });
+                if (!this.active) return;
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    console.error(`[SAM3] text ${res.status}: ${err.error || res.statusText}`);
+                    events.fire('toast', 'SAM3 backend error', 'error');
+                    return;
+                }
+                const data = await res.json() as { mask: string; width: number; height: number };
+                if (!this.active) return;
+                const mask = await maskPngToArray(data.mask, data.width, data.height);
+                if (!this.active) return;
+
+                processMask(splat, mask, data.width, data.height, w, h, intr);
+            } catch (err: any) {
+                if (err?.name === 'AbortError') return;
+                console.error('[SAM3] text query failed:', err);
+                events.fire('toast', 'SAM3 text query failed', 'error');
+            } finally {
+                busy = false;
+                abort = null;
+                if (this.active) parent.style.cursor = 'crosshair';
+            }
+        };
+
         this.activate = () => {
             this.active = true;
             parent.style.cursor = 'crosshair';
             parent.addEventListener('pointerdown', pointerHandler, true);
+            events.on('ai.textQuery', textHandler);
         };
 
         this.deactivate = () => {
             this.active = false;
             parent.style.cursor = '';
             parent.removeEventListener('pointerdown', pointerHandler, true);
+            events.off('ai.textQuery', textHandler);
             abort?.abort();
             abort = null;
             busy = false;

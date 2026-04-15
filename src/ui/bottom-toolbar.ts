@@ -10,6 +10,7 @@ import floodSvg from './svg/select-flood.svg';
 import lassoSvg from './svg/select-lasso.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
+import boxerIconSvg from './svg/select-boxer.svg';
 import samIconSvg from './svg/select-sam.svg';
 import sphereSvg from './svg/select-sphere.svg';
 import boxSvg from './svg/show-hide-splats.svg';
@@ -84,8 +85,7 @@ class BottomToolbar extends Container {
 
         const boxer = new Button({
             id: 'bottom-toolbar-boxer',
-            class: 'bottom-toolbar-tool',
-            text: 'AI'
+            class: 'bottom-toolbar-tool'
         });
 
         const sam3 = new Button({
@@ -150,6 +150,7 @@ class BottomToolbar extends Container {
         lasso.dom.appendChild(createSvg(lassoSvg));
         eyedropper.dom.appendChild(createSvg(eyedropperSvg));
 
+        boxer.dom.appendChild(createSvg(boxerIconSvg));
         sam3.dom.appendChild(createSvg(samIconSvg));
 
         // crop.dom.appendChild(createSvg(cropSvg));
@@ -168,6 +169,40 @@ class BottomToolbar extends Container {
         this.append(box);
         this.append(boxer);
         this.append(sam3);
+
+        // AI text prompt input — visible when Boxer or SAM3 is active
+        const aiInputWrap = document.createElement('div');
+        aiInputWrap.id = 'ai-prompt-wrap';
+        aiInputWrap.style.display = 'none';
+
+        const aiInput = document.createElement('input');
+        aiInput.id = 'ai-prompt-input';
+        aiInput.type = 'text';
+        aiInput.placeholder = 'Describe what to select…';
+        aiInput.spellcheck = false;
+
+        // Prevent all pointer events from reaching the canvas
+        aiInputWrap.addEventListener('pointerdown', e => e.stopPropagation());
+        aiInputWrap.addEventListener('pointerup', e => e.stopPropagation());
+        aiInputWrap.addEventListener('click', e => e.stopPropagation());
+
+        // Prevent keyboard shortcuts while typing
+        aiInput.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && aiInput.value.trim()) {
+                events.fire('ai.textQuery', aiInput.value.trim());
+                aiInput.value = '';
+            }
+            if (e.key === 'Escape') {
+                aiInput.blur();
+            }
+        });
+        aiInput.addEventListener('keyup', e => e.stopPropagation());
+        aiInput.addEventListener('keypress', e => e.stopPropagation());
+
+        aiInputWrap.appendChild(aiInput);
+        this.dom.appendChild(aiInputWrap);
+
         // this.append(crop);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(translate);
@@ -219,6 +254,10 @@ class BottomToolbar extends Container {
             scale.class[toolName === 'scale' ? 'add' : 'remove']('active');
             measure.class[toolName === 'measure' ? 'add' : 'remove']('active');
             eyedropper.class[toolName === 'eyedropperSelection' ? 'add' : 'remove']('active');
+
+            const isAiTool = toolName === 'boxerSelection' || toolName === 'sam3Selection';
+            aiInputWrap.style.display = isAiTool ? 'flex' : 'none';
+            if (!isAiTool) aiInput.value = '';
         });
 
         events.on('tool.coordSpace', (space: 'local' | 'world') => {

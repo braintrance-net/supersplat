@@ -300,7 +300,11 @@ class BoxerSelection {
         });
 
         const handler = async (e: PointerEvent) => {
-            if (!this.active || busy) return;
+            if (!this.active) return;
+            if (busy) {
+                events.fire('toast', 'Still processing previous click', 'info');
+                return;
+            }
             if (e.pointerType === 'mouse' && e.button !== 0) return;
             e.preventDefault();
             e.stopPropagation();
@@ -308,6 +312,7 @@ class BoxerSelection {
             const splat = events.invoke('selection') as Splat;
             if (!splat) {
                 console.warn('[Boxer] No splat selected');
+                events.fire('toast', 'No splat loaded', 'warning');
                 return;
             }
 
@@ -434,30 +439,58 @@ class BoxerSelection {
                     );
 
                     // Snap OBB along the camera ray to the actual splat surface.
-                    // Sample depth at the OBB's reprojected pixel; if that pixel is
-                    // background (depth=0), fall back to the click pixel.
-                    const sampleDepthPx = (imgU: number, imgV: number) => {
+                    // Sample depth using a median kernel to handle 1/3-res depth buffer.
+                    const sampleDepthArea = (imgU: number, imgV: number, radius = 2) => {
                         const du = Math.round(imgU * depth.width / w);
                         const dv = Math.round(imgV * depth.height / h);
-                        if (du < 0 || du >= depth.width || dv < 0 || dv >= depth.height) return 0;
-                        return depth.data[dv * depth.width + du];
+                        const values: number[] = [];
+                        for (let dy = -radius; dy <= radius; dy++) {
+                            for (let dx = -radius; dx <= radius; dx++) {
+                                const px = du + dx;
+                                const py = dv + dy;
+                                if (px >= 0 && px < depth.width && py >= 0 && py < depth.height) {
+                                    const d = depth.data[py * depth.width + px];
+                                    if (d > 0) values.push(d);
+                                }
+                            }
+                        }
+                        if (values.length === 0) return 0;
+                        values.sort((a, b) => a - b);
+                        return values[Math.floor(values.length / 2)];
                     };
-                    let surfaceDepth = sampleDepthPx(u, v_px);
-                    if (!(surfaceDepth > 0)) surfaceDepth = sampleDepthPx(clickX, clickY);
+                    let surfaceDepth = sampleDepthArea(u, v_px);
+                    if (!(surfaceDepth > 0)) surfaceDepth = sampleDepthArea(clickX, clickY);
 
                     if (surfaceDepth > 0 && zc > 0) {
-                        const shift = surfaceDepth - zc;
-                        // OpenCV camera forward in world = column 2 of extrinsics rotation.
-                        const fwdX = extrinsics[8];
-                        const fwdY = extrinsics[9];
-                        const fwdZ = extrinsics[10];
-                        const dx = shift * fwdX, dy = shift * fwdY, dz = shift * fwdZ;
-                        obb.center = [cx_w + dx, cy_w + dy, cz_w + dz];
-                        obb.corners = obb.corners.map(c => [c[0] + dx, c[1] + dy, c[2] + dz]);
-                        console.log(
-                            `[Boxer] snap: obb_depth=${zc.toFixed(2)}m -> splat_depth=${surfaceDepth.toFixed(2)}m` +
-                            ` shift=${shift.toFixed(2)}m along forward=(${fwdX.toFixed(2)},${fwdY.toFixed(2)},${fwdZ.toFixed(2)})`
+                        // Cap snap distance to 2x OBB diagonal to reject absurd shifts
+                        const obbDiag = Math.sqrt(
+                            obb.dimensions[0] ** 2 + obb.dimensions[1] ** 2 + obb.dimensions[2] ** 2
                         );
+                        const maxSnap = Math.max(obbDiag * 2, 1.0);
+                        const shift = surfaceDepth - zc;
+
+                        if (Math.abs(shift) > maxSnap) {
+                            console.warn(
+                                `[Boxer] snap: shift ${shift.toFixed(2)}m exceeds max ${maxSnap.toFixed(2)}m; skipping snap`
+                            );
+                        } else {
+                            // Translate along the camera ray (not the forward axis)
+                            // to preserve the OBB's screen-space position.
+                            const camX = tx, camY = ty, camZ = tz;
+                            const ratio = surfaceDepth / zc;
+                            const newCx = camX + (cx_w - camX) * ratio;
+                            const newCy = camY + (cy_w - camY) * ratio;
+                            const newCz = camZ + (cz_w - camZ) * ratio;
+                            const dx = newCx - cx_w;
+                            const dy = newCy - cy_w;
+                            const dz = newCz - cz_w;
+                            obb.center = [newCx, newCy, newCz];
+                            obb.corners = obb.corners.map(c => [c[0] + dx, c[1] + dy, c[2] + dz]);
+                            console.log(
+                                `[Boxer] snap: obb_depth=${zc.toFixed(2)}m -> splat_depth=${surfaceDepth.toFixed(2)}m` +
+                                ` shift=${shift.toFixed(2)}m ratio=${ratio.toFixed(3)}`
+                            );
+                        }
                     } else {
                         console.warn('[Boxer] snap: no valid splat depth near OBB; leaving OBB where Boxer placed it.');
                         events.fire('toast', 'Could not snap box to surface', 'warning');
@@ -477,16 +510,84 @@ class BoxerSelection {
             }
         };
 
+        const textHandler = async (text: string) => {
+            if (!this.active || busy) return;
+
+            const splat = events.invoke('selection') as Splat;
+            if (!splat) {
+                events.fire('toast', 'No splat loaded', 'warning');
+                return;
+            }
+
+            busy = true;
+            parent.style.cursor = 'wait';
+
+            try {
+                const cam = scene.camera.camera;
+                const w = canvas.clientWidth;
+                const h = canvas.clientHeight;
+                const b64 = await captureScene(events, w, h);
+                const intrinsics = extractIntrinsics(cam, w, h);
+                const extrinsics = extractExtrinsics(cam);
+
+                const depth = renderSplatDepth(splat, scene, w, h, intrinsics);
+                const depthB64 = float32ToBase64(depth.data);
+
+                console.log(`[Boxer] text="${text}"`);
+                const boxerBackendUrl = getBoxerBackendUrl();
+                const res = await fetch(`${boxerBackendUrl}/api/boxer-detect`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image: b64,
+                        text,
+                        intrinsics,
+                        extrinsics,
+                        gravity: [0, -1, 0],
+                        depth: depthB64,
+                        depth_width: depth.width,
+                        depth_height: depth.height
+                    })
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    console.error(`[Boxer] text ${res.status}: ${err.error || res.statusText}`);
+                    events.fire('toast', 'Boxer backend error', 'error');
+                    return;
+                }
+
+                const obb = await res.json() as OBBResult;
+                console.log(`[Boxer] text: ${obb.label} (${(obb.confidence * 100).toFixed(0)}%) dims=${obb.dimensions.map(d => d.toFixed(2)).join(',')}`);
+
+                if (obb.bb2d) {
+                    show2DBox(obb.bb2d, `${obb.label} ${(obb.confidence * 100).toFixed(0)}%`);
+                }
+
+                currentCorners = obb.corners.map(c => new Vec3(c[0], c[1], c[2]));
+                scene.forceRender = true;
+                events.fire('select.byOBB', 'set', obb);
+            } catch (err) {
+                console.error('[Boxer] Text request failed:', err);
+                events.fire('toast', 'Boxer text request failed', 'error');
+            } finally {
+                busy = false;
+                parent.style.cursor = '';
+            }
+        };
+
         this.activate = () => {
             this.active = true;
             parent.style.cursor = 'crosshair';
             parent.addEventListener('pointerdown', handler, true);
+            events.on('ai.textQuery', textHandler);
         };
 
         this.deactivate = () => {
             this.active = false;
             parent.style.cursor = '';
             parent.removeEventListener('pointerdown', handler, true);
+            events.off('ai.textQuery', textHandler);
             currentCorners = null;
             hide2DBox();
             scene.forceRender = true;

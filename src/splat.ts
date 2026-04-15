@@ -374,7 +374,7 @@ class Splat extends Element {
         // reveal animation
         if (this.revealActive) {
             const elapsed = (Date.now() - this.revealStartTime) / 1000;
-            const duration = 3.0;
+            const duration = 1.0;
             this.revealTime = elapsed / duration;
             if (this.revealTime > 1.6) {
                 this.revealActive = false;
