@@ -55,6 +55,13 @@ class SplatsTransformHandler implements TransformHandler {
             }
         });
 
+        // re-place pivot when switching between transform tools (floor for move/rotate, center for scale)
+        events.on('tool.activated', (toolName: string) => {
+            if (this.splat && ['move', 'rotate', 'scale'].includes(toolName)) {
+                this.placePivot();
+            }
+        });
+
         events.on('camera.focalPointPicked', (details: { splat: Splat, position: Vec3 }) => {
             if (this.splat && ['move', 'rotate', 'scale'].includes(this.events.invoke('tool.active'))) {
                 const pivot = events.invoke('pivot') as Pivot;
@@ -67,8 +74,9 @@ class SplatsTransformHandler implements TransformHandler {
     }
 
     placePivot() {
-        const origin = this.events.invoke('pivot.origin');
-        this.splat.getPivot(origin === 'center' ? 'center' : 'boundFloor', true, transform);
+        const activeTool = this.events.invoke('tool.active');
+        const mode = activeTool === 'scale' ? 'boundCenter' : 'boundFloor';
+        this.splat.getPivot(mode, true, transform);
         this.events.invoke('pivot').place(transform);
     }
 
