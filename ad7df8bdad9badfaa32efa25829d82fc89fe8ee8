@@ -1,0 +1,38 @@
+src/ui/asset-browser.ts
+  4d88b5fcbece7568 300,304,323-326,332,335,337,348-350,355-370
+web/src/app/globals.css
+  f0ab20671f4bb23b 6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "ad7df8bdad9badfaa32efa25829d82fc89fe8ee8",
+  "prompts": {
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 29,
+      "total_deletions": 0,
+      "accepted_lines": 29,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 7,
+      "overriden_lines": 0
+    }
+  }
+}
