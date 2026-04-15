@@ -301,6 +301,7 @@ class BoxerSelection {
 
         const handler = async (e: PointerEvent) => {
             if (!this.active) return;
+            if (e.target !== canvas) return;
             if (busy) {
                 events.fire('toast', 'Still processing previous click', 'info');
                 return;
