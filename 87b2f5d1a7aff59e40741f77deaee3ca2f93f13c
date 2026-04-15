@@ -1,0 +1,23 @@
+web/src/app/page.tsx
+  f0ab20671f4bb23b 25-36,38-40,43,47,50,56,69
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "87b2f5d1a7aff59e40741f77deaee3ca2f93f13c",
+  "prompts": {
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 20,
+      "total_deletions": 21,
+      "accepted_lines": 26,
+      "overriden_lines": 0
+    }
+  }
+}
