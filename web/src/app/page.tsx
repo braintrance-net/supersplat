@@ -1,6 +1,27 @@
+"use client";
+
 import Image from "next/image";
+import { useRef } from "react";
 
 export default function Home() {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // TODO: pass file to the editor
+    const url = URL.createObjectURL(file);
+    window.open(`http://localhost:3000?url=${encodeURIComponent(url)}`, "_blank");
+  };
+
+  const handleTest = () => {
+    window.open("http://localhost:3000", "_blank");
+  };
+
   return (
     <div>
       {/* Hero — full-screen polaroid background */}
@@ -12,7 +33,6 @@ export default function Home() {
           className="object-cover"
           priority
         />
-        {/* Subtle dark overlay so the text section below feels like a reveal */}
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-white" />
       </section>
 
@@ -22,8 +42,31 @@ export default function Home() {
           BrainTrance
         </h1>
         <p className="mt-6 max-w-md text-center text-lg text-neutral-500 sm:text-xl">
-          Life moves fast. Stop and enjoy it.
+          Freeze the feeling.
         </p>
+
+        <div className="mt-12 flex flex-col items-center gap-4 sm:flex-row">
+          <button
+            onClick={handleUpload}
+            className="flex h-12 items-center justify-center rounded-full bg-black px-8 text-base font-medium text-white transition-colors hover:bg-neutral-800"
+          >
+            Upload
+          </button>
+          <button
+            onClick={handleTest}
+            className="flex h-12 items-center justify-center rounded-full border border-neutral-300 px-8 text-base font-medium text-black transition-colors hover:bg-neutral-100"
+          >
+            Try Demo
+          </button>
+        </div>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".ply,.splat,.spz"
+          onChange={handleFileChange}
+          className="hidden"
+        />
       </section>
     </div>
   );
