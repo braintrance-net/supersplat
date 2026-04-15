@@ -206,8 +206,12 @@ class AssetBrowser extends Container {
         this.entityActionBar.appendChild(deselectBtn);
         this.entityActionBar.appendChild(deleteBtn);
 
-        // Append to body so it floats above everything
-        document.body.appendChild(this.entityActionBar);
+        // Defer append until we're in the DOM tree
+        requestAnimationFrame(() => {
+            // Append to the canvas container (our parent) so it's in the right stacking context
+            const parent = this.dom.parentElement || document.body;
+            parent.appendChild(this.entityActionBar);
+        });
 
         // Events
         events.on('assetBrowser.toggleVisible', () => {
@@ -281,6 +285,13 @@ class AssetBrowser extends Container {
             gizmo.on('transform:move', () => {
                 scene.forceRender = true;
             });
+
+            // After transform ends, drop to surface (gravity)
+            gizmo.on('transform:end', () => {
+                if (this.selectedEntity) {
+                    this.dropToSurface(this.selectedEntity);
+                }
+            });
         }
     }
 
@@ -305,7 +316,7 @@ class AssetBrowser extends Container {
         }
     }
 
-    private async deselectEntity() {
+    private deselectEntity() {
         if (!this.selectedEntity) return;
 
         const entity = this.selectedEntity;
@@ -317,9 +328,6 @@ class AssetBrowser extends Container {
         if (this.entityActionBar) {
             this.entityActionBar.style.display = 'none';
         }
-
-        // Gravity drop — find the surface below and snap to it
-        await this.dropToSurface(entity);
     }
 
     private deleteSelectedEntity() {

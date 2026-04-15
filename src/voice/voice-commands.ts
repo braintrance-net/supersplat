@@ -3,8 +3,6 @@ import { Quat, Vec3 } from 'playcanvas';
 import { Events } from '../events';
 import { Pivot } from '../pivot';
 
-type ToolCallResult = { name: string; result: string };
-
 // Deterministic command patterns — fast, no API call needed
 const DETERMINISTIC_COMMANDS: Array<{ patterns: RegExp[]; action: (events: Events) => void; label: string }> = [
     {
@@ -59,89 +57,115 @@ const DETERMINISTIC_COMMANDS: Array<{ patterns: RegExp[]; action: (events: Event
     }
 ];
 
-// Tool definitions for OpenAI Responses API
+// Tool definitions for OpenAI Chat Completions API
 const TOOL_DEFINITIONS = [
     {
         type: 'function' as const,
-        name: 'translate',
-        description: 'Move the current selection by an offset in 3D space. Units are scene units (roughly meters).',
-        parameters: {
-            type: 'object',
-            properties: {
-                x: { type: 'number', description: 'Offset along X axis (positive = right)' },
-                y: { type: 'number', description: 'Offset along Y axis (positive = up)' },
-                z: { type: 'number', description: 'Offset along Z axis (positive = forward/towards camera)' }
-            },
-            required: ['x', 'y', 'z']
+        function: {
+            name: 'translate',
+            description: 'Move the current selection by an offset in 3D space. Units are scene units (roughly meters).',
+            parameters: {
+                type: 'object',
+                properties: {
+                    x: { type: 'number', description: 'Offset along X axis (positive = right)' },
+                    y: { type: 'number', description: 'Offset along Y axis (positive = up)' },
+                    z: { type: 'number', description: 'Offset along Z axis (positive = forward/towards camera)' }
+                },
+                required: ['x', 'y', 'z']
+            }
         }
     },
     {
         type: 'function' as const,
-        name: 'rotate',
-        description: 'Rotate the current selection around an axis.',
-        parameters: {
-            type: 'object',
-            properties: {
-                axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'Axis to rotate around' },
-                degrees: { type: 'number', description: 'Rotation in degrees' }
-            },
-            required: ['axis', 'degrees']
+        function: {
+            name: 'rotate',
+            description: 'Rotate the current selection around an axis.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'Axis to rotate around' },
+                    degrees: { type: 'number', description: 'Rotation in degrees' }
+                },
+                required: ['axis', 'degrees']
+            }
         }
     },
     {
         type: 'function' as const,
-        name: 'scale',
-        description: 'Scale the current selection by a factor.',
-        parameters: {
-            type: 'object',
-            properties: {
-                factor: { type: 'number', description: 'Scale multiplier (e.g., 2 = double size, 0.5 = half)' }
-            },
-            required: ['factor']
+        function: {
+            name: 'scale',
+            description: 'Scale the current selection by a factor.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    factor: { type: 'number', description: 'Scale multiplier (e.g., 2 = double size, 0.5 = half)' }
+                },
+                required: ['factor']
+            }
         }
     },
     {
         type: 'function' as const,
-        name: 'activate_tool',
-        description: 'Switch to a specific editor tool.',
-        parameters: {
-            type: 'object',
-            properties: {
-                tool: {
-                    type: 'string',
-                    enum: ['rect', 'brush', 'polygon', 'lasso', 'flood', 'sphere', 'box', 'boxer', 'sam', 'eyedropper', 'move', 'rotate', 'scale', 'measure'],
-                    description: 'Tool to activate'
-                }
-            },
-            required: ['tool']
+        function: {
+            name: 'activate_tool',
+            description: 'Switch to a specific editor tool.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    tool: {
+                        type: 'string',
+                        enum: ['rect', 'brush', 'polygon', 'lasso', 'flood', 'sphere', 'box', 'boxer', 'sam', 'eyedropper', 'move', 'rotate', 'scale', 'measure'],
+                        description: 'Tool to activate'
+                    }
+                },
+                required: ['tool']
+            }
         }
     },
     {
         type: 'function' as const,
-        name: 'search_and_place_asset',
-        description: 'Search for a 3D model and place it in the scene.',
-        parameters: {
-            type: 'object',
-            properties: {
-                query: { type: 'string', description: 'Search query for the 3D model (e.g., "chair", "table")' }
-            },
-            required: ['query']
+        function: {
+            name: 'search_and_place_asset',
+            description: 'Search for a 3D model and place it in the scene.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Search query for the 3D model (e.g., "chair", "table")' }
+                },
+                required: ['query']
+            }
         }
     },
     {
         type: 'function' as const,
-        name: 'editor_action',
-        description: 'Perform a basic editor action.',
-        parameters: {
-            type: 'object',
-            properties: {
-                action: {
-                    type: 'string',
-                    enum: ['undo', 'redo', 'delete', 'clear', 'select_all', 'invert_selection'],
-                    description: 'Action to perform'
-                }
-            },
-            required: ['action']
+        function: {
+            name: 'select_object',
+            description: 'Select a specific object in the scene by text description. Uses AI-powered detection (Boxer) to find and select the described object.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    description: { type: 'string', description: 'Short description of what to select (e.g., "the can", "red chair", "table")' }
+                },
+                required: ['description']
+            }
+        }
+    },
+    {
+        type: 'function' as const,
+        function: {
+            name: 'editor_action',
+            description: 'Perform a basic editor action.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: {
+                        type: 'string',
+                        enum: ['undo', 'redo', 'delete', 'clear', 'select_all', 'invert_selection'],
+                        description: 'Action to perform'
+                    }
+                },
+                required: ['action']
+            }
         }
     }
 ];
@@ -208,10 +232,18 @@ class VoiceCommands {
     private async processWithAI(text: string): Promise<void> {
         console.log('[VoiceCommands] Routing to AI...');
 
-        const messages: Array<{ role: string; content: string }> = [
+        const messages: Array<any> = [
             {
                 role: 'system',
-                content: `You are a voice command interpreter for a 3D Gaussian Splat editor. Convert spoken commands into tool calls. For directional commands: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Default movement distance is 0.5 units. You can chain multiple tool calls for complex commands like "move left then up".`
+                content: `You are a voice command interpreter for a 3D Gaussian Splat editor. Convert spoken commands into tool calls.
+
+Rules:
+- Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Default distance is 0.5 units.
+- You can chain multiple tool calls for compound commands like "move left then up".
+- To select a specific object by description (e.g. "select the can", "click the chair"), use select_object with a short description. This activates AI-powered selection (Boxer) that finds objects by text.
+- Only use editor_action select_all when the user explicitly says "select all" or "select everything".
+- For compound commands like "select the can and move it up", first call select_object, then translate.
+- For ambiguous speech-to-text artifacts, prefer the most likely intended command.`
             },
             {
                 role: 'user',
@@ -219,62 +251,50 @@ class VoiceCommands {
             }
         ];
 
-        let toolCallResults: ToolCallResult[] = [];
-
         // Loop up to 6 tool call rounds
         for (let round = 0; round < 6; round++) {
-            const body: any = {
-                model: 'gpt-4o-mini',
-                input: [...messages, ...toolCallResults.map(r => ({
-                    type: 'function_call_output',
-                    call_id: r.name,
-                    output: r.result
-                }))],
-                tools: TOOL_DEFINITIONS
-            };
-
-            // On first round, just use input directly
-            if (round === 0) {
-                body.input = messages;
-            }
-
-            const response = await fetch('https://api.openai.com/v1/responses', {
+            const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify(body)
+                body: JSON.stringify({
+                    model: 'gpt-4o-mini',
+                    messages,
+                    tools: TOOL_DEFINITIONS,
+                    tool_choice: round === 0 ? 'required' : 'auto'
+                })
             });
 
             if (!response.ok) {
-                console.error(`[VoiceCommands] API error: ${response.status}`);
+                const errText = await response.text();
+                console.error(`[VoiceCommands] API error: ${response.status}`, errText);
                 return;
             }
 
             const data = await response.json();
-            const output = data.output || [];
+            const choice = data.choices?.[0];
+            if (!choice) return;
 
-            // Find tool calls in the output
-            const toolCalls = output.filter((item: any) => item.type === 'function_call');
+            const assistantMsg = choice.message;
+            messages.push(assistantMsg);
 
-            if (toolCalls.length === 0) {
+            const toolCalls = assistantMsg.tool_calls;
+            if (!toolCalls || toolCalls.length === 0) {
                 // No more tool calls — done
                 return;
             }
 
-            // Execute each tool call sequentially
-            toolCallResults = [];
+            // Execute each tool call and add results to messages
             for (const call of toolCalls) {
-                const args = JSON.parse(call.arguments);
-                const result = await this.executeTool(call.name, args);
-                toolCallResults.push({ name: call.call_id, result });
-            }
-
-            // Build up message history for next round
-            messages.push({ role: 'assistant' as const, content: JSON.stringify(output) });
-            for (const r of toolCallResults) {
-                messages.push({ role: 'user' as const, content: `Tool ${r.name} returned: ${r.result}` });
+                const args = JSON.parse(call.function.arguments);
+                const result = await this.executeTool(call.function.name, args);
+                messages.push({
+                    role: 'tool',
+                    tool_call_id: call.id,
+                    content: result
+                });
             }
         }
     }
@@ -300,6 +320,13 @@ class VoiceCommands {
                 }
                 return `Unknown tool: ${args.tool}`;
             }
+
+            case 'select_object':
+                this.events.fire('tool.boxerSelection');
+                // Small delay to let the tool activate before firing the text query
+                await new Promise(resolve => setTimeout(resolve, 200));
+                this.events.fire('ai.textQuery', args.description);
+                return `Selecting "${args.description}" via Boxer`;
 
             case 'search_and_place_asset':
                 this.events.fire('assetBrowser.searchAndPlace', args.query);

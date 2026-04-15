@@ -9,10 +9,11 @@
 }
 
 @theme inline {
-  --color-background: #ffffff;
-  --color-foreground: #171717;
+  --color-background: #120f11;
+  --color-foreground: #f2eee7;
   --font-sans: var(--font-rajdhani), "Rajdhani", sans-serif;
   --font-display: "nasalization", sans-serif;
+  --font-polaroid: "Courier New", "American Typewriter", monospace;
 }
 
 body {

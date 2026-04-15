@@ -155,11 +155,9 @@ void main(void) {
             // locked
             color *= lockedClr;
         } else if ((vertexState & 1u) != 0u) {
-            // selected: liquid glass effect
-            // boost brightness slightly for a glassy sheen
-            float luma = dot(color.xyz, vec3(0.299, 0.587, 0.114));
-            vec3 glassClr = color.xyz + vec3(0.08, 0.12, 0.18) * (1.0 - luma);
-            color.xyz = mix(color.xyz, glassClr, selectedClr.a);
+            // selected: liquid glass — brighten + cool tint
+            color.xyz *= 1.3;
+            color.xyz += vec3(0.05, 0.1, 0.2) * selectedClr.a;
         }
     #endif
 }
@@ -219,30 +217,23 @@ void main(void) {
 
         bool selected = texCoord_flags.z != 0.0 && texCoord_flags.w == 0.0;
 
-        if (outlineMode) {
-            if (selected) {
-                // liquid glass: fresnel rim glow at edges of each splat
-                float rim = smoothstep(0.3, 0.95, A);
-                // chromatic edge tint — cool blue-white at the rim
-                vec3 rimClr = vec3(0.7, 0.85, 1.0);
-                vec3 glassed = color.xyz + rimClr * rim * 0.5;
+        // liquid glass rim glow for selected splats
+        if (selected) {
+            // strong fresnel rim — bright white-cyan edge
+            float rim = smoothstep(0.15, 0.85, A);
+            vec3 rimClr = vec3(0.6, 0.85, 1.0);
+            vec3 glassed = color.xyz + rimClr * rim * 1.2;
+
+            if (outlineMode) {
                 pcFragColor0 = vec4(glassed * alpha, alpha);
                 pcFragColor1 = vec4(0.0, 0.0, 0.0, norm);
             } else {
-                pcFragColor0 = vec4(color.xyz * alpha, alpha);
-                pcFragColor1 = vec4(0.0, 0.0, 0.0, 0.0);
-            }
-        } else {
-            if (selected) {
-                float rim = smoothstep(0.3, 0.95, A);
-                vec3 rimClr = vec3(0.7, 0.85, 1.0);
-                vec3 glassed = color.xyz + rimClr * rim * 0.5;
                 pcFragColor0 = vec4(glassed * alpha * 0.8, alpha);
                 pcFragColor1 = vec4(glassed * alpha * 0.2, alpha);
-            } else {
-                pcFragColor0 = vec4(color.xyz * alpha, alpha);
-                pcFragColor1 = vec4(0.0, 0.0, 0.0, 0.0);
             }
+        } else {
+            pcFragColor0 = vec4(color.xyz * alpha, alpha);
+            pcFragColor1 = vec4(0.0, 0.0, 0.0, 0.0);
         }
     #endif
 }
