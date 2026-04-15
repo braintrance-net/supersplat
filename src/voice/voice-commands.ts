@@ -140,11 +140,12 @@ const TOOL_DEFINITIONS = [
         type: 'function' as const,
         function: {
             name: 'select_object',
-            description: 'Select a specific object in the scene by text description. Uses AI-powered detection (Boxer) to find and select the described object.',
+            description: 'Select a specific object in the scene by text description. Uses AI-powered segmentation (SAM3 by default, or Boxer if use_boxer=true) to find and select the described object. This is async — waits for the AI backend to finish before returning.',
             parameters: {
                 type: 'object',
                 properties: {
-                    description: { type: 'string', description: 'Short description of what to select (e.g., "the can", "red chair", "table")' }
+                    description: { type: 'string', description: 'Short description of what to select (e.g., "the can", "red chair", "table")' },
+                    use_boxer: { type: 'boolean', description: 'Use Boxer (bounding box) instead of SAM3 (segmentation). Default false.' }
                 },
                 required: ['description']
             }
@@ -240,9 +241,9 @@ class VoiceCommands {
 Rules:
 - Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Default distance is 0.5 units.
 - You can chain multiple tool calls for compound commands like "move left then up".
-- To select a specific object by description (e.g. "select the can", "click the chair"), use select_object with a short description. This activates AI-powered selection (Boxer) that finds objects by text.
+- To select a specific object by description (e.g. "select the can", "click the chair"), use select_object with a short description. This activates AI-powered segmentation (SAM3) to find and select the object. Set use_boxer=true only if the user explicitly says "boxer".
 - Only use editor_action select_all when the user explicitly says "select all" or "select everything".
-- For compound commands like "select the can and move it up", first call select_object, then translate.
+- For compound commands like "select the can and move it up", first call select_object, then translate. select_object waits for the AI to finish, so subsequent commands will operate on the correct selection.
 - For ambiguous speech-to-text artifacts, prefer the most likely intended command.`
             },
             {
@@ -322,11 +323,7 @@ Rules:
             }
 
             case 'select_object':
-                this.events.fire('tool.boxerSelection');
-                // Small delay to let the tool activate before firing the text query
-                await new Promise(resolve => setTimeout(resolve, 200));
-                this.events.fire('ai.textQuery', args.description);
-                return `Selecting "${args.description}" via Boxer`;
+                return this.executeSelectObject(args.description, args.use_boxer ?? false);
 
             case 'search_and_place_asset':
                 this.events.fire('assetBrowser.searchAndPlace', args.query);
@@ -344,6 +341,58 @@ Rules:
             default:
                 return `Unknown tool: ${name}`;
         }
+    }
+
+    private async executeSelectObject(description: string, useBoxer: boolean): Promise<string> {
+        const toolEvent = useBoxer ? 'tool.boxerSelection' : 'tool.sam3Selection';
+        const toolName = useBoxer ? 'Boxer' : 'SAM3';
+
+        this.events.fire(toolEvent);
+
+        // Wait for tool to activate
+        await new Promise(resolve => setTimeout(resolve, 200));
+
+        // Listen for completion signals before firing the query
+        const result = await new Promise<string>((resolve) => {
+            const timeout = setTimeout(() => {
+                cleanup();
+                resolve(`${toolName} timed out after 30s`);
+            }, 30000);
+
+            const cleanup = () => {
+                clearTimeout(timeout);
+                this.events.off('select.byOBB', onBoxerDone);
+                this.events.off('edit.add', onSamDone);
+                this.events.off('toast', onError);
+            };
+
+            const onBoxerDone = () => {
+                cleanup();
+                resolve(`Selected "${description}" via Boxer`);
+            };
+
+            const onSamDone = () => {
+                cleanup();
+                resolve(`Selected "${description}" via SAM3`);
+            };
+
+            const onError = (msg: string, level: string) => {
+                if (level === 'error' || level === 'warning') {
+                    cleanup();
+                    resolve(`Selection failed: ${msg}`);
+                }
+            };
+
+            this.events.on('select.byOBB', onBoxerDone);
+            this.events.on('edit.add', onSamDone);
+            this.events.on('toast', onError);
+
+            // Fire the text query
+            this.events.fire('ai.textQuery', description);
+        });
+
+        console.log(`[VoiceCommands] ${result}`);
+        return result;
     }
 
     private executeTranslate(x: number, y: number, z: number): string {

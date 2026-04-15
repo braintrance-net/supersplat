@@ -206,12 +206,7 @@ class AssetBrowser extends Container {
         this.entityActionBar.appendChild(deselectBtn);
         this.entityActionBar.appendChild(deleteBtn);
 
-        // Defer append until we're in the DOM tree
-        requestAnimationFrame(() => {
-            // Append to the canvas container (our parent) so it's in the right stacking context
-            const parent = this.dom.parentElement || document.body;
-            parent.appendChild(this.entityActionBar);
-        });
+        document.body.appendChild(this.entityActionBar);
 
         // Events
         events.on('assetBrowser.toggleVisible', () => {
@@ -304,6 +299,9 @@ class AssetBrowser extends Container {
             this.entityActionBar.style.display = 'flex';
             const label = this.entityActionBar.querySelector('.entity-action-label');
             if (label) label.textContent = entity.name || 'Entity';
+            console.log('[AssetBrowser] Action bar shown for:', entity.name, 'parent:', this.entityActionBar.parentElement?.tagName);
+        } else {
+            console.warn('[AssetBrowser] entityActionBar is null!');
         }
 
         // If a transform tool is active, attach the gizmo
