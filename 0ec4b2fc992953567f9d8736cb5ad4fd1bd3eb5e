@@ -1,0 +1,40 @@
+src/ui/asset-browser.ts
+  4d88b5fcbece7568 1-438
+src/tools/sam3-selection.ts
+  4a34c259eda505e2 274
+src/tools/boxer-selection.ts
+  4a34c259eda505e2 304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "0ec4b2fc992953567f9d8736cb5ad4fd1bd3eb5e",
+  "prompts": {
+    "4a34c259eda505e2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8faa3715-9d2a-4862-ab1f-6aad60797463",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    },
+    "4d88b5fcbece7568": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9a8fdebd-d6ab-4f8b-a5b1-97c2c1aab388",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 438,
+      "total_deletions": 0,
+      "accepted_lines": 438,
+      "overriden_lines": 0
+    }
+  }
+}
