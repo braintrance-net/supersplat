@@ -12,11 +12,19 @@ export default function Home() {
     fileInputRef.current?.click();
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    const url = URL.createObjectURL(file);
-    router.push(`/editor?load=${encodeURIComponent(url)}`);
+
+    // Store file data in sessionStorage so the editor page can send it via postMessage
+    const buffer = await file.arrayBuffer();
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(buffer)));
+    sessionStorage.setItem(
+      "pendingFile",
+      JSON.stringify({ name: file.name, type: file.type, data: base64 })
+    );
+
+    router.push("/editor");
   };
 
   const handleTest = () => {
