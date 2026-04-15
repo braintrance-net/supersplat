@@ -52,6 +52,7 @@ class AssetBrowser extends Container {
     };
     private currentGizmoType: 'translate' | 'rotate' | 'scale' | null = null;
     private pendingPlacement: { entity: Entity; card: HTMLElement; actionEl: Element | null } | null = null;
+    private entityActionBar: HTMLDivElement | null = null;
 
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -175,6 +176,34 @@ class AssetBrowser extends Container {
 
         this.dom.appendChild(panel);
 
+        // Entity action bar — floating controls for selected placed entities
+        this.entityActionBar = document.createElement('div');
+        this.entityActionBar.className = 'entity-action-bar';
+        this.entityActionBar.style.display = 'none';
+
+        // Stop events from reaching canvas
+        ['pointerdown', 'pointerup', 'pointermove', 'click'].forEach((evt) => {
+            this.entityActionBar.addEventListener(evt, (e: Event) => e.stopPropagation());
+        });
+
+        const deselectBtn = document.createElement('button');
+        deselectBtn.className = 'entity-action-btn';
+        deselectBtn.title = 'Deselect (drop to surface)';
+        deselectBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M6.28 5.22a.75.75 0 00-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 101.06 1.06L10 11.06l3.72 3.72a.75.75 0 101.06-1.06L11.06 10l3.72-3.72a.75.75 0 00-1.06-1.06L10 8.94 6.28 5.22z"/></svg>`;
+        deselectBtn.addEventListener('click', () => this.deselectEntity());
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'entity-action-btn entity-action-delete';
+        deleteBtn.title = 'Delete entity';
+        deleteBtn.innerHTML = `<svg viewBox="0 0 20 20" width="16" height="16"><path fill="currentColor" d="M8.5 4h3a1.5 1.5 0 00-3 0zm-1 0a2.5 2.5 0 015 0h4.25a.75.75 0 010 1.5h-.92l-.89 10.69A2.5 2.5 0 0112.47 18H7.53a2.5 2.5 0 01-2.47-2.19L4.17 5.5h-.92a.75.75 0 010-1.5H7.5zm2.5 3.75a.75.75 0 00-1.5 0v5.5a.75.75 0 001.5 0v-5.5zm2.75-.75a.75.75 0 00-.75.75v5.5a.75.75 0 001.5 0v-5.5a.75.75 0 00-.75-.75z"/></svg>`;
+        deleteBtn.addEventListener('click', () => this.deleteSelectedEntity());
+
+        this.entityActionBar.appendChild(deselectBtn);
+        this.entityActionBar.appendChild(deleteBtn);
+
+        // Append to body so it floats above everything
+        document.body.appendChild(this.entityActionBar);
+
         // Events
         events.on('assetBrowser.toggleVisible', () => {
             this.hidden = !this.hidden;
@@ -235,6 +264,11 @@ class AssetBrowser extends Container {
         this.selectedEntity = entity;
         this.ensureGizmos();
 
+        // Show action bar
+        if (this.entityActionBar) {
+            this.entityActionBar.style.display = 'flex';
+        }
+
         // If a transform tool is active, attach the gizmo
         if (this.currentGizmoType) {
             this.attachGizmo(this.currentGizmoType);
@@ -242,6 +276,84 @@ class AssetBrowser extends Container {
             // Default to translate when selecting a placed entity
             this.currentGizmoType = 'translate';
             this.events.fire('tool.move');
+        }
+    }
+
+    private async deselectEntity() {
+        if (!this.selectedEntity) return;
+
+        const entity = this.selectedEntity;
+        this.detachGizmo();
+        this.selectedEntity = null;
+        this.currentGizmoType = null;
+
+        // Hide action bar
+        if (this.entityActionBar) {
+            this.entityActionBar.style.display = 'none';
+        }
+
+        // Gravity drop — find the surface below and snap to it
+        await this.dropToSurface(entity);
+    }
+
+    private deleteSelectedEntity() {
+        if (!this.selectedEntity) return;
+
+        const entity = this.selectedEntity;
+        this.detachGizmo();
+        this.selectedEntity = null;
+        this.currentGizmoType = null;
+
+        // Hide action bar
+        if (this.entityActionBar) {
+            this.entityActionBar.style.display = 'none';
+        }
+
+        // Remove from tracking
+        const idx = this.placedEntities.indexOf(entity);
+        if (idx !== -1) this.placedEntities.splice(idx, 1);
+
+        // Destroy the entity
+        entity.destroy();
+
+        const scene = (window as any).scene;
+        if (scene) scene.forceRender = true;
+    }
+
+    private async dropToSurface(entity: Entity) {
+        const scene = (window as any).scene;
+        if (!scene?.camera) return;
+
+        const pos = entity.getPosition();
+        const canvas = scene.canvas as HTMLCanvasElement;
+
+        // Project entity position to screen space
+        const camera = scene.camera.camera as any;
+        const screenPos = new Vec3();
+        camera.worldToScreen(pos, screenPos);
+
+        // Normalize to 0-1 range
+        const nx = screenPos.x / canvas.clientWidth;
+        const ny = screenPos.y / canvas.clientHeight;
+
+        // Only attempt if the entity is on screen
+        if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+
+        const result = await scene.camera.intersect(nx, ny);
+        if (!result) return;
+
+        // Compute bottom offset for this entity
+        const bbox = this.computeEntityBounds(entity);
+        const boundsBottom = bbox.center.y - bbox.halfExtents.y;
+        const bottomOffset = pos.y - boundsBottom;
+
+        // Only drop if the surface is below the entity
+        const surfaceY = result.position.y;
+        const targetY = surfaceY + bottomOffset;
+
+        if (targetY < pos.y) {
+            entity.setPosition(pos.x, targetY, pos.z);
+            scene.forceRender = true;
         }
     }
 
