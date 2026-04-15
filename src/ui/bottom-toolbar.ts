@@ -10,6 +10,7 @@ import floodSvg from './svg/select-flood.svg';
 import lassoSvg from './svg/select-lasso.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
+import assetBrowserSvg from './svg/asset-browser.svg';
 import boxerIconSvg from './svg/select-boxer.svg';
 import samIconSvg from './svg/select-sam.svg';
 import sphereSvg from './svg/select-sphere.svg';
@@ -133,6 +134,11 @@ class BottomToolbar extends Container {
             icon: 'E118'
         });
 
+        const assetBrowserBtn = new Button({
+            id: 'bottom-toolbar-asset-browser',
+            class: 'bottom-toolbar-tool'
+        });
+
         const origin = new Button({
             id: 'bottom-toolbar-origin',
             class: ['bottom-toolbar-toggle'],
@@ -150,11 +156,14 @@ class BottomToolbar extends Container {
         lasso.dom.appendChild(createSvg(lassoSvg));
         eyedropper.dom.appendChild(createSvg(eyedropperSvg));
 
+        assetBrowserBtn.dom.appendChild(createSvg(assetBrowserSvg));
         boxer.dom.appendChild(createSvg(boxerIconSvg));
         sam3.dom.appendChild(createSvg(samIconSvg));
 
         // crop.dom.appendChild(createSvg(cropSvg));
 
+        this.append(assetBrowserBtn);
+        this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(undo);
         this.append(redo);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
@@ -223,6 +232,7 @@ class BottomToolbar extends Container {
         eyedropper.dom.addEventListener('click', () => events.fire('tool.eyedropperSelection'));
         sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
         box.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
+        assetBrowserBtn.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
         sam3.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
         translate.dom.addEventListener('click', () => events.fire('tool.move'));
@@ -264,6 +274,10 @@ class BottomToolbar extends Container {
             coordSpace.dom.classList[space === 'local' ? 'add' : 'remove']('active');
         });
 
+        events.on('assetBrowser.visible', (visible: boolean) => {
+            assetBrowserBtn.class[visible ? 'add' : 'remove']('active');
+        });
+
         events.on('pivot.origin', (o: 'center' | 'boundCenter') => {
             origin.dom.classList[o === 'boundCenter' ? 'add' : 'remove']('active');
         });
@@ -282,6 +296,7 @@ class BottomToolbar extends Container {
         };
 
         // register tooltips
+        tooltips.register(assetBrowserBtn, 'Asset Browser');
         tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
         tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rect', 'tool.rectSelection'));

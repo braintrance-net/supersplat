@@ -64,7 +64,8 @@ const SUPERSPLAT_CONFIG = JSON.stringify({
     defaultCamera,
     boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
-    enableDevTools: process.env.DEV_TOOLS === 'true'
+    enableDevTools: process.env.DEV_TOOLS === 'true',
+    sketchfabApiToken: process.env.SKETCHFAB_API_TOKEN || ''
 }).replace(/</g, '\\u003c');
 
 const outputHeader = () => {

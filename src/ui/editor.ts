@@ -1,6 +1,7 @@
 import { Container, Label } from '@playcanvas/pcui';
 import { Mat4, path, Vec3 } from 'playcanvas';
 
+import { AssetBrowser } from './asset-browser';
 import { DataPanel } from './data-panel';
 import { Events } from '../events';
 import { AboutPopup } from './about-popup';
@@ -128,6 +129,7 @@ class EditorUI {
         const colorPanel = new ColorPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
+        const assetBrowser = new AssetBrowser(events, tooltips);
         const modeToggle = new ModeToggle(events, tooltips);
         const menu = new Menu(events);
 
@@ -140,6 +142,7 @@ class EditorUI {
         canvasContainer.append(colorPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
+        canvasContainer.append(assetBrowser);
         canvasContainer.append(modeToggle);
         canvasContainer.append(menu);
 

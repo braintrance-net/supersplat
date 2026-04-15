@@ -56,6 +56,7 @@ declare global {
             boxerBackendUrl?: string;
             sam3BackendUrl?: string;
             enableDevTools?: boolean;
+            sketchfabApiToken?: string;
         };
     }
 }
