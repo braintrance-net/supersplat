@@ -173,7 +173,7 @@ class RenderSubPanel extends Container {
 
         const revealSelect = new SelectInput({
             class: 'reveal-effect-select',
-            defaultValue: 'magic',
+            defaultValue: 'spread',
             options: [
                 { v: 'magic', t: 'Magic' },
                 { v: 'spread', t: 'Spread' },
