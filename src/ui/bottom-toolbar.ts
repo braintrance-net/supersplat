@@ -13,6 +13,7 @@ import polygonSvg from './svg/select-poly.svg';
 import assetBrowserSvg from './svg/asset-browser.svg';
 import micSvg from './svg/microphone.svg';
 import walkSvg from './svg/walk.svg';
+import placeSvg from './svg/place.svg';
 import boxerIconSvg from './svg/select-boxer.svg';
 import samIconSvg from './svg/select-sam.svg';
 import sphereSvg from './svg/select-sphere.svg';
@@ -111,6 +112,11 @@ class BottomToolbar extends Container {
         //     class: ['bottom-toolbar-tool', 'disabled']
         // });
 
+        const place = new Button({
+            id: 'bottom-toolbar-place',
+            class: 'bottom-toolbar-tool'
+        });
+
         const translate = new Button({
             id: 'bottom-toolbar-translate',
             class: 'bottom-toolbar-tool',
@@ -171,6 +177,7 @@ class BottomToolbar extends Container {
         assetBrowserBtn.dom.appendChild(createSvg(assetBrowserSvg));
         mic.dom.appendChild(createSvg(micSvg));
         walk.dom.appendChild(createSvg(walkSvg));
+        place.dom.appendChild(createSvg(placeSvg));
         boxer.dom.appendChild(createSvg(boxerIconSvg));
         sam3.dom.appendChild(createSvg(samIconSvg));
 
@@ -231,6 +238,7 @@ class BottomToolbar extends Container {
         this.append(translate);
         this.append(rotate);
         this.append(scale);
+        this.append(place);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(measure);
         this.append(coordSpace);
@@ -310,6 +318,7 @@ class BottomToolbar extends Container {
         walk.dom.addEventListener('click', () => events.fire('tool.walk'));
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
         sam3.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
+        place.dom.addEventListener('click', () => events.fire('tool.place'));
         translate.dom.addEventListener('click', () => events.fire('tool.move'));
         rotate.dom.addEventListener('click', () => events.fire('tool.rotate'));
         scale.dom.addEventListener('click', () => events.fire('tool.scale'));
@@ -335,6 +344,7 @@ class BottomToolbar extends Container {
             box.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
             sam3.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
+            place.class[toolName === 'place' ? 'add' : 'remove']('active');
             translate.class[toolName === 'move' ? 'add' : 'remove']('active');
             rotate.class[toolName === 'rotate' ? 'add' : 'remove']('active');
             scale.class[toolName === 'scale' ? 'add' : 'remove']('active');
@@ -400,6 +410,7 @@ class BottomToolbar extends Container {
         tooltips.register(sam3, tooltip('SAM3 AI', 'tool.sam3Selection'));
         tooltips.register(sphere, tooltip('tooltip.bottom-toolbar.sphere'));
         tooltips.register(box, tooltip('tooltip.bottom-toolbar.box'));
+        tooltips.register(place, tooltip('Click to Place', 'tool.place'));
         tooltips.register(translate, tooltip('tooltip.bottom-toolbar.translate', 'tool.move'));
         tooltips.register(rotate, tooltip('tooltip.bottom-toolbar.rotate', 'tool.rotate'));
         tooltips.register(scale, tooltip('tooltip.bottom-toolbar.scale', 'tool.scale'));

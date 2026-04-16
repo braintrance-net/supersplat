@@ -58,7 +58,7 @@ type WorldgenStatusResponse = {
     message?: string;
   } | null;
   worldId?: string | null;
-  primarySpzUrl?: string | null;
+  primarySpzProxyUrl?: string | null;
 };
 
 const supportedWorldgenImageExtensions = [".bmp", ".jpeg", ".jpg", ".png", ".tiff", ".webp"];
@@ -570,12 +570,12 @@ export default function Home() {
           throw new Error(payload.error.message);
         }
 
-        if (!payload.primarySpzUrl) {
+        if (!payload.primarySpzProxyUrl) {
           throw new Error("World generation finished without a splat URL.");
         }
 
         setWorldgenProgress("ready");
-        setWorldgenResultUrl(payload.primarySpzUrl);
+        setWorldgenResultUrl(payload.primarySpzProxyUrl);
         setIsWorldgenLoading(false);
         return;
       }
@@ -660,7 +660,32 @@ export default function Home() {
 
   const handleOpenEditorWithWorld = () => {
     if (!worldgenResultUrl) return;
-    router.push(`/editor?load=${encodeURIComponent(worldgenResultUrl)}`);
+
+    void (async () => {
+      try {
+        const response = await fetch(worldgenResultUrl, { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error("Could not fetch generated splat.");
+        }
+
+        const data = await response.arrayBuffer();
+        const disposition = response.headers.get("Content-Disposition");
+        const filenameMatch = disposition?.match(/filename="([^"]+)"/i);
+        const filename = filenameMatch?.[1] || "generated-world.spz";
+
+        (
+          window as Window & {
+            __pendingAsset?: { filename: string; data: ArrayBuffer };
+          }
+        ).__pendingAsset = { filename, data };
+
+        router.push("/editor");
+      } catch (error) {
+        setWorldgenError(
+          error instanceof Error ? error.message : "Could not open generated splat in the editor.",
+        );
+      }
+    })();
   };
 
   const worldgenStatusCopy = (() => {

@@ -30,6 +30,7 @@ import { RotateTool } from './tools/rotate-tool';
 import { Sam3Selection } from './tools/sam3-selection';
 import { ScaleTool } from './tools/scale-tool';
 import { SphereSelection } from './tools/sphere-selection';
+import { PlaceTool } from './tools/place-tool';
 import { ToolManager } from './tools/tool-manager';
 import { WalkTool } from './tools/walk-tool';
 import { registerTransformHandlerEvents } from './transform-handler';
@@ -258,6 +259,7 @@ const main = async () => {
     toolManager.register('scale', new ScaleTool(events, scene));
     toolManager.register('measure', new MeasureTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('walk', new WalkTool(events, scene, editorUI.canvasContainer.dom));
+    toolManager.register('place', new PlaceTool(events, scene, editorUI.canvasContainer.dom));
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
 

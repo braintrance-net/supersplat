@@ -121,6 +121,9 @@ const fragmentShader = /* glsl*/ `
         float alpha = fresnel * 0.5 + spec * 0.6 + (1.0 - edgeDarken) * 0.3;
         alpha = clamp(alpha, 0.0, 0.85);
 
+        // DEBUG: force visible — remove once confirmed working
+        alpha = max(alpha, 0.4);
+
         gl_FragColor = vec4(glass, alpha);
     }
 `;

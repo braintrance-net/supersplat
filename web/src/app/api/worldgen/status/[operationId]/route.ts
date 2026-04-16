@@ -26,7 +26,7 @@ type WorldPayload = {
 };
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ operationId: string }> },
 ) {
   try {
@@ -44,7 +44,7 @@ export async function GET(
 
     const payload = (await response.json()) as OperationPayload;
     const worldId = payload.response?.world_id ?? null;
-    let primarySpzUrl: string | null = null;
+    let primarySpzProxyUrl: string | null = null;
 
     if (payload.done && !payload.error?.message && worldId) {
       const worldResponse = await fetch(`${WORLDGEN_API_BASE_URL}/worlds/${worldId}`, {
@@ -54,7 +54,15 @@ export async function GET(
       if (worldResponse.ok) {
         const worldPayload = (await worldResponse.json()) as WorldPayload;
         const urls = worldPayload.assets?.splats?.spz_urls ?? {};
-        primarySpzUrl = Object.values(urls)[0] ?? null;
+        const upstreamUrl = Object.values(urls)[0] ?? null;
+        if (upstreamUrl) {
+          const filename =
+            upstreamUrl.split("/").pop()?.split("?")[0] || "generated-world.spz";
+          const proxyUrl = new URL("/api/worldgen/proxy", request.url);
+          proxyUrl.searchParams.set("url", upstreamUrl);
+          proxyUrl.searchParams.set("filename", filename);
+          primarySpzProxyUrl = proxyUrl.toString();
+        }
       }
     }
 
@@ -63,7 +71,7 @@ export async function GET(
       progress: payload.metadata?.progress ?? null,
       error: payload.error ?? null,
       worldId,
-      primarySpzUrl,
+      primarySpzProxyUrl,
     });
   } catch {
     return NextResponse.json(

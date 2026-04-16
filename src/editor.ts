@@ -662,7 +662,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // outline selection
 
-    let outlineSelection = false;
+    let outlineSelection = true;
 
     const setOutlineSelection = (value: boolean) => {
         if (value !== outlineSelection) {

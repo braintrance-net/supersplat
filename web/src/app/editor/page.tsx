@@ -6,6 +6,10 @@ import { Suspense, useCallback, useRef } from "react";
 declare global {
   interface Window {
     __pendingFile?: File;
+    __pendingAsset?: {
+      filename: string;
+      data: ArrayBuffer;
+    };
   }
 }
 
@@ -15,25 +19,37 @@ function EditorFrame() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const hasPendingFile = typeof window !== "undefined" && !!window.__pendingFile;
+  const hasPendingAsset = typeof window !== "undefined" && !!window.__pendingAsset;
 
   let editorUrl = "http://localhost:3000";
   if (load) {
     editorUrl += `?load=${encodeURIComponent(load)}`;
-  } else if (hasPendingFile) {
+  } else if (hasPendingFile || hasPendingAsset) {
     editorUrl += "?skipDefault";
   }
 
   const handleIframeLoad = useCallback(async () => {
     const file = window.__pendingFile;
-    if (!file) return;
-    delete window.__pendingFile;
+    const asset = window.__pendingAsset;
+    if (!file && !asset) return;
 
-    const data = await file.arrayBuffer();
+    let filename: string;
+    let data: ArrayBuffer;
+
+    if (file) {
+      delete window.__pendingFile;
+      filename = file.name;
+      data = await file.arrayBuffer();
+    } else {
+      delete window.__pendingAsset;
+      filename = asset!.filename;
+      data = asset!.data;
+    }
 
     // Give the editor time to initialize
     setTimeout(() => {
       iframeRef.current?.contentWindow?.postMessage(
-        { type: "supersplat:load-file", filename: file.name, data },
+        { type: "supersplat:load-file", filename, data },
         "*",
         [data] // transfer the ArrayBuffer for performance
       );

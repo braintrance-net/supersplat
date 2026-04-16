@@ -38,6 +38,26 @@ class VoiceController {
                 this.stop();
             }
         });
+
+        // Direct space key listener as fallback — the shortcut system may miss
+        // space if document.body doesn't have focus (e.g. after clicking a button)
+        const isInputFocused = () => {
+            const tag = document.activeElement?.tagName;
+            return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+        };
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === ' ' && !e.repeat && !isInputFocused()) {
+                e.preventDefault();
+                if (!this.active) this.start();
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === ' ' && !isInputFocused()) {
+                if (this.active) this.stop();
+            }
+        });
     }
 
     toggle() {
