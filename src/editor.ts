@@ -705,7 +705,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     // reveal effect
-    let revealEffect = 'magic';
+    let revealEffect = 'spread';
 
     events.function('revealEffect', () => {
         return revealEffect;
