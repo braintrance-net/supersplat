@@ -175,8 +175,8 @@ class RenderSubPanel extends Container {
             class: 'reveal-effect-select',
             defaultValue: 'spread',
             options: [
-                { v: 'magic', t: 'Magic' },
                 { v: 'spread', t: 'Spread' },
+                { v: 'magic', t: 'Magic' },
                 { v: 'unroll', t: 'Unroll' },
                 { v: 'twister', t: 'Twister' },
                 { v: 'rain', t: 'Rain' }
