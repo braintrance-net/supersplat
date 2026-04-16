@@ -1,0 +1,23 @@
+src/outline.ts
+  f0ab20671f4bb23b 3,53
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "ea4caeb2354a073b4af6571ba080f3390a56d1bf",
+  "prompts": {
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 35,
+      "accepted_lines": 8,
+      "overriden_lines": 0
+    }
+  }
+}
