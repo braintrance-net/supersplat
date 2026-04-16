@@ -1,10 +1,6 @@
 import {
-    ADDRESS_CLAMP_TO_EDGE,
     BlendState,
-    Layer,
-    PIXELFORMAT_RGBA8,
-    RenderTarget,
-    Texture
+    Layer
 } from 'playcanvas';
 
 import { Element, ElementType } from './element';
@@ -15,8 +11,6 @@ class Outline extends Element {
     shaderQuad: ShaderQuad;
     renderPass: SimpleRenderPass;
     enabled = true;
-    sceneCopyTexture: Texture = null;
-    sceneCopyTarget: RenderTarget = null;
 
     constructor() {
         super(ElementType.other);
@@ -47,34 +41,8 @@ class Outline extends Element {
 
             events.invoke('selectedClr').toArray(clr);
 
-            // copy the current scene to a separate texture to avoid feedback loop
-            const mainBuffer = camera.mainTarget.colorBuffer;
-            if (!this.sceneCopyTexture || this.sceneCopyTexture.width !== mainBuffer.width || this.sceneCopyTexture.height !== mainBuffer.height) {
-                this.sceneCopyTexture?.destroy();
-                this.sceneCopyTarget?.destroy();
-
-                this.sceneCopyTexture = new Texture(device, {
-                    name: 'sceneCopy',
-                    width: mainBuffer.width,
-                    height: mainBuffer.height,
-                    format: PIXELFORMAT_RGBA8,
-                    addressU: ADDRESS_CLAMP_TO_EDGE,
-                    addressV: ADDRESS_CLAMP_TO_EDGE,
-                    mipmaps: false
-                });
-
-                this.sceneCopyTarget = new RenderTarget({
-                    colorBuffer: this.sceneCopyTexture,
-                    depth: false
-                });
-            }
-
-            // blit scene to copy
-            this.scene.dataProcessor.copyRt(camera.mainTarget, this.sceneCopyTarget);
-
             this.renderPass.execute({
                 srcTexture: camera.workTarget.colorBuffer,
-                sceneTexture: this.sceneCopyTexture,
                 alphaCutoff: events.invoke('camera.mode') === 'rings' ? 0.0 : 0.8,
                 clr
             });
@@ -82,8 +50,7 @@ class Outline extends Element {
     }
 
     remove() {
-        this.sceneCopyTexture?.destroy();
-        this.sceneCopyTarget?.destroy();
+        // event listeners are cleaned up when camera is destroyed
     }
 
     onPreRender() {
