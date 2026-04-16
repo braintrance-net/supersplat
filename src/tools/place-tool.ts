@@ -27,10 +27,8 @@ class PlaceTool {
             const dy = e.clientY - pointerDownPos.y;
             pointerDownPos = null;
 
-            // Only treat as click if pointer barely moved
             if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESHOLD) return;
 
-            // Must have a selection to place
             const splat = events.invoke('selection') as Splat;
             if (!splat || splat.numSelected === 0) return;
 
@@ -44,15 +42,35 @@ class PlaceTool {
 
             // Get current pivot (center of selected splats)
             const pivot = events.invoke('pivot') as Pivot;
-            const oldPos = pivot.transform.position.clone();
+            const pivotPos = pivot.transform.position;
             const oldRot = pivot.transform.rotation.clone();
             const oldScale = pivot.transform.scale.clone();
 
-            // Compute translation delta from current pivot to click target
-            const newPos = new Vec3();
-            newPos.copy(result.position);
+            // Calculate how far the pivot is above the selection's bottom.
+            // This offset ensures the selection sits ON TOP of the surface
+            // rather than embedding its center into it.
+            const selBound = splat.selectionBound;
+            const entity = splat.entity;
 
-            // Apply the transform through the pivot system (creates undo/redo)
+            // Transform the selection bound bottom to world space
+            const boundBottomLocal = new Vec3(
+                selBound.center.x,
+                selBound.center.y - selBound.halfExtents.y,
+                selBound.center.z
+            );
+            const boundBottomWorld = new Vec3();
+            entity.getLocalTransform().transformPoint(boundBottomLocal, boundBottomWorld);
+
+            // The vertical offset from selection bottom to pivot center
+            const groundOffset = pivotPos.y - boundBottomWorld.y;
+
+            // Place selection so its bottom sits on the hit point surface
+            const newPos = new Vec3(
+                result.position.x,
+                result.position.y + groundOffset,
+                result.position.z
+            );
+
             pivot.start();
             pivot.move(new Transform(newPos, oldRot, oldScale));
             pivot.end();
