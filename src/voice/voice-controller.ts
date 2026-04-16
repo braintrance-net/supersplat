@@ -92,9 +92,9 @@ class VoiceController {
     }
 
     private startWakeWordListener() {
-        const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (!SpeechRecognitionClass) {
-            console.error('[VoiceController] SpeechRecognition not supported in this browser');
+            console.error('[VoiceController] SpeechRecognition not supported — wake word requires Chrome');
             return;
         }
 

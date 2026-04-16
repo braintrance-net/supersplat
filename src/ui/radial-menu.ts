@@ -109,15 +109,8 @@ class RadialMenu extends Container {
             }
         ];
 
-        // Build DOM items arranged in an arc
-        const totalItems = items.length;
-        // Arc from -90deg (left) to +90deg (right), centered at top
-        const arcStart = -90;
-        const arcEnd = 90;
-        const arcSpan = arcEnd - arcStart;
-        const radius = 100; // px from center
-
-        items.forEach((item, i) => {
+        // Build DOM items in a horizontal row
+        items.forEach((item) => {
             const el = document.createElement('button');
             el.id = item.id;
             el.className = `radial-item ${item.className || ''}`;
@@ -141,14 +134,6 @@ class RadialMenu extends Container {
             labelEl.textContent = item.label;
             el.appendChild(labelEl);
 
-            // Position in arc
-            const angle = arcStart + (arcSpan * i) / (totalItems - 1);
-            const rad = (angle * Math.PI) / 180;
-            const x = Math.sin(rad) * radius;
-            const y = -Math.cos(rad) * radius;
-            el.style.setProperty('--radial-x', `${x}px`);
-            el.style.setProperty('--radial-y', `${y}px`);
-
             el.addEventListener('click', (e) => {
                 e.stopPropagation();
                 item.action();
@@ -157,15 +142,20 @@ class RadialMenu extends Container {
             this.menuEl.appendChild(el);
         });
 
-        // Only show when splat selection changes (not asset browser)
-        events.on('selection.changed', () => {
+        const checkSelection = () => {
             const hasSplats = events.invoke('selection.splats');
+            console.log('[RadialMenu] checkSelection — hasSplats:', hasSplats, 'oneShotTool:', this.oneShotTool);
             if (hasSplats) {
                 this.showNearSelection();
             } else {
                 this.hide();
             }
-        });
+        };
+
+        // selection.changed = splat entity selected/deselected
+        // splat.stateChanged = gaussians selected/deselected within a splat (SAM3, brush, etc.)
+        events.on('selection.changed', checkSelection);
+        events.on('splat.stateChanged', checkSelection);
 
         // When selection is cleared, hide
         events.on('selection.deselect', () => {
@@ -201,6 +191,7 @@ class RadialMenu extends Container {
 
         // Get screen position of the selection center
         const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
+        console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);
 
         if (screenPos) {
             // Position the menu near the selection, offset upward so the arc sits above
