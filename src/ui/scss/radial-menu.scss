@@ -1,0 +1,139 @@
+@use 'colors.scss' as *;
+
+#radial-menu-container {
+    position: absolute;
+    left: 50%;
+    bottom: 100px;
+    transform: translateX(-50%);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 20;
+    pointer-events: none;
+}
+
+#radial-menu {
+    position: relative;
+    width: 0;
+    height: 0;
+    pointer-events: none;
+
+    &.radial-menu-visible .radial-item {
+        opacity: 1;
+        transform: translate(
+            calc(-50% + var(--radial-x)),
+            calc(-50% + var(--radial-y))
+        );
+        pointer-events: auto;
+    }
+}
+
+.radial-item {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    width: 56px;
+    height: 56px;
+    border: none;
+    border-radius: 12px;
+    background-color: $bcg-primary;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+    cursor: pointer;
+    opacity: 0;
+    transform: translate(-50%, -50%);
+    transition: opacity 0.15s ease, transform 0.2s ease, background-color 0.15s ease;
+    pointer-events: none;
+
+    &:hover {
+        background-color: $bg-light-hover;
+        transform: translate(
+            calc(-50% + var(--radial-x)),
+            calc(-50% + var(--radial-y))
+        ) scale(1.1);
+    }
+
+    &:active {
+        background-color: $clr-hilight;
+        color: $clr-active;
+
+        .radial-item-label {
+            color: $clr-active;
+        }
+
+        .radial-item-icon {
+            color: $clr-active;
+
+            svg {
+                color: $clr-active;
+            }
+
+            .font-icon {
+                color: $clr-active;
+            }
+        }
+    }
+}
+
+.radial-item-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    color: $clr-default;
+
+    svg {
+        width: 24px;
+        height: 24px;
+        color: inherit;
+    }
+
+    .font-icon {
+        font-family: 'pc-icon';
+        font-size: 16px;
+        color: inherit;
+    }
+}
+
+.radial-item-label {
+    font-size: 9px;
+    font-weight: 600;
+    color: $text-primary;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+// Trash item special styling
+.radial-item-trash {
+    &:hover {
+        background-color: #c0392b !important;
+
+        .radial-item-label {
+            color: white;
+        }
+
+        .radial-item-icon {
+            color: white;
+
+            svg, .font-icon {
+                color: white;
+            }
+        }
+    }
+}
+
+// Staggered animation for items
+.radial-menu-visible {
+    @for $i from 1 through 7 {
+        .radial-item:nth-child(#{$i}) {
+            transition-delay: #{($i - 1) * 0.03}s;
+        }
+    }
+}
