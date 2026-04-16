@@ -4,7 +4,7 @@ import { Events } from '../events';
 import { Scene } from '../scene';
 import { Camera } from '../camera';
 
-type ArrowDirection = 'forward' | 'backward' | 'left' | 'right';
+type ArrowDirection = 'north' | 'south' | 'east' | 'west';
 
 const tmpVec = new Vec3();
 const screenPos = new Vec3();
@@ -67,7 +67,7 @@ class WalkTool {
         this.overlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;';
         this.container.appendChild(this.overlay);
 
-        const directions: ArrowDirection[] = ['forward', 'backward', 'left', 'right'];
+        const directions: ArrowDirection[] = ['north', 'south', 'east', 'west'];
         for (const dir of directions) {
             const arrow = this.createArrow(dir);
             this.overlay.appendChild(arrow);
@@ -98,24 +98,21 @@ class WalkTool {
             opacity: 0.8;
         `;
 
-        const rotations: Record<ArrowDirection, number> = {
-            forward: 0,
-            right: 90,
-            backward: 180,
-            left: 270
-        };
-
-        el.innerHTML = `<svg width="40" height="40" viewBox="0 0 40 40" style="transform: rotate(${rotations[direction]}deg); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
+        // SVG points "up" by default; rotation is set dynamically in positionArrows
+        // based on screen-space direction from center to arrow position
+        el.innerHTML = `<svg width="40" height="40" viewBox="0 0 40 40" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
             <polygon points="20,8 32,24 26,24 26,34 14,34 14,24 8,24" fill="white" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>
         </svg>`;
 
+        // Scale the inner SVG on hover to avoid conflicting with the outer rotation transform
+        const svg = el.querySelector('svg') as SVGElement;
         el.addEventListener('pointerenter', () => {
             el.style.opacity = '1';
-            el.style.transform = el.style.transform.replace(/scale\([^)]*\)/, '') + ' scale(1.15)';
+            if (svg) svg.style.transform = 'scale(1.15) ' + svg.style.transform;
         });
         el.addEventListener('pointerleave', () => {
             el.style.opacity = '0.8';
-            el.style.transform = el.style.transform.replace(/ ?scale\([^)]*\)/, '');
+            if (svg) svg.style.transform = svg.style.transform.replace('scale(1.15) ', '');
         });
         el.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
@@ -128,34 +125,24 @@ class WalkTool {
 
     private moveInDirection(direction: ArrowDirection) {
         const camera = this.camera;
-        const worldTransform = camera.mainCamera.getWorldTransform();
 
-        const forward = worldTransform.getZ();
-        forward.y = 0;
-        forward.normalize().mulScalar(-1);
-
-        const right = worldTransform.getX();
-        right.y = 0;
-        right.normalize();
-
-        tmpVec.set(0, 0, 0);
-
+        // Fixed world-space directions (N=-Z, S=+Z, E=+X, W=-X)
         switch (direction) {
-            case 'forward':
-                tmpVec.add(forward);
+            case 'north':
+                tmpVec.set(0, 0, -1);
                 break;
-            case 'backward':
-                tmpVec.sub(forward);
+            case 'south':
+                tmpVec.set(0, 0, 1);
                 break;
-            case 'right':
-                tmpVec.add(right);
+            case 'east':
+                tmpVec.set(1, 0, 0);
                 break;
-            case 'left':
-                tmpVec.sub(right);
+            case 'west':
+                tmpVec.set(-1, 0, 0);
                 break;
         }
 
-        tmpVec.normalize().mulScalar(this.stepSize);
+        tmpVec.mulScalar(this.stepSize);
 
         const newFocal = camera.focalPoint.add(tmpVec);
         camera.setFocalPoint(newFocal);
@@ -215,30 +202,28 @@ class WalkTool {
         const camera = this.camera;
         const focalPoint = camera.focalPoint;
 
-        const worldTransform = camera.mainCamera.getWorldTransform();
-        const camForward = worldTransform.getZ().clone();
-        camForward.y = 0;
-        camForward.normalize().mulScalar(-1);
-
-        const camRight = worldTransform.getX().clone();
-        camRight.y = 0;
-        camRight.normalize();
-
-        // Place arrows on the actual scene floor, centered under the focal point
+        // Place arrows on the actual scene floor, fixed world directions
         const floorY = this.groundY;
         const arrowDist = this.stepSize * 0.7;
 
         // Ground-projected focal point (directly below focal point on the floor)
         const groundCenter = new Vec3(focalPoint.x, floorY, focalPoint.z);
 
+        // Fixed NSEW world-space positions
         const positions: Record<ArrowDirection, Vec3> = {
-            forward: new Vec3().add2(groundCenter, tmpVec.copy(camForward).mulScalar(arrowDist)),
-            backward: new Vec3().add2(groundCenter, tmpVec.copy(camForward).mulScalar(-arrowDist)),
-            left: new Vec3().add2(groundCenter, tmpVec.copy(camRight).mulScalar(-arrowDist)),
-            right: new Vec3().add2(groundCenter, tmpVec.copy(camRight).mulScalar(arrowDist))
+            north: new Vec3(groundCenter.x, floorY, groundCenter.z - arrowDist),
+            south: new Vec3(groundCenter.x, floorY, groundCenter.z + arrowDist),
+            east: new Vec3(groundCenter.x + arrowDist, floorY, groundCenter.z),
+            west: new Vec3(groundCenter.x - arrowDist, floorY, groundCenter.z)
         };
 
         const containerRect = this.container.getBoundingClientRect();
+
+        // Project center to screen for computing arrow rotation angles
+        const centerScreen = new Vec3();
+        camera.worldToScreen(groundCenter, centerScreen);
+        const cx = centerScreen.x * containerRect.width;
+        const cy = centerScreen.y * containerRect.height;
 
         for (const [dir, el] of this.arrows) {
             const worldPos = positions[dir];
@@ -255,9 +240,13 @@ class WalkTool {
                 continue;
             }
 
+            // Compute rotation so arrow SVG points away from center in screen space
+            const angleDeg = Math.atan2(px - cx, -(py - cy)) * (180 / Math.PI);
+
             el.style.display = 'flex';
             el.style.left = `${px - 24}px`;
             el.style.top = `${py - 24}px`;
+            el.style.transform = `rotate(${angleDeg}deg)`;
         }
     }
 

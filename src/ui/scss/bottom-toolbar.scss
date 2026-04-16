@@ -30,7 +30,7 @@
     }
 
     svg {
-        color: $clr-default;
+        color: inherit;
     }
 }
 
@@ -56,18 +56,10 @@
         background-color: transparent !important;
         opacity: 0.45;
     }
-
-    svg {
-        color: $clr-default;
-    }
 }
 
 .bottom-toolbar-tool {
     background-color: $bcg-primary;
-
-    svg {
-        color: $clr-default;
-    }
 
     &:hover:not(.active):not(.disabled) {
         background-color: $bg-light-hover !important;

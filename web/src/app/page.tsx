@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   Caveat,
@@ -36,12 +36,9 @@ type SceneCard = {
 type ActiveScene = {
   id: string;
   rect: DOMRect;
-  offsetX: number;
-  offsetY: number;
-  startScale: number;
-  targetWidth: number;
-  targetHeight: number;
-  startRotate: number;
+  translateX: number;
+  translateY: number;
+  scale: number;
 };
 
 type MarbleModelOption = {
@@ -323,20 +320,17 @@ const filmGrain =
 const paperTexture =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.42'/%3E%3C/svg%3E\")";
 
-const getRotationFromTransform = (transform: string) => {
-  const match = transform.match(/rotate\(([-\d.]+)deg\)/);
-  return match ? Number(match[1]) : 0;
-};
-
 function Polaroid({
   scene,
   dimmed,
-  hidden,
+  activeScene,
+  zoomed,
   onSelect,
 }: {
   scene: SceneCard;
   dimmed: boolean;
-  hidden: boolean;
+  activeScene: ActiveScene | null;
+  zoomed: boolean;
   onSelect: (id: string, rect: DOMRect) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -346,6 +340,9 @@ function Polaroid({
   const frameRef = useRef<number | null>(null);
 
   const baseTransform = scene.transform;
+  const isActive = activeScene?.id === scene.id;
+  const activeWidth = activeScene?.rect.width ?? 0;
+  const activeHeight = activeScene?.rect.height ?? 0;
 
   const applyHoverFrame = () => {
     frameRef.current = null;
@@ -399,22 +396,35 @@ function Polaroid({
       type="button"
       aria-label={`Open ${scene.title}`}
       className={[
-        "absolute cursor-pointer select-none text-left outline-none transition-[opacity,filter,transform] duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+        "select-none text-left outline-none transition-[opacity,filter,transform] ease-[cubic-bezier(0.22,1,0.36,1)]",
+        isActive ? "fixed cursor-default duration-[620ms]" : "absolute cursor-pointer duration-500",
         scene.widthClassName,
-        hidden ? "pointer-events-none opacity-0 scale-90" : dimmed ? "opacity-15" : "opacity-100",
+        dimmed ? "opacity-15" : "opacity-100",
       ].join(" ")}
       style={{
-        transform: baseTransform,
-        zIndex: scene.zIndex,
+        top: isActive ? activeScene.rect.top : undefined,
+        left: isActive ? activeScene.rect.left : undefined,
+        width: isActive ? activeWidth : undefined,
+        height: isActive ? activeHeight : undefined,
+        transform: isActive
+          ? zoomed
+            ? `translate3d(${activeScene.translateX}px, ${activeScene.translateY}px, 0) scale(${activeScene.scale}) rotate(0deg)`
+            : "translate3d(0px, 0px, 0) scale(1) rotate(0deg)"
+          : baseTransform,
+        zIndex: isActive ? 35 : scene.zIndex,
         willChange: "transform",
+        transformOrigin: isActive ? "top left" : undefined,
+        backfaceVisibility: isActive ? "hidden" : undefined,
       }}
       onPointerEnter={() => {
+        if (isActive) return;
         if (ref.current) {
           ref.current.style.transform = `${baseTransform} translateY(-12px)`;
         }
         queueHoverFrame();
       }}
       onPointerMove={(event) => {
+        if (isActive) return;
         const rect = event.currentTarget.getBoundingClientRect();
         pointerRef.current = {
           x: (event.clientX - rect.left) / rect.width,
@@ -423,9 +433,11 @@ function Polaroid({
         queueHoverFrame();
       }}
       onPointerLeave={() => {
+        if (isActive) return;
         settleHoverState();
       }}
       onClick={() => {
+        if (isActive) return;
         const rect = ref.current?.getBoundingClientRect();
         settleHoverState();
         if (rect) onSelect(scene.id, rect);
@@ -500,31 +512,23 @@ export default function Home() {
     });
   }, []);
 
-  const activeSceneData = useMemo(
-    () => sceneCards.find((scene) => scene.id === activeScene?.id) ?? null,
-    [activeScene?.id],
-  );
-
   const openScene = (id: string, rect: DOMRect) => {
     setZoomed(false);
     const targetWidth = Math.min(window.innerWidth * 0.42, 420);
     const targetHeight = rect.height * (targetWidth / rect.width);
     const rectCenterX = rect.left + rect.width / 2;
-    const rectCenterY = rect.top + rect.height / 2;
     const viewportCenterX = window.innerWidth / 2;
     const viewportCenterY = window.innerHeight / 2;
+    const scale = targetWidth / rect.width;
+    const targetLeft = viewportCenterX - targetWidth / 2;
+    const targetTop = viewportCenterY - targetHeight / 2;
 
     setActiveScene({
       id,
       rect,
-      offsetX: rectCenterX - viewportCenterX,
-      offsetY: rectCenterY - viewportCenterY,
-      startScale: rect.width / targetWidth,
-      targetWidth,
-      targetHeight,
-      startRotate: getRotationFromTransform(
-        sceneCards.find((scene) => scene.id === id)?.transform ?? "",
-      ),
+      translateX: targetLeft - rect.left,
+      translateY: targetTop - rect.top,
+      scale,
     });
 
     requestAnimationFrame(() => {
@@ -685,14 +689,15 @@ export default function Home() {
         style={{ backgroundImage: paperTexture }}
       />
 
-      <section className="relative z-10 h-full px-4 py-4 sm:px-6 sm:py-6">
+      <section className="relative h-full px-4 py-4 sm:px-6 sm:py-6">
         <div className="relative h-full w-full">
           {sceneCards.map((scene) => (
             <Polaroid
               key={scene.id}
               scene={scene}
               dimmed={activeScene !== null && activeScene.id !== scene.id}
-              hidden={activeScene?.id === scene.id}
+              activeScene={activeScene}
+              zoomed={zoomed}
               onSelect={openScene}
             />
           ))}
@@ -804,7 +809,7 @@ export default function Home() {
         />
       </section>
 
-      {activeScene && activeSceneData ? (
+      {activeScene ? (
         <div className="pointer-events-none absolute inset-0 z-30">
           <div
             className="absolute inset-0 bg-[radial-gradient(circle,rgba(0,0,0,0.16),rgba(0,0,0,0.82))] transition-opacity duration-500 ease-out"
@@ -813,53 +818,6 @@ export default function Home() {
               transitionDelay: zoomed ? "90ms" : "0ms",
             }}
           />
-          <div
-            className="fixed rounded-[14px] bg-[#f7f0e6] p-3 pb-6 shadow-[0_40px_120px_rgba(0,0,0,0.65)] transition-transform duration-[680ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
-            style={{
-              top: "50%",
-              left: "50%",
-              width: activeScene.targetWidth,
-              height: activeScene.targetHeight,
-              transform: zoomed
-                ? "translate3d(-50%, -50%, 0) scale(1) rotate(0deg)"
-                : `translate3d(calc(-50% + ${activeScene.offsetX}px), calc(-50% + ${activeScene.offsetY}px), 0) scale(${activeScene.startScale}) rotate(${activeScene.startRotate}deg)`,
-              transformOrigin: "center center",
-              borderRadius: "14px",
-              willChange: "transform",
-              backfaceVisibility: "hidden",
-            }}
-          >
-            <div
-              className="relative overflow-hidden rounded-[6px]"
-              style={{ height: "calc(100% - 4.3rem)" }}
-            >
-              <Image
-                src={activeSceneData.imageSrc}
-                alt={activeSceneData.imageAlt}
-                fill
-                sizes="42vw"
-                priority
-                className="object-cover sepia-[0.06] saturate-[0.94]"
-                style={{ objectPosition: activeSceneData.imagePosition ?? "center center" }}
-              />
-              <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.14),transparent_20%,transparent_70%,rgba(0,0,0,0.28))]" />
-              <div
-                className="absolute inset-[-10%] bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.74),transparent_38%)] mix-blend-screen transition-transform duration-[850ms] ease-out"
-                style={{ transform: zoomed ? "scale(1.46)" : "scale(1)" }}
-              />
-              <div
-                className="absolute inset-0 transition-transform duration-[900ms] ease-[cubic-bezier(0.2,0.88,0.2,1)]"
-                style={{ transform: zoomed ? "scale(1.12)" : "scale(1)" }}
-              >
-                <div className="absolute bottom-0 left-0 right-0 h-24 bg-[linear-gradient(180deg,transparent,rgba(7,7,7,0.42))]" />
-              </div>
-            </div>
-            <div className="flex h-[4.3rem] items-center justify-center px-3 text-center">
-              <div className={`${activeSceneData.titleClassName} text-center leading-none text-stone-800`}>
-                {activeSceneData.title}
-              </div>
-            </div>
-          </div>
           <button
             type="button"
             onClick={closeScene}
