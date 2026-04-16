@@ -17,7 +17,10 @@ const DETERMINISTIC_COMMANDS: Array<{ patterns: RegExp[]; action: (events: Event
     },
     {
         patterns: [/\b(clear|deselect)\b/i],
-        action: (events) => events.fire('select.none'),
+        action: async (events) => {
+            await events.invoke('selection.dropToSurface');
+            events.fire('select.none');
+        },
         label: 'deselect'
     },
     {

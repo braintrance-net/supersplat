@@ -452,9 +452,14 @@ class Splat extends Element {
     }
 
     // update world bound from local bound (synchronous)
-    private updateWorldBound() {
+    updateWorldBound() {
         this.worldBoundStorage.setFromTransformedAabb(this.localBoundStorage, this.entity.getWorldTransform());
         this.scene.boundDirty = true;
+    }
+
+    // lightweight world bound update during drag (skips expensive GPU bounds recalculation)
+    updateWorldBoundFromTransform() {
+        this.updateWorldBound();
     }
 
     // get the selection bound

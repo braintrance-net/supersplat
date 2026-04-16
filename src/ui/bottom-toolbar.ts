@@ -273,7 +273,8 @@ class BottomToolbar extends Container {
         this.append(deselect);
         this.append(deleteBtn);
 
-        deselect.dom.addEventListener('click', () => {
+        deselect.dom.addEventListener('click', async () => {
+            await events.invoke('selection.dropToSurface');
             events.fire('select.none');
             events.fire('selection.deselect');
         });

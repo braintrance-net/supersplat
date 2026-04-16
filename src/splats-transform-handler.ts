@@ -158,7 +158,9 @@ class SplatsTransformHandler implements TransformHandler {
             transformPalette.setTransform(newIdx, mat2);
         });
 
-        this.splat.updateLocalBounds();
+        // Defer full GPU bounds recalculation to end() for performance.
+        // During drag, approximate world bound from the transform instead.
+        this.splat.updateWorldBoundFromTransform();
     }
 
     async end() {

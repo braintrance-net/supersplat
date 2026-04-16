@@ -6,9 +6,11 @@ import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, U
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { MappedReadFileSystem } from './io';
+import { Pivot } from './pivot';
 import { Scene } from './scene';
 import { Splat } from './splat';
 import { serializePly } from './splat-serialize';
+import { Transform } from './transform';
 
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
@@ -214,6 +216,53 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         selectedSplats().forEach((splat) => {
             events.fire('edit.add', new SelectAllOp(splat));
         });
+    });
+
+    // Drop selected splats to the nearest surface below (gravity)
+    events.function('selection.dropToSurface', async () => {
+        const splat = events.invoke('selection') as Splat;
+        if (!splat || splat.numSelected === 0) return;
+
+        const pivot = events.invoke('pivot') as Pivot;
+        const pivotPos = pivot.transform.position;
+
+        // Get selection bottom in world space
+        const selBound = splat.selectionBound;
+        const entity = splat.entity;
+        const boundBottomLocal = new Vec3(
+            selBound.center.x,
+            selBound.center.y - selBound.halfExtents.y,
+            selBound.center.z
+        );
+        const boundBottomWorld = new Vec3();
+        entity.getLocalTransform().transformPoint(boundBottomLocal, boundBottomWorld);
+
+        // Project bottom to normalized screen coordinates
+        const screenPos = new Vec3();
+        scene.camera.worldToScreen(boundBottomWorld, screenPos);
+
+        // Only attempt if visible on screen
+        if (screenPos.x < 0 || screenPos.x > 1 || screenPos.y < 0 || screenPos.y > 1) return;
+
+        const result = await scene.camera.intersect(screenPos.x, screenPos.y);
+        if (!result) return;
+
+        // Vertical offset from selection bottom to pivot center
+        const groundOffset = pivotPos.y - boundBottomWorld.y;
+        const targetY = result.position.y + groundOffset;
+
+        // Only drop if the surface is below the current position
+        if (targetY < pivotPos.y - 0.001) {
+            const newPos = new Vec3(pivotPos.x, targetY, pivotPos.z);
+            const oldRot = pivot.transform.rotation.clone();
+            const oldScale = pivot.transform.scale.clone();
+
+            pivot.start();
+            pivot.move(new Transform(newPos, oldRot, oldScale));
+            pivot.end();
+
+            scene.forceRender = true;
+        }
     });
 
     events.on('select.none', () => {
