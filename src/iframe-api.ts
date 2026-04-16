@@ -1,16 +1,31 @@
 import { Events } from './events';
-import { Vec3 } from 'playcanvas';
+import { Quat, Vec3 } from 'playcanvas';
 
 const IS_SCENE_DIRTY = 'supersplat:is-scene-dirty';
 const LOAD_FILE = 'supersplat:load-file';
 const GET_CAMERA_STATE = 'supersplat:get-camera-state';
 const CAMERA_STATE = 'supersplat:camera-state';
+const GET_PRESET_STATE = 'supersplat:get-preset-state';
+const PRESET_STATE = 'supersplat:preset-state';
+const CAPTURE_THUMBNAIL = 'supersplat:capture-thumbnail';
+const THUMBNAIL = 'supersplat:thumbnail';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
     target: { x: number; y: number; z: number };
     fov: number;
     ortho?: boolean;
+};
+
+type PresetTransform = {
+    position: { x: number; y: number; z: number };
+    rotationEuler: { x: number; y: number; z: number };
+    scale: { x: number; y: number; z: number };
+};
+
+type PresetState = {
+    camera: CameraState;
+    splatTransform: PresetTransform | null;
 };
 
 interface IsSceneDirtyQuery {
@@ -27,6 +42,7 @@ interface LoadFileMessage {
     filename: string;
     data?: ArrayBuffer;
     camera?: CameraState;
+    transform?: PresetTransform;
 }
 
 interface GetCameraStateQuery {
@@ -36,6 +52,29 @@ interface GetCameraStateQuery {
 interface CameraStateResponse {
     type: typeof CAMERA_STATE;
     result: CameraState;
+}
+
+interface GetPresetStateQuery {
+    type: typeof GET_PRESET_STATE;
+}
+
+interface PresetStateResponse {
+    type: typeof PRESET_STATE;
+    result: PresetState;
+}
+
+interface CaptureThumbnailQuery {
+    type: typeof CAPTURE_THUMBNAIL;
+    width?: number;
+    height?: number;
+    transparentBg?: boolean;
+    showDebug?: boolean;
+}
+
+interface ThumbnailResponse {
+    type: typeof THUMBNAIL;
+    filename: string;
+    data: ArrayBuffer;
 }
 
 const isSceneDirtyQuery = (data: any): data is IsSceneDirtyQuery => {
@@ -64,6 +103,22 @@ const isGetCameraStateQuery = (data: any): data is GetCameraStateQuery => {
     );
 };
 
+const isGetPresetStateQuery = (data: any): data is GetPresetStateQuery => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === GET_PRESET_STATE
+    );
+};
+
+const isCaptureThumbnailQuery = (data: any): data is CaptureThumbnailQuery => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === CAPTURE_THUMBNAIL
+    );
+};
+
 const applyCameraState = (events: Events, camera?: CameraState) => {
     if (!camera) {
         return;
@@ -81,6 +136,44 @@ const applyCameraState = (events: Events, camera?: CameraState) => {
     if (typeof camera.ortho === 'boolean') {
         events.fire('camera.setOrtho', camera.ortho);
     }
+};
+
+const applyTransformState = (events: Events, transform?: PresetTransform) => {
+    if (!transform) {
+        return;
+    }
+
+    const splats = events.invoke('scene.splats') as Array<any>;
+    const splat = splats?.[0];
+    if (!splat) {
+        return;
+    }
+
+    splat.move(
+        new Vec3(transform.position.x, transform.position.y, transform.position.z),
+        new Quat().setFromEulerAngles(
+            transform.rotationEuler.x,
+            transform.rotationEuler.y,
+            transform.rotationEuler.z
+        ),
+        new Vec3(transform.scale.x, transform.scale.y, transform.scale.z)
+    );
+
+    const selection = events.invoke('selection');
+    const pivot = events.invoke('pivot');
+    if (selection && pivot) {
+        events.fire('selection.changed', selection);
+    }
+
+    const scene = window.scene as any;
+    if (scene) {
+        scene.forceRender = true;
+    }
+};
+
+const removeExtension = (filename: string) => {
+    const dot = filename.lastIndexOf('.');
+    return dot === -1 ? filename : filename.slice(0, dot);
 };
 
 const registerIframeApi = (events: Events) => {
@@ -106,6 +199,35 @@ const registerIframeApi = (events: Events) => {
             source.postMessage(response, event.origin);
         }
 
+        if (isGetPresetStateQuery(event.data)) {
+            const response: PresetStateResponse = {
+                type: PRESET_STATE,
+                result: events.invoke('preset.debugState') as PresetState
+            };
+            source.postMessage(response, event.origin);
+        }
+
+        if (isCaptureThumbnailQuery(event.data)) {
+            const width = event.data.width ?? 1200;
+            const height = event.data.height ?? 1440;
+            const transparentBg = event.data.transparentBg ?? false;
+            const showDebug = event.data.showDebug ?? false;
+            const data = await events.invoke('render.pngBuffer', {
+                width,
+                height,
+                transparentBg,
+                showDebug
+            }) as ArrayBuffer;
+            const splats = events.invoke('scene.splats') as Array<any>;
+            const baseName = removeExtension(splats?.[0]?.name ?? 'supersplat');
+            const response: ThumbnailResponse = {
+                type: THUMBNAIL,
+                filename: `${baseName}-thumbnail.png`,
+                data
+            };
+            source.postMessage(response, event.origin, [data]);
+        }
+
         if (isLoadFileMessage(event.data)) {
             if (event.data.data) {
                 const file = new File([event.data.data], event.data.filename);
@@ -115,6 +237,7 @@ const registerIframeApi = (events: Events) => {
                 }]);
             }
 
+            applyTransformState(events, event.data.transform);
             applyCameraState(events, event.data.camera);
         }
     });

@@ -325,6 +325,10 @@ const main = async () => {
         };
     };
 
+    events.function('preset.debugState', () => {
+        return getPresetState();
+    });
+
     window.supersplatDebug = {
         getCameraState,
         copyCameraState: async () => {

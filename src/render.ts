@@ -17,6 +17,13 @@ type ImageSettings = {
     showDebug: boolean;
 };
 
+type RenderCaptureSettings = {
+    width: number;
+    height: number;
+    transparentBg: boolean;
+    showDebug: boolean;
+};
+
 type VideoSettings = {
     startFrame: number;
     endFrame: number;
@@ -61,30 +68,24 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
         });
     };
 
-    events.function('render.offscreen', async (width: number, height: number): Promise<Uint8Array> => {
+    const captureOffscreenRgba = async ({ width, height, transparentBg, showDebug }: RenderCaptureSettings) => {
         try {
-            // start rendering to offscreen buffer only
             scene.camera.startOffscreenMode(width, height);
-            scene.camera.renderOverlays = false;
+            scene.camera.renderOverlays = showDebug;
             scene.gizmoLayer.enabled = false;
+            if (!transparentBg) {
+                scene.camera.clearPass.setClearColor(events.invoke('bgClr'));
+            }
 
-            // render the next frame
             scene.forceRender = true;
-
-            // for render to finish
             await postRender();
 
-            // cpu-side buffer to read pixels into
             const data = new Uint8Array(width * height * 4);
-
             const { mainTarget, workTarget } = scene.camera;
-
             scene.dataProcessor.copyRt(mainTarget, workTarget);
 
-            // read the rendered frame
             await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
 
-            // flip y positions to have 0,0 at the top
             let line = new Uint8Array(width * 4);
             for (let y = 0; y < height / 2; y++) {
                 line = data.slice(y * width * 4, (y + 1) * width * 4);
@@ -97,51 +98,40 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             scene.camera.endOffscreenMode();
             scene.camera.renderOverlays = true;
             scene.gizmoLayer.enabled = true;
+            scene.camera.clearPass.setClearColor(nullClr);
             scene.camera.camera.clearColor.set(0, 0, 0, 0);
         }
+    };
+
+    events.function('render.offscreen', async (width: number, height: number): Promise<Uint8Array> => {
+        return captureOffscreenRgba({
+            width,
+            height,
+            transparentBg: true,
+            showDebug: false
+        });
+    });
+
+    events.function('render.pngBuffer', async (imageSettings: RenderCaptureSettings): Promise<ArrayBuffer> => {
+        const data = await captureOffscreenRgba(imageSettings);
+
+        if (!compressor) {
+            compressor = new PngCompressor();
+        }
+
+        return compressor.compress(
+            new Uint32Array(data.buffer),
+            imageSettings.width,
+            imageSettings.height
+        );
     });
 
     events.function('render.image', async (imageSettings: ImageSettings) => {
         events.fire('startSpinner');
 
         try {
-            const { width, height, transparentBg, showDebug } = imageSettings;
-            const bgClr = events.invoke('bgClr');
-
-            // start rendering to offscreen buffer only
-            scene.camera.startOffscreenMode(width, height);
-            scene.camera.renderOverlays = showDebug;
-            scene.gizmoLayer.enabled = false;
-            if (!transparentBg) {
-                scene.camera.clearPass.setClearColor(events.invoke('bgClr'));
-            }
-
-            // render the next frame
-            scene.forceRender = true;
-
-            // for render to finish
-            await postRender();
-
-            // cpu-side buffer to read pixels into
-            const data = new Uint8Array(width * height * 4);
-
-            const { mainTarget, workTarget } = scene.camera;
-
-            scene.dataProcessor.copyRt(mainTarget, workTarget);
-
-            // read the rendered frame
-            await workTarget.colorBuffer.read(0, 0, width, height, { renderTarget: workTarget, data });
-
-            // construct the png compressor
-            if (!compressor) {
-                compressor = new PngCompressor();
-            }
-
-            const arrayBuffer = await compressor.compress(
-                new Uint32Array(data.buffer),
-                width,
-                height
-            );
+            const { width, height } = imageSettings;
+            const arrayBuffer = await events.invoke('render.pngBuffer', imageSettings) as ArrayBuffer;
 
             // construct filename
             const selected = events.invoke('selection') as Splat;
@@ -158,11 +148,6 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 message: `'${error.message ?? error}'`
             });
         } finally {
-            scene.camera.endOffscreenMode();
-            scene.camera.renderOverlays = true;
-            scene.gizmoLayer.enabled = true;
-            scene.camera.clearPass.setClearColor(nullClr);
-
             events.fire('stopSpinner');
         }
     });
