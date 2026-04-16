@@ -16,6 +16,7 @@ import logo from './playcanvas-logo.png';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
+import { RadialMenu } from './radial-menu';
 import { RightToolbar } from './right-toolbar';
 import { ScenePanel } from './scene-panel';
 import { ShortcutsPopup } from './shortcuts-popup';
@@ -23,6 +24,7 @@ import { Spinner } from './spinner';
 import { TimelinePanel } from './timeline-panel';
 import { ToastManager } from './toast';
 import { Tooltips } from './tooltips';
+import { UndoRedoToolbar } from './undo-redo-toolbar';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
 import { ViewPanel } from './view-panel';
@@ -123,7 +125,7 @@ class EditorUI {
         const tooltips = new Tooltips();
         tooltipsContainer.append(tooltips);
 
-        // bottom toolbar
+        // UI components
         const scenePanel = new ScenePanel(events, tooltips);
         const viewPanel = new ViewPanel(events, tooltips);
         const colorPanel = new ColorPanel(events, tooltips);
@@ -132,6 +134,8 @@ class EditorUI {
         const assetBrowser = new AssetBrowser(events, tooltips);
         const modeToggle = new ModeToggle(events, tooltips);
         const menu = new Menu(events);
+        const undoRedoToolbar = new UndoRedoToolbar(events, tooltips);
+        const radialMenu = new RadialMenu(events);
 
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
@@ -145,6 +149,8 @@ class EditorUI {
         canvasContainer.append(assetBrowser);
         canvasContainer.append(modeToggle);
         canvasContainer.append(menu);
+        canvasContainer.append(undoRedoToolbar);
+        canvasContainer.append(radialMenu);
 
         // view axes container
         const viewCube = new ViewCube(events);

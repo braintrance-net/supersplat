@@ -263,6 +263,9 @@ const main = async () => {
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
 
+    // Walk mode is the default tool
+    events.fire('tool.walk');
+
     window.scene = scene;
 
     // register events that need scene or other dependencies
