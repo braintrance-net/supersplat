@@ -4,12 +4,21 @@ import { VoiceCommands } from './voice-commands';
 const SILENCE_THRESHOLD = 0.01;
 const SILENCE_DURATION_MS = 2000;
 const ANALYSIS_INTERVAL_MS = 100;
+const WAKE_WORD = 'computer';
+
+declare global {
+    interface Window {
+        SpeechRecognition: typeof SpeechRecognition;
+        webkitSpeechRecognition: typeof SpeechRecognition;
+    }
+}
 
 class VoiceController {
     private events: Events;
     private commands: VoiceCommands;
     private apiKey: string;
 
+    // Recording state
     private stream: MediaStream | null = null;
     private recorder: MediaRecorder | null = null;
     private chunks: Blob[] = [];
@@ -22,6 +31,10 @@ class VoiceController {
     private analysisInterval: ReturnType<typeof setInterval> | null = null;
     private hasSpoken = false;
 
+    // Wake word listener
+    private recognition: SpeechRecognition | null = null;
+    private listening = false;
+
     constructor(events: Events) {
         this.events = events;
         const config = (window as any).supersplatConfig ?? {};
@@ -29,6 +42,7 @@ class VoiceController {
         this.commands = new VoiceCommands(events, this.apiKey);
 
         events.on('voice.toggle', () => this.toggle());
+        events.on('voice.toggleWakeWord', () => this.toggleWakeWord());
 
         // Hold-to-talk: space key fires voice.hold with down=true/false
         events.on('voice.hold', (down: boolean) => {
@@ -39,8 +53,7 @@ class VoiceController {
             }
         });
 
-        // Direct space key listener as fallback — the shortcut system may miss
-        // space if document.body doesn't have focus (e.g. after clicking a button)
+        // Direct space key listener as fallback
         const isInputFocused = () => {
             const tag = document.activeElement?.tagName;
             return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
@@ -67,6 +80,97 @@ class VoiceController {
             this.start();
         }
     }
+
+    // --- Wake word mode ---
+
+    private toggleWakeWord() {
+        if (this.listening) {
+            this.stopWakeWordListener();
+        } else {
+            this.startWakeWordListener();
+        }
+    }
+
+    private startWakeWordListener() {
+        const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognitionClass) {
+            console.error('[VoiceController] SpeechRecognition not supported in this browser');
+            return;
+        }
+
+        this.recognition = new SpeechRecognitionClass();
+        this.recognition.continuous = true;
+        this.recognition.interimResults = true;
+        this.recognition.lang = 'en-US';
+
+        this.recognition.onresult = (event: SpeechRecognitionEvent) => {
+            // Check all results for the wake word
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const text = event.results[i][0].transcript.toLowerCase();
+                if (text.includes(WAKE_WORD)) {
+                    console.log(`[VoiceController] Wake word detected: "${text}"`);
+                    // Stop the wake listener temporarily and start recording
+                    this.pauseWakeWordListener();
+                    this.start();
+                    return;
+                }
+            }
+        };
+
+        this.recognition.onend = () => {
+            // Auto-restart if still in listening mode (recognition stops randomly)
+            if (this.listening && !this.active) {
+                try {
+                    this.recognition?.start();
+                } catch { /* already started */ }
+            }
+        };
+
+        this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+            // 'no-speech' and 'aborted' are normal — just restart
+            if (event.error === 'no-speech' || event.error === 'aborted') return;
+            console.warn('[VoiceController] Recognition error:', event.error);
+        };
+
+        try {
+            this.recognition.start();
+            this.listening = true;
+            this.events.fire('voice.listening', true);
+            console.log('[VoiceController] Wake word listener active — say "Computer" to start');
+        } catch (err) {
+            console.error('[VoiceController] Failed to start wake word listener:', err);
+        }
+    }
+
+    private pauseWakeWordListener() {
+        if (this.recognition) {
+            try {
+                this.recognition.stop();
+            } catch { /* already stopped */ }
+        }
+    }
+
+    private stopWakeWordListener() {
+        this.listening = false;
+        if (this.recognition) {
+            try {
+                this.recognition.stop();
+            } catch { /* already stopped */ }
+            this.recognition = null;
+        }
+        this.events.fire('voice.listening', false);
+        console.log('[VoiceController] Wake word listener stopped');
+    }
+
+    private resumeWakeWordListener() {
+        if (this.listening && this.recognition && !this.active) {
+            try {
+                this.recognition.start();
+            } catch { /* already started */ }
+        }
+    }
+
+    // --- Recording mode ---
 
     private async start() {
         if (!this.apiKey) {
@@ -97,12 +201,10 @@ class VoiceController {
                 this.transcribe();
             };
 
-            // Request data every 250ms so we accumulate chunks while recording
             this.recorder.start(250);
             this.active = true;
             this.events.fire('voice.active', true);
 
-            // Set up silence detection
             this.startSilenceDetection();
 
             console.log('[VoiceController] Recording started (auto-stop on silence)');
@@ -129,7 +231,6 @@ class VoiceController {
 
             this.analyser.getFloatTimeDomainData(dataArray);
 
-            // RMS volume
             let sum = 0;
             for (let i = 0; i < dataArray.length; i++) {
                 sum += dataArray[i] * dataArray[i];
@@ -137,14 +238,12 @@ class VoiceController {
             const rms = Math.sqrt(sum / dataArray.length);
 
             if (rms > SILENCE_THRESHOLD) {
-                // Sound detected
                 this.hasSpoken = true;
                 if (this.silenceTimer) {
                     clearTimeout(this.silenceTimer);
                     this.silenceTimer = null;
                 }
             } else if (this.hasSpoken && !this.silenceTimer) {
-                // Silence after speech — start countdown
                 this.silenceTimer = setTimeout(() => {
                     console.log('[VoiceController] Silence detected, auto-stopping');
                     this.stop();
@@ -157,7 +256,7 @@ class VoiceController {
         this.stopSilenceDetection();
 
         if (this.recorder && this.recorder.state === 'recording') {
-            this.recorder.stop(); // triggers onstop → transcribe()
+            this.recorder.stop();
         }
         this.active = false;
         this.events.fire('voice.active', false);
@@ -180,9 +279,12 @@ class VoiceController {
         this.analyser = null;
     }
 
+    // --- Transcription ---
+
     private async transcribe() {
         if (this.chunks.length === 0) {
             this.cleanup();
+            this.resumeWakeWordListener();
             return;
         }
 
@@ -190,9 +292,9 @@ class VoiceController {
         this.chunks = [];
         this.cleanup();
 
-        // Skip tiny recordings (< 0.5s of audio is usually noise)
         if (blob.size < 5000) {
             console.log('[VoiceController] Recording too short, skipping');
+            this.resumeWakeWordListener();
             return;
         }
 
@@ -227,6 +329,7 @@ class VoiceController {
             console.error('[VoiceController] Transcription failed:', err);
         } finally {
             this.events.fire('voice.transcribing', false);
+            this.resumeWakeWordListener();
         }
     }
 
