@@ -3,6 +3,7 @@ import { Container } from '@playcanvas/pcui';
 import { Events } from '../events';
 import undoSvg from './svg/undo.svg';
 import placeSvg from './svg/place.svg';
+import trashSvg from './svg/trash.svg';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -45,8 +46,8 @@ class RadialMenu extends Container {
                 label: 'Clear',
                 icon: null,
                 fontIcon: 'E132',
-                action: () => {
-                    events.invoke('selection.dropToSurface');
+                action: async () => {
+                    await events.invoke('selection.dropToSurface');
                     events.fire('select.none');
                     events.fire('selection.deselect');
                 }
@@ -97,7 +98,7 @@ class RadialMenu extends Container {
             {
                 id: 'radial-trash',
                 label: 'Delete',
-                icon: null,
+                icon: trashSvg,
                 className: 'radial-item-trash',
                 action: () => {
                     events.fire('select.delete');
