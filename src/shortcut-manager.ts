@@ -20,8 +20,11 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'select.hide': { keys: ['h'] },
     'select.unhide': { keys: ['h'], shift: 'required' },
 
-    // Playback
-    'timeline.togglePlay': { keys: [' '] },
+    // Voice (hold space to talk)
+    'voice.hold': { keys: [' '], held: true },
+
+    // Playback (space reassigned to voice; use P for play if needed)
+    // 'timeline.togglePlay': { keys: [' '] },
     'timeline.prevFrame': { keys: [','], repeat: true },
     'timeline.nextFrame': { keys: ['.'], repeat: true },
     'timeline.prevKey': { keys: ['<'], shift: 'optional', repeat: true },
@@ -35,14 +38,18 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'select.invert': { keys: ['i'], ctrl: 'required' },
     'select.delete': { keys: ['Delete', 'Backspace'] },
 
-    // Tools
-    'tool.move': { keys: ['1'] },
-    'tool.rotate': { keys: ['2'] },
-    'tool.scale': { keys: ['3'] },
-    'tool.rectSelection': { keys: ['r'] },
+    // Tools (number keys for quick access)
+    'tool.walk': { keys: ['1'] },
+    'tool.boxerSelection': { keys: ['2'] },
+    'tool.sam3Selection': { keys: ['3'] },
+    'tool.move': { keys: ['4'] },
+    'tool.rotate': { keys: ['5'] },
+    'tool.scale': { keys: ['6'] },
+    'tool.rectSelection': { keys: ['7'] },
+    'tool.brushSelection': { keys: ['8'] },
+    'tool.measure': { keys: ['9'] },
     'tool.lassoSelection': { keys: ['l'] },
     'tool.polygonSelection': { keys: ['p'] },
-    'tool.brushSelection': { keys: ['b'] },
     'tool.floodSelection': { keys: ['o'] },
     'tool.eyedropperSelection': { keys: ['e'], ctrl: 'required', capture: true },
     'tool.brushSelection.smaller': { keys: ['['], repeat: true },

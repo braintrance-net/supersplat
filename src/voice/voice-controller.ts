@@ -29,6 +29,15 @@ class VoiceController {
         this.commands = new VoiceCommands(events, this.apiKey);
 
         events.on('voice.toggle', () => this.toggle());
+
+        // Hold-to-talk: space key fires voice.hold with down=true/false
+        events.on('voice.hold', (down: boolean) => {
+            if (down && !this.active) {
+                this.start();
+            } else if (!down && this.active) {
+                this.stop();
+            }
+        });
     }
 
     toggle() {

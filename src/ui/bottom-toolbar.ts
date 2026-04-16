@@ -12,6 +12,7 @@ import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
 import assetBrowserSvg from './svg/asset-browser.svg';
 import micSvg from './svg/microphone.svg';
+import walkSvg from './svg/walk.svg';
 import boxerIconSvg from './svg/select-boxer.svg';
 import samIconSvg from './svg/select-sam.svg';
 import sphereSvg from './svg/select-sphere.svg';
@@ -90,6 +91,11 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const walk = new Button({
+            id: 'bottom-toolbar-walk',
+            class: 'bottom-toolbar-tool'
+        });
+
         const sam3 = new Button({
             id: 'bottom-toolbar-sam3',
             class: 'bottom-toolbar-tool'
@@ -164,6 +170,7 @@ class BottomToolbar extends Container {
 
         assetBrowserBtn.dom.appendChild(createSvg(assetBrowserSvg));
         mic.dom.appendChild(createSvg(micSvg));
+        walk.dom.appendChild(createSvg(walkSvg));
         boxer.dom.appendChild(createSvg(boxerIconSvg));
         sam3.dom.appendChild(createSvg(samIconSvg));
 
@@ -171,6 +178,10 @@ class BottomToolbar extends Container {
 
         this.append(undo);
         this.append(redo);
+        this.append(new Element({ class: 'bottom-toolbar-separator' }));
+        this.append(walk);
+        this.append(boxer);
+        this.append(sam3);
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(picker);
         this.append(lasso);
@@ -181,8 +192,6 @@ class BottomToolbar extends Container {
         this.append(new Element({ class: 'bottom-toolbar-separator' }));
         this.append(sphere);
         this.append(box);
-        this.append(boxer);
-        this.append(sam3);
 
         // AI text prompt input — visible when Boxer or SAM3 is active
         const aiInputWrap = document.createElement('div');
@@ -298,6 +307,7 @@ class BottomToolbar extends Container {
         box.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         assetBrowserBtn.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
         mic.dom.addEventListener('click', () => events.fire('voice.toggle'));
+        walk.dom.addEventListener('click', () => events.fire('tool.walk'));
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
         sam3.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
         translate.dom.addEventListener('click', () => events.fire('tool.move'));
@@ -315,6 +325,7 @@ class BottomToolbar extends Container {
         });
 
         events.on('tool.activated', (toolName: string) => {
+            walk.class[toolName === 'walk' ? 'add' : 'remove']('active');
             picker.class[toolName === 'rectSelection' ? 'add' : 'remove']('active');
             brush.class[toolName === 'brushSelection' ? 'add' : 'remove']('active');
             flood.class[toolName === 'floodSelection' ? 'add' : 'remove']('active');
@@ -376,7 +387,8 @@ class BottomToolbar extends Container {
 
         // register tooltips
         tooltips.register(assetBrowserBtn, 'Asset Browser');
-        tooltips.register(mic, 'Voice Control');
+        tooltips.register(mic, 'Voice Control (hold Space)');
+        tooltips.register(walk, tooltip('Walk Mode', 'tool.walk'));
         tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
         tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
         tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rect', 'tool.rectSelection'));
@@ -384,12 +396,14 @@ class BottomToolbar extends Container {
         tooltips.register(polygon, tooltip('tooltip.bottom-toolbar.polygon', 'tool.polygonSelection'));
         tooltips.register(brush, tooltip('tooltip.bottom-toolbar.brush', 'tool.brushSelection'));
         tooltips.register(flood, tooltip('tooltip.bottom-toolbar.flood', 'tool.floodSelection'));
+        tooltips.register(boxer, tooltip('Boxer AI', 'tool.boxerSelection'));
+        tooltips.register(sam3, tooltip('SAM3 AI', 'tool.sam3Selection'));
         tooltips.register(sphere, tooltip('tooltip.bottom-toolbar.sphere'));
         tooltips.register(box, tooltip('tooltip.bottom-toolbar.box'));
         tooltips.register(translate, tooltip('tooltip.bottom-toolbar.translate', 'tool.move'));
         tooltips.register(rotate, tooltip('tooltip.bottom-toolbar.rotate', 'tool.rotate'));
         tooltips.register(scale, tooltip('tooltip.bottom-toolbar.scale', 'tool.scale'));
-        tooltips.register(measure, tooltip('tooltip.bottom-toolbar.measure'));
+        tooltips.register(measure, tooltip('tooltip.bottom-toolbar.measure', 'tool.measure'));
         tooltips.register(coordSpace, tooltip('tooltip.bottom-toolbar.local-space', 'tool.toggleCoordSpace'));
         tooltips.register(origin, tooltip('tooltip.bottom-toolbar.bound-center'));
         tooltips.register(eyedropper, tooltip('tooltip.bottom-toolbar.eyedropper', 'tool.eyedropperSelection'));

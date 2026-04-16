@@ -1,16 +1,16 @@
-import { Vec3, math, Ray } from 'playcanvas';
+import { Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Scene } from '../scene';
 import { Camera } from '../camera';
 
-// Arrow directions relative to camera forward (projected onto ground plane)
 type ArrowDirection = 'forward' | 'backward' | 'left' | 'right';
 
 const tmpVec = new Vec3();
-const tmpVec2 = new Vec3();
 const screenPos = new Vec3();
-const ray = new Ray();
+
+// Max pixels the pointer can move between down/up and still count as a click
+const CLICK_THRESHOLD = 5;
 
 class WalkTool {
     private events: Events;
@@ -20,7 +20,11 @@ class WalkTool {
     private overlay: HTMLElement | null = null;
     private animFrame: number | null = null;
     private active = false;
-    private pointerHandler: ((e: PointerEvent) => void) | null = null;
+
+    // Pointer tracking for distinguishing clicks from drags
+    private pointerDownPos: { x: number; y: number } | null = null;
+    private onPointerDownBound: ((e: PointerEvent) => void) | null = null;
+    private onPointerUpBound: ((e: PointerEvent) => void) | null = null;
 
     constructor(events: Events, scene: Scene, container: HTMLElement) {
         this.events = events;
@@ -48,8 +52,13 @@ class WalkTool {
     }
 
     private get stepSize(): number {
-        // Step size proportional to scene scale
         return this.camera.sceneRadius * 0.4;
+    }
+
+    /** Bottom of the scene bounding box — the actual floor level */
+    private get groundY(): number {
+        const bound = this.scene.bound;
+        return bound.center.y - bound.halfExtents.y;
     }
 
     private createOverlay() {
@@ -65,9 +74,11 @@ class WalkTool {
             this.arrows.set(dir, arrow);
         }
 
-        // Handle clicks on the scene for click-to-move
-        this.pointerHandler = (e: PointerEvent) => this.onPointerDown(e);
-        this.container.addEventListener('pointerdown', this.pointerHandler);
+        // Track pointer down/up to distinguish clicks from drags
+        this.onPointerDownBound = (e: PointerEvent) => this.onPointerDown(e);
+        this.onPointerUpBound = (e: PointerEvent) => this.onPointerUp(e);
+        this.container.addEventListener('pointerdown', this.onPointerDownBound);
+        this.container.addEventListener('pointerup', this.onPointerUpBound);
     }
 
     private createArrow(direction: ArrowDirection): HTMLElement {
@@ -87,7 +98,6 @@ class WalkTool {
             opacity: 0.8;
         `;
 
-        // Rotation angles for each direction
         const rotations: Record<ArrowDirection, number> = {
             forward: 0,
             right: 90,
@@ -95,7 +105,6 @@ class WalkTool {
             left: 270
         };
 
-        // Chevron SVG arrow (Google Maps style)
         el.innerHTML = `<svg width="40" height="40" viewBox="0 0 40 40" style="transform: rotate(${rotations[direction]}deg); filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));">
             <polygon points="20,8 32,24 26,24 26,34 14,34 14,24 8,24" fill="white" stroke="rgba(0,0,0,0.3)" stroke-width="1"/>
         </svg>`;
@@ -121,10 +130,9 @@ class WalkTool {
         const camera = this.camera;
         const worldTransform = camera.mainCamera.getWorldTransform();
 
-        // Get camera forward projected onto ground plane (XZ)
         const forward = worldTransform.getZ();
         forward.y = 0;
-        forward.normalize().mulScalar(-1); // Camera Z is backward
+        forward.normalize().mulScalar(-1);
 
         const right = worldTransform.getX();
         right.y = 0;
@@ -149,21 +157,35 @@ class WalkTool {
 
         tmpVec.normalize().mulScalar(this.stepSize);
 
-        // Move focal point (camera follows)
         const newFocal = camera.focalPoint.add(tmpVec);
         camera.setFocalPoint(newFocal);
         this.scene.forceRender = true;
     }
 
-    private async onPointerDown(e: PointerEvent) {
-        // Ignore if clicking on an arrow
+    private onPointerDown(e: PointerEvent) {
+        // Ignore if clicking on an arrow element
+        if ((e.target as HTMLElement).closest('.walk-arrow')) return;
+        // Record where the pointer went down
+        this.pointerDownPos = { x: e.clientX, y: e.clientY };
+    }
+
+    private async onPointerUp(e: PointerEvent) {
+        if (!this.pointerDownPos) return;
+
+        const dx = e.clientX - this.pointerDownPos.x;
+        const dy = e.clientY - this.pointerDownPos.y;
+        this.pointerDownPos = null;
+
+        // Only treat as click if pointer barely moved (not a drag)
+        if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESHOLD) return;
+
+        // Ignore if the up target is an arrow
         if ((e.target as HTMLElement).closest('.walk-arrow')) return;
 
         const rect = this.container.getBoundingClientRect();
         const nx = (e.clientX - rect.left) / rect.width;
         const ny = (e.clientY - rect.top) / rect.height;
 
-        // Raycast into scene to find hit point
         const result = await this.camera.intersect(nx, ny);
         if (result) {
             this.moveTowardPoint(result.position, result.distance);
@@ -173,17 +195,12 @@ class WalkTool {
     private moveTowardPoint(worldPos: Vec3, currentDistance: number) {
         const camera = this.camera;
 
-        // Move 60% closer to the clicked point
         const closerDistance = currentDistance * 0.4;
         const minDistance = camera.sceneRadius * 0.05;
         const targetDistance = Math.max(closerDistance, minDistance);
 
-        // Set the clicked point as the new focal point
         camera.setFocalPoint(worldPos);
-
-        // Set closer distance
         camera.setDistance(targetDistance / camera.sceneRadius * camera.fovFactor);
-
         this.scene.forceRender = true;
     }
 
@@ -198,7 +215,6 @@ class WalkTool {
         const camera = this.camera;
         const focalPoint = camera.focalPoint;
 
-        // Get camera forward on ground plane
         const worldTransform = camera.mainCamera.getWorldTransform();
         const camForward = worldTransform.getZ().clone();
         camForward.y = 0;
@@ -208,21 +224,19 @@ class WalkTool {
         camRight.y = 0;
         camRight.normalize();
 
-        // Place arrows on the ground at the focal point, offset in each direction
+        // Place arrows on the actual scene floor, centered under the focal point
+        const floorY = this.groundY;
         const arrowDist = this.stepSize * 0.7;
-        const groundY = focalPoint.y - camera.sceneRadius * 0.3; // Slightly below focal point
+
+        // Ground-projected focal point (directly below focal point on the floor)
+        const groundCenter = new Vec3(focalPoint.x, floorY, focalPoint.z);
 
         const positions: Record<ArrowDirection, Vec3> = {
-            forward: new Vec3().add2(focalPoint, tmpVec.copy(camForward).mulScalar(arrowDist)),
-            backward: new Vec3().add2(focalPoint, tmpVec.copy(camForward).mulScalar(-arrowDist)),
-            left: new Vec3().add2(focalPoint, tmpVec.copy(camRight).mulScalar(-arrowDist)),
-            right: new Vec3().add2(focalPoint, tmpVec.copy(camRight).mulScalar(arrowDist))
+            forward: new Vec3().add2(groundCenter, tmpVec.copy(camForward).mulScalar(arrowDist)),
+            backward: new Vec3().add2(groundCenter, tmpVec.copy(camForward).mulScalar(-arrowDist)),
+            left: new Vec3().add2(groundCenter, tmpVec.copy(camRight).mulScalar(-arrowDist)),
+            right: new Vec3().add2(groundCenter, tmpVec.copy(camRight).mulScalar(arrowDist))
         };
-
-        // Set ground Y for all positions
-        for (const key of Object.keys(positions) as ArrowDirection[]) {
-            positions[key].y = groundY;
-        }
 
         const containerRect = this.container.getBoundingClientRect();
 
@@ -230,12 +244,13 @@ class WalkTool {
             const worldPos = positions[dir];
             camera.worldToScreen(worldPos, screenPos);
 
-            // Convert normalized coords to pixel coords
             const px = screenPos.x * containerRect.width;
             const py = screenPos.y * containerRect.height;
 
-            // Hide if behind camera
-            if (screenPos.z < 0 || screenPos.z > 1) {
+            // Hide if behind camera or outside viewport
+            if (screenPos.z < 0 || screenPos.z > 1 ||
+                px < -24 || px > containerRect.width + 24 ||
+                py < -24 || py > containerRect.height + 24) {
                 el.style.display = 'none';
                 continue;
             }
@@ -247,15 +262,20 @@ class WalkTool {
     }
 
     private destroyOverlay() {
-        if (this.pointerHandler) {
-            this.container.removeEventListener('pointerdown', this.pointerHandler);
-            this.pointerHandler = null;
+        if (this.onPointerDownBound) {
+            this.container.removeEventListener('pointerdown', this.onPointerDownBound);
+            this.onPointerDownBound = null;
+        }
+        if (this.onPointerUpBound) {
+            this.container.removeEventListener('pointerup', this.onPointerUpBound);
+            this.onPointerUpBound = null;
         }
         if (this.overlay) {
             this.overlay.remove();
             this.overlay = null;
         }
         this.arrows.clear();
+        this.pointerDownPos = null;
     }
 }
 

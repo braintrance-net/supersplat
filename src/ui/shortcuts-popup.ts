@@ -68,26 +68,30 @@ const popupConfig: Record<string, CategoryConfig> = {
     tools: {
         localeKey: 'popup.shortcuts.tools',
         shortcuts: [
+            { id: 'tool.walk', localeKey: 'Walk Mode' },
+            { id: 'tool.boxerSelection', localeKey: 'Boxer AI Selection' },
+            { id: 'tool.sam3Selection', localeKey: 'SAM3 AI Selection' },
             { id: 'tool.move', localeKey: 'popup.shortcuts.move' },
             { id: 'tool.rotate', localeKey: 'popup.shortcuts.rotate' },
             { id: 'tool.scale', localeKey: 'popup.shortcuts.scale' },
             { id: 'tool.rectSelection', localeKey: 'popup.shortcuts.rect-selection' },
+            { id: 'tool.brushSelection', localeKey: 'popup.shortcuts.brush-selection' },
+            { id: 'tool.measure', localeKey: 'Measure' },
             { id: 'tool.lassoSelection', localeKey: 'popup.shortcuts.lasso-selection' },
             { id: 'tool.polygonSelection', localeKey: 'popup.shortcuts.polygon-selection' },
-            { id: 'tool.brushSelection', localeKey: 'popup.shortcuts.brush-selection' },
             { id: 'tool.floodSelection', localeKey: 'popup.shortcuts.flood-selection' },
             { id: 'tool.eyedropperSelection', localeKey: 'popup.shortcuts.eyedropper-selection' },
             { id: 'tool.deactivate', localeKey: 'popup.shortcuts.deactivate-tool' },
             { id: 'tool.toggleCoordSpace', localeKey: 'popup.shortcuts.toggle-gizmo-coordinate-space' }
         ],
         hints: [
-            { displayKey: '[ ]', localeKey: 'popup.shortcuts.brush-size' }
+            { displayKey: '[ ]', localeKey: 'popup.shortcuts.brush-size' },
+            { displayKey: 'Space (hold)', localeKey: 'Hold to talk' }
         ]
     },
     playback: {
         localeKey: 'popup.shortcuts.playback',
         shortcuts: [
-            { id: 'timeline.togglePlay', localeKey: 'popup.shortcuts.play-pause' },
             { id: 'timeline.prevFrame', localeKey: 'popup.shortcuts.prev-frame' },
             { id: 'timeline.nextFrame', localeKey: 'popup.shortcuts.next-frame' },
             { id: 'timeline.prevKey', localeKey: 'popup.shortcuts.prev-key' },

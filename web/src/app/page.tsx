@@ -46,7 +46,6 @@ type ActiveScene = {
 
 type MarbleModelOption = {
   label: string;
-  helper: string;
   value: string;
 };
 
@@ -65,25 +64,28 @@ type WorldgenStatusResponse = {
   primarySpzUrl?: string | null;
 };
 
+const supportedWorldgenImageExtensions = [".bmp", ".jpeg", ".jpg", ".png", ".tiff", ".webp"];
+const supportedWorldgenVideoExtensions = [".avi", ".m4v", ".mkv", ".mov", ".mp4", ".webm"];
+const supportedWorldgenExtensions = [
+  ...supportedWorldgenImageExtensions,
+  ...supportedWorldgenVideoExtensions,
+];
+
 const marbleModelOptions: MarbleModelOption[] = [
   {
     label: "Draft",
-    helper: "Default fast pass",
     value: "marble-1.0-draft",
   },
   {
     label: "Mini",
-    helper: "Balanced speed",
     value: "marble-1.0",
   },
   {
     label: "1.1",
-    helper: "Standard quality",
     value: "marble-1.1",
   },
   {
     label: "Pro",
-    helper: "Highest quality",
     value: "marble-1.1-plus",
   },
 ];
@@ -338,11 +340,58 @@ function Polaroid({
   onSelect: (id: string, rect: DOMRect) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
-  const [hovered, setHovered] = useState(false);
-  const [pointer, setPointer] = useState({ x: 0.5, y: 0.5 });
+  const cardRef = useRef<HTMLDivElement>(null);
+  const glareRef = useRef<HTMLDivElement>(null);
+  const pointerRef = useRef({ x: 0.5, y: 0.5 });
+  const frameRef = useRef<number | null>(null);
 
-  const rotateX = (pointer.y - 0.5) * -10;
-  const rotateY = (pointer.x - 0.5) * 12;
+  const baseTransform = scene.transform;
+
+  const applyHoverFrame = () => {
+    frameRef.current = null;
+
+    const card = cardRef.current;
+    const glare = glareRef.current;
+    if (!card || !glare) return;
+
+    const { x, y } = pointerRef.current;
+    const rotateX = (y - 0.5) * -10;
+    const rotateY = (x - 0.5) * 12;
+
+    card.style.transform = `perspective(1100px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(1.035)`;
+    glare.style.transform = `translate(${(x - 0.5) * 24}px, ${(y - 0.5) * 24}px)`;
+  };
+
+  const queueHoverFrame = () => {
+    if (frameRef.current !== null) return;
+    frameRef.current = window.requestAnimationFrame(applyHoverFrame);
+  };
+
+  const settleHoverState = () => {
+    pointerRef.current = { x: 0.5, y: 0.5 };
+    if (frameRef.current !== null) {
+      window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+    }
+    if (ref.current) {
+      ref.current.style.transform = baseTransform;
+    }
+    if (cardRef.current) {
+      cardRef.current.style.transform =
+        "perspective(1100px) rotateX(0deg) rotateY(0deg) scale(1)";
+    }
+    if (glareRef.current) {
+      glareRef.current.style.transform = "translate(0px, 0px)";
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+      }
+    };
+  }, []);
 
   return (
     <button
@@ -355,33 +404,37 @@ function Polaroid({
         hidden ? "pointer-events-none opacity-0 scale-90" : dimmed ? "opacity-15" : "opacity-100",
       ].join(" ")}
       style={{
-        transform: `${scene.transform} ${hovered ? "translateY(-12px)" : ""}`,
+        transform: baseTransform,
         zIndex: scene.zIndex,
+        willChange: "transform",
       }}
-      onPointerEnter={() => setHovered(true)}
+      onPointerEnter={() => {
+        if (ref.current) {
+          ref.current.style.transform = `${baseTransform} translateY(-12px)`;
+        }
+        queueHoverFrame();
+      }}
       onPointerMove={(event) => {
         const rect = event.currentTarget.getBoundingClientRect();
-        setPointer({
+        pointerRef.current = {
           x: (event.clientX - rect.left) / rect.width,
           y: (event.clientY - rect.top) / rect.height,
-        });
+        };
+        queueHoverFrame();
       }}
       onPointerLeave={() => {
-        setHovered(false);
-        setPointer({ x: 0.5, y: 0.5 });
+        settleHoverState();
       }}
       onClick={() => {
         const rect = ref.current?.getBoundingClientRect();
+        settleHoverState();
         if (rect) onSelect(scene.id, rect);
       }}
     >
       <div
+        ref={cardRef}
         className="rounded-[10px] bg-[#f7f0e6] p-3 pb-6 shadow-[0_28px_80px_rgba(0,0,0,0.42),0_8px_18px_rgba(0,0,0,0.18)] transition-transform duration-300 ease-out"
-        style={{
-          transform: hovered
-            ? `perspective(1100px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) scale(1.035)`
-            : "perspective(1100px) rotateX(0deg) rotateY(0deg) scale(1)",
-        }}
+        style={{ transform: "perspective(1100px) rotateX(0deg) rotateY(0deg) scale(1)", willChange: "transform" }}
       >
         <div
           className="relative aspect-[4/4.8] overflow-hidden rounded-[4px] border border-black/10 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2)]"
@@ -396,13 +449,13 @@ function Polaroid({
           />
           <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.18),transparent_24%,transparent_72%,rgba(0,0,0,0.18))]" />
           <div
+            ref={glareRef}
             className="absolute inset-[-12%] opacity-55 mix-blend-screen transition-transform duration-300 ease-out"
             style={{
               background:
                 "radial-gradient(circle at 50% 50%, rgba(255,255,255,0.56), transparent 38%)",
-              transform: hovered
-                ? `translate(${(pointer.x - 0.5) * 24}px, ${(pointer.y - 0.5) * 24}px)`
-                : "translate(0px, 0px)",
+              transform: "translate(0px, 0px)",
+              willChange: "transform",
             }}
           />
           <div
@@ -548,6 +601,23 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const extension = file.name.includes(".")
+      ? `.${file.name.split(".").pop()?.toLowerCase() ?? ""}`
+      : "";
+
+    if (!supportedWorldgenExtensions.includes(extension)) {
+      setWorldgenFileName(file.name);
+      setWorldgenResultUrl(null);
+      setWorldgenOperationId(null);
+      setWorldgenProgress("failed");
+      setWorldgenError(
+        `Unsupported file type '${extension || "unknown"}'. Accepted images: ${supportedWorldgenImageExtensions.join(", ")}. Accepted videos: ${supportedWorldgenVideoExtensions.join(", ")}.`,
+      );
+      setIsWorldgenLoading(false);
+      e.target.value = "";
+      return;
+    }
+
     setWorldgenError(null);
     setWorldgenResultUrl(null);
     setWorldgenOperationId(null);
@@ -648,56 +718,38 @@ export default function Home() {
               <p className="mt-3 text-sm uppercase tracking-[0.45em] text-white/56 sm:text-base">
                 Freeze the feeling
               </p>
-              <p className="mx-auto mt-5 max-w-md text-sm leading-6 text-white/72 sm:text-base">
-                Hover a print to catch the parallax. Click one to lift it off the board and fall into the scene.
-              </p>
 
               <div className="mx-auto mt-7 max-w-[520px] rounded-[24px] border border-white/10 bg-black/20 p-4 text-left">
-                <div className="text-[0.68rem] uppercase tracking-[0.32em] text-white/46">
-                  Upload Type
-                </div>
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <div className="grid gap-3 sm:grid-cols-2">
                   <button
                     type="button"
                     onClick={handleSplatUpload}
-                    className="rounded-[22px] border border-white/16 bg-white/92 px-5 py-4 text-left text-black transition hover:scale-[1.02] hover:bg-white"
+                    className="rounded-[22px] border border-white/16 bg-white/92 px-5 py-5 text-left text-black transition hover:scale-[1.02] hover:bg-white"
                   >
-                    <div className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-black/56">
-                      Existing Splats
-                    </div>
-                    <div className="mt-2 text-lg font-semibold leading-tight">
-                      Upload `.ply`, `.splat`, `.spz`
-                    </div>
-                    <div className="mt-2 text-sm leading-5 text-black/62">
-                      Open an existing Gaussian splat scene directly in the editor.
+                    <div className="text-lg font-semibold leading-tight">
+                      Upload Splat
                     </div>
                   </button>
 
                   <button
                     type="button"
                     onClick={handleWorldgenUpload}
-                    className="rounded-[22px] border border-white/20 bg-black/18 px-5 py-4 text-left text-white/88 backdrop-blur-md transition hover:scale-[1.02] hover:border-white/42 hover:text-white"
+                    className="rounded-[22px] border border-white/20 bg-black/18 px-5 py-5 text-left text-white/88 backdrop-blur-md transition hover:scale-[1.02] hover:border-white/42 hover:text-white"
                   >
-                    <div className="text-[0.7rem] font-semibold uppercase tracking-[0.24em] text-white/46">
-                      Generate From Media
-                    </div>
-                    <div className="mt-2 text-lg font-semibold leading-tight">
-                      Upload image or video
-                    </div>
-                    <div className="mt-2 text-sm leading-5 text-white/62">
-                      Inpaint the source, generate a world, then open the result in the editor.
+                    <div className="text-lg font-semibold leading-tight">
+                      Upload 2D
                     </div>
                   </button>
                 </div>
 
-                <div className="mt-4">
+                <div className="mt-4 flex items-center gap-3 rounded-[18px] border border-white/8 bg-white/4 px-3 py-3">
                   <label
                     htmlFor="marble-model"
-                    className="text-[0.68rem] uppercase tracking-[0.32em] text-white/46"
+                    className="shrink-0 text-[0.68rem] uppercase tracking-[0.32em] text-white/46"
                   >
                     Marble Model
                   </label>
-                  <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                  <div className="grid flex-1 grid-cols-4 gap-2">
                     {marbleModelOptions.map((option) => {
                       const isSelected = option.value === selectedModel;
                       return (
@@ -706,7 +758,7 @@ export default function Home() {
                           type="button"
                           onClick={() => setSelectedModel(option.value)}
                           className={[
-                            "rounded-[18px] border px-3 py-3 text-left transition",
+                            "rounded-[14px] border px-3 py-2 text-center transition",
                             isSelected
                               ? "border-[#f4d6b2] bg-[#f4d6b2] text-black"
                               : "border-white/12 bg-white/6 text-white/78 hover:border-white/28 hover:bg-white/10",
@@ -715,9 +767,6 @@ export default function Home() {
                           <div className="text-xs font-semibold uppercase tracking-[0.22em]">
                             {option.label}
                           </div>
-                          <div className={`mt-1 text-xs leading-4 ${isSelected ? "text-black/66" : "text-white/48"}`}>
-                            {option.helper}
-                          </div>
                         </button>
                       );
                     })}
@@ -725,11 +774,11 @@ export default function Home() {
                 </div>
               </div>
 
-              <div className="mt-5 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <div className="mt-5 flex items-center justify-center">
                 <button
                   type="button"
                   onClick={() => router.push("/editor")}
-                  className="flex h-13 min-w-[184px] items-center justify-center rounded-full border border-white/20 bg-black/18 px-7 text-sm font-semibold uppercase tracking-[0.22em] text-white/82 backdrop-blur-md transition hover:scale-[1.03] hover:border-white/42 hover:text-white"
+                  className="inline-flex items-center justify-center rounded-full border border-white/10 bg-white/5 px-5 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.24em] text-white/52 transition hover:border-white/22 hover:bg-white/8 hover:text-white/82"
                 >
                   Open Editor
                 </button>
@@ -749,7 +798,7 @@ export default function Home() {
         <input
           ref={worldgenInputRef}
           type="file"
-          accept="image/*,video/*"
+          accept={supportedWorldgenExtensions.join(",")}
           onChange={handleWorldgenFileChange}
           className="hidden"
         />
@@ -761,11 +810,11 @@ export default function Home() {
             className="absolute inset-0 bg-[radial-gradient(circle,rgba(0,0,0,0.16),rgba(0,0,0,0.82))] transition-opacity duration-500 ease-out"
             style={{
               opacity: zoomed ? 1 : 0,
-              transitionDelay: zoomed ? "120ms" : "0ms",
+              transitionDelay: zoomed ? "90ms" : "0ms",
             }}
           />
           <div
-            className="fixed rounded-[14px] bg-[#f7f0e6] p-3 pb-6 shadow-[0_40px_120px_rgba(0,0,0,0.65)] transition-transform duration-[850ms] ease-[cubic-bezier(0.2,0.88,0.2,1)]"
+            className="fixed rounded-[14px] bg-[#f7f0e6] p-3 pb-6 shadow-[0_40px_120px_rgba(0,0,0,0.65)] transition-transform duration-[680ms] ease-[cubic-bezier(0.16,1,0.3,1)]"
             style={{
               top: "50%",
               left: "50%",
