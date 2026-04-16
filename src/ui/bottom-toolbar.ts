@@ -4,8 +4,18 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { localize } from './localization';
 import assetBrowserSvg from './svg/asset-browser.svg';
+import brushSvg from './svg/select-brush.svg';
+import eyedropperSvg from './svg/select-eyedropper.svg';
+import floodSvg from './svg/select-flood.svg';
+import lassoSvg from './svg/select-lasso.svg';
 import micSvg from './svg/microphone.svg';
+import pickerSvg from './svg/select-picker.svg';
+import polygonSvg from './svg/select-poly.svg';
+import redoSvg from './svg/redo.svg';
+import sphereSvg from './svg/select-sphere.svg';
+import boxSvg from './svg/show-hide-splats.svg';
 import touchSvg from './svg/touch.svg';
+import undoSvg from './svg/undo.svg';
 import { Tooltips } from './tooltips';
 
 const createSvg = (svgString: string) => {
@@ -26,33 +36,68 @@ class BottomToolbar extends Container {
             event.stopPropagation();
         });
 
-        // Voice button
+        const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
+        const tooltip = (localeKey: string, shortcutId?: string) => {
+            const text = localize(localeKey);
+            if (shortcutId) {
+                const shortcut = shortcutManager.formatShortcut(shortcutId);
+                if (shortcut) {
+                    return `${text} ( ${shortcut} )`;
+                }
+            }
+            return text;
+        };
+
+        const simplifiedGroup = new Element({
+            id: 'bottom-toolbar-simplified'
+        });
+
+        const advancedGroup = new Element({
+            id: 'bottom-toolbar-advanced'
+        });
+
+        this.append(simplifiedGroup);
+        this.append(advancedGroup);
+
+        const appendSimplified = (node: HTMLElement | Element) => {
+            if (node instanceof Element) {
+                simplifiedGroup.dom.appendChild(node.dom);
+            } else {
+                simplifiedGroup.dom.appendChild(node);
+            }
+        };
+
+        const appendAdvanced = (node: HTMLElement | Element) => {
+            if (node instanceof Element) {
+                advancedGroup.dom.appendChild(node.dom);
+            } else {
+                advancedGroup.dom.appendChild(node);
+            }
+        };
+
+        // Simplified toolbar
         const mic = new Button({
             id: 'bottom-toolbar-mic',
             class: 'bottom-toolbar-tool'
         });
 
-        // Touch (SAM3) button
         const touch = new Button({
             id: 'bottom-toolbar-touch',
             class: 'bottom-toolbar-tool'
         });
 
-        // Asset browser button
-        const assetBrowserBtn = new Button({
+        const simplifiedAssetBrowser = new Button({
             id: 'bottom-toolbar-asset-browser',
             class: 'bottom-toolbar-tool'
         });
 
         mic.dom.appendChild(createSvg(micSvg));
         touch.dom.appendChild(createSvg(touchSvg));
-        assetBrowserBtn.dom.appendChild(createSvg(assetBrowserSvg));
+        simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
-        // Layout: Voice | Touch | Typing input | separator | Asset Browser
-        this.append(mic);
-        this.append(touch);
+        appendSimplified(mic);
+        appendSimplified(touch);
 
-        // AI text prompt input (Typing — powered by SAM)
         const aiInputWrap = document.createElement('div');
         aiInputWrap.id = 'ai-prompt-wrap';
 
@@ -62,12 +107,10 @@ class BottomToolbar extends Container {
         aiInput.placeholder = 'Type to select…';
         aiInput.spellcheck = false;
 
-        // Prevent all pointer events from reaching the canvas
         aiInputWrap.addEventListener('pointerdown', e => e.stopPropagation());
         aiInputWrap.addEventListener('pointerup', e => e.stopPropagation());
         aiInputWrap.addEventListener('click', e => e.stopPropagation());
 
-        // Prevent keyboard shortcuts while typing
         aiInput.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter' && aiInput.value.trim()) {
@@ -82,32 +125,196 @@ class BottomToolbar extends Container {
         aiInput.addEventListener('keypress', e => e.stopPropagation());
 
         aiInputWrap.appendChild(aiInput);
-        this.dom.appendChild(aiInputWrap);
+        appendSimplified(aiInputWrap);
+        appendSimplified(new Element({ class: 'bottom-toolbar-separator' }));
+        appendSimplified(simplifiedAssetBrowser);
 
-        this.append(new Element({ class: 'bottom-toolbar-separator' }));
-        this.append(assetBrowserBtn);
-
-        // Click handlers
         mic.dom.addEventListener('click', () => events.fire('voice.toggle'));
         mic.dom.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             events.fire('voice.toggleWakeWord');
         });
         touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
-        assetBrowserBtn.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
+        simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
-        // Voice transcript overlay
-        const transcriptEl = document.createElement('div');
-        transcriptEl.id = 'voice-transcript';
-        document.body.appendChild(transcriptEl);
+        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
+        tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
+        tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
-        // Active states
+        // Advanced toolbar from original braintrance branch
+        const undo = new Button({
+            id: 'bottom-toolbar-undo',
+            class: 'bottom-toolbar-button',
+            enabled: false
+        });
+
+        const redo = new Button({
+            id: 'bottom-toolbar-redo',
+            class: 'bottom-toolbar-button',
+            enabled: false
+        });
+
+        const picker = new Button({
+            id: 'bottom-toolbar-picker',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const polygon = new Button({
+            id: 'bottom-toolbar-polygon',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const brush = new Button({
+            id: 'bottom-toolbar-brush',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const flood = new Button({
+            id: 'bottom-toolbar-flood',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const lasso = new Button({
+            id: 'bottom-toolbar-lasso',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const sphere = new Button({
+            id: 'bottom-toolbar-sphere',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const box = new Button({
+            id: 'bottom-toolbar-box',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const eyedropper = new Button({
+            id: 'bottom-toolbar-eyedropper',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const translate = new Button({
+            id: 'bottom-toolbar-translate',
+            class: 'bottom-toolbar-tool',
+            icon: 'E111'
+        });
+
+        const rotate = new Button({
+            id: 'bottom-toolbar-rotate',
+            class: 'bottom-toolbar-tool',
+            icon: 'E113'
+        });
+
+        const scale = new Button({
+            id: 'bottom-toolbar-scale',
+            class: 'bottom-toolbar-tool',
+            icon: 'E112'
+        });
+
+        const measure = new Button({
+            id: 'bottom-toolbar-measure',
+            class: 'bottom-toolbar-tool',
+            icon: 'E358'
+        });
+
+        const coordSpace = new Button({
+            id: 'bottom-toolbar-coord-space',
+            class: 'bottom-toolbar-toggle',
+            icon: 'E118'
+        });
+
+        const origin = new Button({
+            id: 'bottom-toolbar-origin',
+            class: 'bottom-toolbar-toggle',
+            icon: 'E189'
+        });
+
+        undo.dom.appendChild(createSvg(undoSvg));
+        redo.dom.appendChild(createSvg(redoSvg));
+        picker.dom.appendChild(createSvg(pickerSvg));
+        polygon.dom.appendChild(createSvg(polygonSvg));
+        brush.dom.appendChild(createSvg(brushSvg));
+        flood.dom.appendChild(createSvg(floodSvg));
+        sphere.dom.appendChild(createSvg(sphereSvg));
+        box.dom.appendChild(createSvg(boxSvg));
+        lasso.dom.appendChild(createSvg(lassoSvg));
+        eyedropper.dom.appendChild(createSvg(eyedropperSvg));
+
+        [
+            undo,
+            redo,
+            new Element({ class: 'bottom-toolbar-separator' }),
+            picker,
+            lasso,
+            polygon,
+            brush,
+            flood,
+            eyedropper,
+            new Element({ class: 'bottom-toolbar-separator' }),
+            sphere,
+            box,
+            new Element({ class: 'bottom-toolbar-separator' }),
+            translate,
+            rotate,
+            scale,
+            new Element({ class: 'bottom-toolbar-separator' }),
+            measure,
+            coordSpace,
+            origin
+        ].forEach(appendAdvanced);
+
+        undo.dom.addEventListener('click', () => events.fire('edit.undo'));
+        redo.dom.addEventListener('click', () => events.fire('edit.redo'));
+        picker.dom.addEventListener('click', () => events.fire('tool.rectSelection'));
+        lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
+        polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
+        brush.dom.addEventListener('click', () => events.fire('tool.brushSelection'));
+        flood.dom.addEventListener('click', () => events.fire('tool.floodSelection'));
+        eyedropper.dom.addEventListener('click', () => events.fire('tool.eyedropperSelection'));
+        sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
+        box.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
+        translate.dom.addEventListener('click', () => events.fire('tool.move'));
+        rotate.dom.addEventListener('click', () => events.fire('tool.rotate'));
+        scale.dom.addEventListener('click', () => events.fire('tool.scale'));
+        measure.dom.addEventListener('click', () => events.fire('tool.measure'));
+        coordSpace.dom.addEventListener('click', () => events.fire('tool.toggleCoordSpace'));
+        origin.dom.addEventListener('click', () => events.fire('pivot.toggleOrigin'));
+
+        events.on('edit.canUndo', (value: boolean) => {
+            undo.enabled = value;
+        });
+        events.on('edit.canRedo', (value: boolean) => {
+            redo.enabled = value;
+        });
+
         events.on('tool.activated', (toolName: string) => {
             touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
+
+            picker.class[toolName === 'rectSelection' ? 'add' : 'remove']('active');
+            brush.class[toolName === 'brushSelection' ? 'add' : 'remove']('active');
+            flood.class[toolName === 'floodSelection' ? 'add' : 'remove']('active');
+            polygon.class[toolName === 'polygonSelection' ? 'add' : 'remove']('active');
+            lasso.class[toolName === 'lassoSelection' ? 'add' : 'remove']('active');
+            sphere.class[toolName === 'sphereSelection' ? 'add' : 'remove']('active');
+            box.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
+            translate.class[toolName === 'move' ? 'add' : 'remove']('active');
+            rotate.class[toolName === 'rotate' ? 'add' : 'remove']('active');
+            scale.class[toolName === 'scale' ? 'add' : 'remove']('active');
+            measure.class[toolName === 'measure' ? 'add' : 'remove']('active');
+            eyedropper.class[toolName === 'eyedropperSelection' ? 'add' : 'remove']('active');
+        });
+
+        events.on('tool.coordSpace', (space: 'local' | 'world') => {
+            coordSpace.dom.classList[space === 'local' ? 'add' : 'remove']('active');
+        });
+
+        events.on('pivot.origin', (value: 'center' | 'boundCenter') => {
+            origin.dom.classList[value === 'boundCenter' ? 'add' : 'remove']('active');
         });
 
         events.on('assetBrowser.visible', (visible: boolean) => {
-            assetBrowserBtn.class[visible ? 'add' : 'remove']('active');
+            simplifiedAssetBrowser.class[visible ? 'add' : 'remove']('active');
         });
 
         events.on('voice.active', (active: boolean) => {
@@ -118,32 +325,38 @@ class BottomToolbar extends Container {
             mic.dom.classList[listening ? 'add' : 'remove']('voice-listening');
         });
 
+        const transcriptEl = document.createElement('div');
+        transcriptEl.id = 'voice-transcript';
+        document.body.appendChild(transcriptEl);
+
         let transcriptTimer: ReturnType<typeof setTimeout> | null = null;
         events.on('voice.transcript', (text: string) => {
             transcriptEl.textContent = text;
             transcriptEl.classList.add('visible');
-            if (transcriptTimer) clearTimeout(transcriptTimer);
+            if (transcriptTimer) {
+                clearTimeout(transcriptTimer);
+            }
             transcriptTimer = setTimeout(() => {
                 transcriptEl.classList.remove('visible');
             }, 3000);
         });
 
-        // Tooltips
-        const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
-        const tooltip = (localeKey: string, shortcutId?: string) => {
-            const text = localize(localeKey);
-            if (shortcutId) {
-                const shortcut = shortcutManager.formatShortcut(shortcutId);
-                if (shortcut) {
-                    return `${text} ( ${shortcut} )`;
-                }
-            }
-            return text;
-        };
-
-        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
-        tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
-        tooltips.register(assetBrowserBtn, 'Asset Browser');
+        tooltips.register(undo, tooltip('tooltip.bottom-toolbar.undo', 'edit.undo'));
+        tooltips.register(redo, tooltip('tooltip.bottom-toolbar.redo', 'edit.redo'));
+        tooltips.register(picker, tooltip('tooltip.bottom-toolbar.rect', 'tool.rectSelection'));
+        tooltips.register(lasso, tooltip('tooltip.bottom-toolbar.lasso', 'tool.lassoSelection'));
+        tooltips.register(polygon, tooltip('tooltip.bottom-toolbar.polygon', 'tool.polygonSelection'));
+        tooltips.register(brush, tooltip('tooltip.bottom-toolbar.brush', 'tool.brushSelection'));
+        tooltips.register(flood, tooltip('tooltip.bottom-toolbar.flood', 'tool.floodSelection'));
+        tooltips.register(sphere, tooltip('tooltip.bottom-toolbar.sphere'));
+        tooltips.register(box, tooltip('tooltip.bottom-toolbar.box'));
+        tooltips.register(translate, tooltip('tooltip.bottom-toolbar.translate', 'tool.move'));
+        tooltips.register(rotate, tooltip('tooltip.bottom-toolbar.rotate', 'tool.rotate'));
+        tooltips.register(scale, tooltip('tooltip.bottom-toolbar.scale', 'tool.scale'));
+        tooltips.register(measure, tooltip('tooltip.bottom-toolbar.measure'));
+        tooltips.register(coordSpace, tooltip('tooltip.bottom-toolbar.local-space', 'tool.toggleCoordSpace'));
+        tooltips.register(origin, tooltip('tooltip.bottom-toolbar.bound-center'));
+        tooltips.register(eyedropper, tooltip('tooltip.bottom-toolbar.eyedropper', 'tool.eyedropperSelection'));
     }
 }
 

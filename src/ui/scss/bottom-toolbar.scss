@@ -4,7 +4,6 @@
     position: absolute;
     left: 50%;
     bottom: 24px;
-    height: 54px;
     transform: translate(-50%, 0);
     padding: 0px 8px;
     border-radius: 8px;
@@ -15,14 +14,15 @@
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
-.bottom-toolbar-tool {
+.bottom-toolbar-button,
+.bottom-toolbar-tool,
+.bottom-toolbar-toggle {
     width: 38px;
     height: 38px;
     margin: 0px 1px;
     padding: 0px;
     border: 0px;
     border-radius: 4px;
-    background-color: $bcg-primary;
 
     &::before {
         font-size: 16px !important;
@@ -30,11 +30,44 @@
     }
 
     svg {
-        color: inherit;
+        color: $clr-default;
     }
+}
+
+#bottom-toolbar-simplified,
+#bottom-toolbar-advanced {
+    display: none;
+    flex-direction: row;
+    align-items: center;
+}
+
+body.simplified-ui {
+    #bottom-toolbar-simplified {
+        display: flex;
+    }
+}
+
+body.advanced-ui {
+    #bottom-toolbar-advanced {
+        display: flex;
+    }
+}
+
+.bottom-toolbar-button {
+    svg {
+        color: $clr-default;
+    }
+}
+
+.bottom-toolbar-tool {
+    background-color: $bcg-primary;
 
     &:hover:not(.active):not(.disabled) {
         background-color: $bg-light-hover !important;
+    }
+
+    svg {
+        color: $clr-default;
     }
 
     &.active {
@@ -52,6 +85,16 @@
         svg {
             color: $clr-disabled;
         }
+    }
+}
+
+.bottom-toolbar-toggle.active {
+    &::before {
+        color: $clr-active;
+    }
+
+    svg {
+        color: $clr-active;
     }
 }
 
