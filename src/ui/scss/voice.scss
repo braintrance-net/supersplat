@@ -6,6 +6,16 @@
     100% { box-shadow: 0 0 0 0 rgba(255, 0, 0, 0); }
 }
 
+@keyframes voice-listen-pulse {
+    0%, 100% { box-shadow: 0 0 4px 1px rgba(0, 180, 255, 0.3); }
+    50% { box-shadow: 0 0 8px 2px rgba(0, 180, 255, 0.6); }
+}
+
+#bottom-toolbar-mic.voice-listening {
+    color: #00b4ff !important;
+    animation: voice-listen-pulse 3s infinite;
+}
+
 #bottom-toolbar-mic.voice-active {
     background-color: #cc0000 !important;
     color: white !important;

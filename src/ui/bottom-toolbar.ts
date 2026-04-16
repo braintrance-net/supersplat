@@ -89,6 +89,10 @@ class BottomToolbar extends Container {
 
         // Click handlers
         mic.dom.addEventListener('click', () => events.fire('voice.toggle'));
+        mic.dom.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            events.fire('voice.toggleWakeWord');
+        });
         touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
         assetBrowserBtn.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
@@ -108,6 +112,10 @@ class BottomToolbar extends Container {
 
         events.on('voice.active', (active: boolean) => {
             mic.dom.classList[active ? 'add' : 'remove']('voice-active');
+        });
+
+        events.on('voice.listening', (listening: boolean) => {
+            mic.dom.classList[listening ? 'add' : 'remove']('voice-listening');
         });
 
         let transcriptTimer: ReturnType<typeof setTimeout> | null = null;
@@ -133,7 +141,7 @@ class BottomToolbar extends Container {
             return text;
         };
 
-        tooltips.register(mic, 'Voice Control (hold Space)');
+        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
         tooltips.register(assetBrowserBtn, 'Asset Browser');
     }

@@ -21,8 +21,9 @@ interface RadialItem {
 
 class RadialMenu extends Container {
     private menuEl: HTMLElement;
-    private visible = false;
+    private isVisible = false;
     private oneShotTool: string | null = null;
+    private events: Events;
 
     constructor(events: Events, args = {}) {
         args = {
@@ -31,6 +32,7 @@ class RadialMenu extends Container {
         };
 
         super(args);
+        this.events = events;
 
         // Block pointer events from reaching canvas
         this.dom.addEventListener('pointerdown', (e) => e.stopPropagation());
@@ -39,7 +41,7 @@ class RadialMenu extends Container {
         this.menuEl.id = 'radial-menu';
         this.dom.appendChild(this.menuEl);
 
-        // Define items in order: Clear, Undo, Transform, Rotate, Scale, Place, Trash
+        // Define items in order: Clear, Undo, Move, Rotate, Scale, Place, Trash
         const items: RadialItem[] = [
             {
                 id: 'radial-clear',
@@ -66,7 +68,7 @@ class RadialMenu extends Container {
                 icon: null,
                 fontIcon: 'E111',
                 action: () => {
-                    this.startOneShotTool('move', events);
+                    this.startOneShotTool('move');
                 }
             },
             {
@@ -75,7 +77,7 @@ class RadialMenu extends Container {
                 icon: null,
                 fontIcon: 'E113',
                 action: () => {
-                    this.startOneShotTool('rotate', events);
+                    this.startOneShotTool('rotate');
                 }
             },
             {
@@ -84,7 +86,7 @@ class RadialMenu extends Container {
                 icon: null,
                 fontIcon: 'E112',
                 action: () => {
-                    this.startOneShotTool('scale', events);
+                    this.startOneShotTool('scale');
                 }
             },
             {
@@ -92,7 +94,7 @@ class RadialMenu extends Container {
                 label: 'Place',
                 icon: placeSvg,
                 action: () => {
-                    this.startOneShotTool('place', events);
+                    this.startOneShotTool('place');
                 }
             },
             {
@@ -155,19 +157,11 @@ class RadialMenu extends Container {
             this.menuEl.appendChild(el);
         });
 
-        // Listen for selection changes to show/hide
+        // Only show when splat selection changes (not asset browser)
         events.on('selection.changed', () => {
-            const sel = events.invoke('selection');
-            if (sel) {
-                this.show();
-            } else {
-                this.hide();
-            }
-        });
-
-        events.on('assetBrowser.entitySelected', (entity: any) => {
-            if (entity) {
-                this.show();
+            const hasSplats = events.invoke('selection.splats');
+            if (hasSplats) {
+                this.showNearSelection();
             } else {
                 this.hide();
             }
@@ -182,12 +176,11 @@ class RadialMenu extends Container {
         events.on('edit.add', () => {
             if (this.oneShotTool) {
                 this.oneShotTool = null;
-                // Small delay to let the edit finish visually
                 setTimeout(() => {
                     events.fire('tool.walk');
-                    const sel = events.invoke('selection');
-                    if (sel) {
-                        this.show();
+                    const hasSplats = events.invoke('selection.splats');
+                    if (hasSplats) {
+                        this.showNearSelection();
                     }
                 }, 100);
             }
@@ -197,24 +190,46 @@ class RadialMenu extends Container {
         this.hide();
     }
 
-    private startOneShotTool(toolName: string, events: Events) {
+    private startOneShotTool(toolName: string) {
         this.oneShotTool = toolName;
         this.hide();
-        events.fire(`tool.${toolName}`);
+        this.events.fire(`tool.${toolName}`);
     }
 
-    show() {
-        if (this.oneShotTool) return; // Don't show while one-shot tool is active
-        this.visible = true;
+    private showNearSelection() {
+        if (this.oneShotTool) return;
+
+        // Get screen position of the selection center
+        const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
+
+        if (screenPos) {
+            // Position the menu near the selection, offset upward so the arc sits above
+            // Clamp to keep it on screen with some padding
+            const padding = 130;
+            const x = Math.max(padding, Math.min(screenPos.x, window.innerWidth - padding));
+            const y = Math.max(padding, Math.min(screenPos.y - 30, window.innerHeight - padding));
+
+            this.dom.style.left = `${x}px`;
+            this.dom.style.top = `${y}px`;
+            this.dom.style.bottom = '';
+            this.dom.style.transform = 'translate(-50%, -50%)';
+        } else {
+            // Fallback: center horizontally, near bottom
+            this.dom.style.left = '50%';
+            this.dom.style.top = '';
+            this.dom.style.bottom = '100px';
+            this.dom.style.transform = 'translateX(-50%)';
+        }
+
+        this.isVisible = true;
         this.dom.style.display = 'flex';
-        // Trigger entrance animation
         requestAnimationFrame(() => {
             this.menuEl.classList.add('radial-menu-visible');
         });
     }
 
     hide() {
-        this.visible = false;
+        this.isVisible = false;
         this.menuEl.classList.remove('radial-menu-visible');
         this.dom.style.display = 'none';
     }

@@ -212,6 +212,26 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return splat?.numSelected > 0;
     });
 
+    // returns the screen-space {x, y} of the selection center, or null
+    events.function('selection.screenPosition', () => {
+        const splat = events.invoke('selection') as Splat;
+        if (!splat || splat.numSelected === 0) return null;
+
+        const bound = splat.selectionBound;
+        const worldCenter = new Vec3();
+        splat.entity.getLocalTransform().transformPoint(bound.center, worldCenter);
+
+        const screenPos = new Vec3();
+        scene.camera.worldToScreen(worldCenter, screenPos);
+
+        // screenPos is normalized 0..1, convert to pixel coords
+        const canvas = scene.app.graphicsDevice.canvas;
+        return {
+            x: screenPos.x * canvas.clientWidth,
+            y: screenPos.y * canvas.clientHeight
+        };
+    });
+
     events.on('select.all', () => {
         selectedSplats().forEach((splat) => {
             events.fire('edit.add', new SelectAllOp(splat));
