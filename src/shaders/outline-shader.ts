@@ -16,7 +16,6 @@ const fragmentShader = /* glsl*/ `
     const float THICKNESS = 0.6;
     const float CHROMA_AB = 0.012;
     const float FRESNEL_POWER = 3.0;
-    const int DIST_SAMPLES = 5;  // distance field sample radius (keep low for perf)
 
     void main(void) {
         ivec2 texel = ivec2(gl_FragCoord.xy);
@@ -51,25 +50,29 @@ const fragmentShader = /* glsl*/ `
 
         // -- INSIDE: glass marble effect --
 
-        // Step 1: approximate distance from edge (how deep inside the selection)
-        float minDist = float(DIST_SAMPLES) + 1.0;
-        for (int x = -DIST_SAMPLES; x <= DIST_SAMPLES; x++) {
-            for (int y = -DIST_SAMPLES; y <= DIST_SAMPLES; y++) {
-                if (texelFetch(srcTexture, texel + ivec2(x, y), 0).a <= alphaCutoff) {
-                    float d = length(vec2(x, y));
-                    minDist = min(minDist, d);
-                }
-            }
+        // Step 1: multi-scale edge distance using directional probes (8 directions, fast)
+        float minDist = 8.0;
+        for (int r = 1; r <= 7; r++) {
+            float rd = float(r);
+            // 8 directions: cardinal + diagonal
+            if (texelFetch(srcTexture, texel + ivec2( r,  0), 0).a <= alphaCutoff) minDist = min(minDist, rd);
+            if (texelFetch(srcTexture, texel + ivec2(-r,  0), 0).a <= alphaCutoff) minDist = min(minDist, rd);
+            if (texelFetch(srcTexture, texel + ivec2( 0,  r), 0).a <= alphaCutoff) minDist = min(minDist, rd);
+            if (texelFetch(srcTexture, texel + ivec2( 0, -r), 0).a <= alphaCutoff) minDist = min(minDist, rd);
+            if (texelFetch(srcTexture, texel + ivec2( r,  r), 0).a <= alphaCutoff) minDist = min(minDist, rd * 1.414);
+            if (texelFetch(srcTexture, texel + ivec2(-r, -r), 0).a <= alphaCutoff) minDist = min(minDist, rd * 1.414);
+            if (texelFetch(srcTexture, texel + ivec2( r, -r), 0).a <= alphaCutoff) minDist = min(minDist, rd * 1.414);
+            if (texelFetch(srcTexture, texel + ivec2(-r,  r), 0).a <= alphaCutoff) minDist = min(minDist, rd * 1.414);
         }
 
         // normalize: 0 at edge, 1 deep inside
-        float depth = clamp(minDist / float(DIST_SAMPLES), 0.0, 1.0);
+        float depth = clamp(minDist / 8.0, 0.0, 1.0);
 
         // Step 2: compute mask gradient → surface normal direction
-        float mL = texture2D(srcTexture, uv + vec2(-2.0 * pixelSize.x, 0.0)).a;
-        float mR = texture2D(srcTexture, uv + vec2( 2.0 * pixelSize.x, 0.0)).a;
-        float mD = texture2D(srcTexture, uv + vec2(0.0, -2.0 * pixelSize.y)).a;
-        float mU = texture2D(srcTexture, uv + vec2(0.0,  2.0 * pixelSize.y)).a;
+        float mL = texture2D(srcTexture, uv + vec2(-3.0 * pixelSize.x, 0.0)).a;
+        float mR = texture2D(srcTexture, uv + vec2( 3.0 * pixelSize.x, 0.0)).a;
+        float mD = texture2D(srcTexture, uv + vec2(0.0, -3.0 * pixelSize.y)).a;
+        float mU = texture2D(srcTexture, uv + vec2(0.0,  3.0 * pixelSize.y)).a;
         vec2 grad = vec2(mR - mL, mU - mD);
 
         // Step 3: hemisphere — marble dome shape

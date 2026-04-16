@@ -291,15 +291,29 @@ Rules:
             }
 
             // Execute each tool call and add results to messages
+            let aborted = false;
             for (const call of toolCalls) {
                 const args = JSON.parse(call.function.arguments);
-                const result = await this.executeTool(call.function.name, args);
+                let result: string;
+
+                if (aborted) {
+                    result = 'Skipped — previous command failed';
+                } else {
+                    result = await this.executeTool(call.function.name, args);
+                    if (result.startsWith('Selection failed') || result.startsWith('No pivot')) {
+                        aborted = true;
+                        console.warn(`[VoiceCommands] Aborting chain: ${result}`);
+                    }
+                }
+
                 messages.push({
                     role: 'tool',
                     tool_call_id: call.id,
                     content: result
                 });
             }
+
+            if (aborted) return;
         }
     }
 
@@ -395,9 +409,23 @@ Rules:
     }
 
     private async executeSelectObject(description: string, useBoxer: boolean): Promise<string> {
-        const toolEvent = useBoxer ? 'tool.boxerSelection' : 'tool.sam3Selection';
-        const toolName = useBoxer ? 'Boxer' : 'SAM3';
+        // Try preferred tool first, fall back to the other on failure
+        const tools = useBoxer
+            ? [{ event: 'tool.boxerSelection', name: 'Boxer' }, { event: 'tool.sam3Selection', name: 'SAM3' }]
+            : [{ event: 'tool.sam3Selection', name: 'SAM3' }, { event: 'tool.boxerSelection', name: 'Boxer' }];
 
+        for (const tool of tools) {
+            const result = await this.trySelectWithTool(tool.event, tool.name, description);
+            if (!result.startsWith('Selection failed')) {
+                return result;
+            }
+            console.log(`[VoiceCommands] ${tool.name} failed, trying fallback...`);
+        }
+
+        return `Selection failed: both SAM3 and Boxer failed for "${description}"`;
+    }
+
+    private async trySelectWithTool(toolEvent: string, toolName: string, description: string): Promise<string> {
         this.events.fire(toolEvent);
 
         // Wait for tool to activate
@@ -407,7 +435,7 @@ Rules:
         const result = await new Promise<string>((resolve) => {
             const timeout = setTimeout(() => {
                 cleanup();
-                resolve(`${toolName} timed out after 30s`);
+                resolve(`Selection failed: ${toolName} timed out after 30s`);
             }, 30000);
 
             const cleanup = () => {

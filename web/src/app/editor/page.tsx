@@ -3,12 +3,18 @@
 import { useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useRef } from "react";
 
+declare global {
+  interface Window {
+    __pendingFile?: File;
+  }
+}
+
 function EditorFrame() {
   const searchParams = useSearchParams();
   const load = searchParams.get("load");
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  const hasPendingFile = typeof window !== "undefined" && !!(window as any).__pendingFile;
+  const hasPendingFile = typeof window !== "undefined" && !!window.__pendingFile;
 
   let editorUrl = "http://localhost:3000";
   if (load) {
@@ -18,9 +24,9 @@ function EditorFrame() {
   }
 
   const handleIframeLoad = useCallback(async () => {
-    const file = (window as any).__pendingFile as File | undefined;
+    const file = window.__pendingFile;
     if (!file) return;
-    delete (window as any).__pendingFile;
+    delete window.__pendingFile;
 
     const data = await file.arrayBuffer();
 
