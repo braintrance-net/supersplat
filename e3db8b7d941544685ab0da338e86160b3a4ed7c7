@@ -1,0 +1,36 @@
+src/ui/svg/trash.svg
+  2f43a14f52597f3f 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "e3db8b7d941544685ab0da338e86160b3a4ed7c7",
+  "prompts": {
+    "2f43a14f52597f3f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b5939f6-9fd6-44a5-a512-fc487863fdfc",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
