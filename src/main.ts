@@ -39,6 +39,16 @@ import { localizeInit } from './ui/localization';
 import { VoiceController } from './voice/voice-controller';
 
 declare global {
+    interface DebugCameraState {
+        position: { x: number, y: number, z: number };
+        target: { x: number, y: number, z: number };
+        fov: number;
+        azim: number;
+        elevation: number;
+        distance: number;
+        ortho: boolean;
+    }
+
     interface LaunchParams {
         readonly files: FileSystemFileHandle[];
     }
@@ -61,6 +71,10 @@ declare global {
             enableDevTools?: boolean;
             sketchfabApiToken?: string;
             openaiApiKey?: string;
+        };
+        supersplatDebug?: {
+            getCameraState: () => DebugCameraState;
+            copyCameraState: () => Promise<string>;
         };
     }
 }
@@ -274,6 +288,19 @@ const main = async () => {
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
+
+    window.supersplatDebug = {
+        getCameraState: () => {
+            return events.invoke('camera.debugState') as DebugCameraState;
+        },
+        copyCameraState: async () => {
+            const cameraState = events.invoke('camera.debugState') as DebugCameraState;
+            const json = JSON.stringify(cameraState, null, 2);
+            console.log('SuperSplat camera state\n', cameraState);
+            await navigator.clipboard.writeText(json).catch(() => {});
+            return json;
+        }
+    };
 
     // voice controller
     new VoiceController(events);

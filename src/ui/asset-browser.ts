@@ -53,6 +53,13 @@ class AssetBrowser extends Container {
     private currentGizmoType: 'translate' | 'rotate' | 'scale' | null = null;
     private pendingPlacement: { entity: Entity; card: HTMLElement; actionEl: Element | null } | null = null;
 
+    // Tracks which model UIDs have already been placed for a given voice query,
+    // so "use a different chair" cycles through the result list instead of repeating.
+    private voiceQueryHistory: Map<string, { uids: Set<string>; cursor: string | null }> = new Map();
+    // Maps placed entities → the voice query that produced them, so we know what
+    // to re-search when the user asks to replace the current asset.
+    private entityToQuery: Map<Entity, string> = new Map();
+
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
             ...args,
@@ -212,24 +219,22 @@ class AssetBrowser extends Container {
             this.deleteSelectedEntity();
         });
 
-        // Voice command: search and place first result
+        // Voice command: search and place at scene center, auto-select.
+        // Does NOT open the browser UI.
         events.on('assetBrowser.searchAndPlace', async (query: string) => {
-            // Show the browser
-            if (this.hidden) {
-                this.hidden = false;
-                events.fire('assetBrowser.visible', true);
-            }
-
-            // Run the search
-            this.searchInput.value = query;
-            await this.search(query);
-
-            // Auto-click first result card
-            const firstCard = this.gridContainer.querySelector('.asset-browser-card') as HTMLElement;
-            if (firstCard) {
-                firstCard.click();
-            }
+            await this.voicePlaceAsset(query, false);
         });
+
+        // Voice command: replace the currently selected placed asset with a different one.
+        // If newQuery is provided, search that; otherwise re-use the query that produced
+        // the current selection and pick a different result.
+        events.on('assetBrowser.replaceSelected', async (newQuery?: string) => {
+            await this.voicePlaceAsset(newQuery, true);
+        });
+
+        // Expose the currently selected placed entity so voice commands can
+        // redirect translate/rotate/scale/delete onto a glTF asset instead of the splat.
+        events.function('assetBrowser.selectedPlacedEntity', () => this.selectedEntity);
 
     }
 
@@ -269,6 +274,10 @@ class AssetBrowser extends Container {
         this.selectedEntity = entity;
         this.ensureGizmos();
 
+        // Clear splat selection so voice/radial-menu operations don't target a stale splat.
+        // Placed assets own the selection context until explicitly deselected.
+        this.events.fire('select.none');
+
         // Notify toolbar to show deselect/delete buttons
         this.events.fire('assetBrowser.entitySelected', entity);
 
@@ -303,6 +312,7 @@ class AssetBrowser extends Container {
         // Remove from tracking and destroy
         const idx = this.placedEntities.indexOf(entity);
         if (idx !== -1) this.placedEntities.splice(idx, 1);
+        this.entityToQuery.delete(entity);
 
         entity.destroy();
 
@@ -772,6 +782,191 @@ class AssetBrowser extends Container {
         for (const child of entity.children) {
             this.setLayerRecursive(child as Entity, layerId);
         }
+    }
+
+    /**
+     * Search Sketchfab directly (no UI), pick a result not yet used for this query,
+     * download + instantiate, place at scene center (or at the replaced entity's
+     * position), and leave it selected with the move gizmo active.
+     */
+    private async voicePlaceAsset(queryOrUndefined: string | undefined, replaceSelected: boolean): Promise<void> {
+        // Figure out the effective query:
+        //   - replace + explicit new query: use new query (fresh history slot)
+        //   - replace + no query: re-use the current entity's original query
+        //   - fresh place: use query as given
+        let query = queryOrUndefined;
+        if (replaceSelected && !query && this.selectedEntity) {
+            query = this.entityToQuery.get(this.selectedEntity);
+        }
+        if (!query) {
+            console.warn('[AssetBrowser] voicePlaceAsset: no query available');
+            return;
+        }
+
+        if (!this.apiToken) {
+            this.events.fire('toast', 'Sketchfab API token not configured', 'error');
+            return;
+        }
+
+        this.events.fire('startSpinner');
+
+        try {
+            // Remember the replace target's transform before we destroy it
+            const replaceTarget = replaceSelected ? this.selectedEntity : null;
+            const replacePos = replaceTarget ? replaceTarget.getPosition().clone() : null;
+            const replaceRot = replaceTarget ? replaceTarget.getRotation().clone() : null;
+
+            // Fetch next-unused result for this query
+            const model = await this.fetchNextVoiceResult(query);
+            if (!model) {
+                this.events.fire('toast', `No more results for "${query}"`, 'warning');
+                return;
+            }
+
+            // Download the GLB
+            const downloadUrl = await this.getDownloadUrl(model.uid);
+            if (!downloadUrl) {
+                this.events.fire('toast', `"${model.name}" is not downloadable`, 'warning');
+                return;
+            }
+
+            const response = await fetch(downloadUrl);
+            if (!response.ok) throw new Error(`Download failed: ${response.status}`);
+            const arrayBuffer = await response.arrayBuffer();
+
+            const app: AppBase = (window as any).scene?.app;
+            if (!app) throw new Error('PlayCanvas app not available');
+
+            const blob = new Blob([arrayBuffer], { type: 'model/gltf-binary' });
+            const blobUrl = URL.createObjectURL(blob);
+
+            const containerAsset = new Asset(model.name, 'container', { url: blobUrl, filename: `${model.name}.glb` });
+            app.assets.add(containerAsset);
+
+            await new Promise<void>((resolve, reject) => {
+                containerAsset.on('load', () => resolve());
+                containerAsset.on('error', (err: string) => reject(new Error(err)));
+                app.assets.load(containerAsset);
+            });
+
+            const resource = containerAsset.resource as any;
+            let entity: Entity;
+            if (resource.instantiateRenderEntity) {
+                entity = resource.instantiateRenderEntity();
+            } else if (resource.instantiateModelEntity) {
+                entity = resource.instantiateModelEntity();
+            } else {
+                throw new Error('Could not instantiate model from container');
+            }
+
+            entity.name = model.name;
+            app.root.addChild(entity);
+            this.autoScaleEntity(entity);
+
+            const scene = (window as any).scene;
+            const worldLayerId = scene?.worldLayer?.id;
+            if (worldLayerId !== undefined) {
+                this.setLayerRecursive(entity, worldLayerId);
+            }
+            this.ensureSceneLighting(app, worldLayerId);
+            URL.revokeObjectURL(blobUrl);
+
+            // Compute bottom offset so the model sits on whatever surface
+            const bbox = this.computeEntityBounds(entity);
+            const entityPos = entity.getPosition();
+            const boundsBottom = bbox.center.y - bbox.halfExtents.y;
+            const bottomOffset = entityPos.y - boundsBottom;
+
+            // Target position:
+            //   replace → same spot as the old entity (keep rotation too)
+            //   fresh   → camera focal point if available, else scene bound center, else origin
+            let targetPos: Vec3;
+            if (replacePos) {
+                targetPos = replacePos;
+            } else if (scene?.camera?.focalPoint) {
+                const fp = scene.camera.focalPoint;
+                targetPos = new Vec3(fp.x, fp.y + bottomOffset, fp.z);
+            } else if (scene?.bound) {
+                targetPos = new Vec3(
+                    scene.bound.center.x,
+                    scene.bound.center.y - scene.bound.halfExtents.y + bottomOffset,
+                    scene.bound.center.z
+                );
+            } else {
+                targetPos = new Vec3(0, bottomOffset, 0);
+            }
+
+            entity.setPosition(targetPos.x, targetPos.y, targetPos.z);
+            if (replaceRot) {
+                entity.setRotation(replaceRot);
+            }
+
+            // If replacing, destroy old entity and remove its tracking
+            if (replaceTarget) {
+                const idx = this.placedEntities.indexOf(replaceTarget);
+                if (idx !== -1) this.placedEntities.splice(idx, 1);
+                this.entityToQuery.delete(replaceTarget);
+                this.detachGizmo();
+                replaceTarget.destroy();
+            }
+
+            // Register placement
+            this.placedEntities.push(entity);
+            this.entityToQuery.set(entity, query);
+            scene.forceRender = true;
+
+            // Auto-select with move gizmo (same path as click-placement)
+            this.selectEntity(entity);
+
+            console.log(`[AssetBrowser] Voice placed "${model.name}" (${model.uid}) for query "${query}"`);
+
+        } catch (err: any) {
+            console.error('[AssetBrowser] Voice placement failed:', err);
+            this.events.fire('toast', `Placement failed: ${err.message || err}`, 'error');
+        } finally {
+            this.events.fire('stopSpinner');
+        }
+    }
+
+    /**
+     * Returns the next Sketchfab model for the given query that hasn't already been
+     * placed via voice this session. Paginates through cursors as needed.
+     */
+    private async fetchNextVoiceResult(query: string): Promise<SketchfabModel | null> {
+        const history = this.voiceQueryHistory.get(query) ?? { uids: new Set<string>(), cursor: null };
+
+        // Try the current page first; if all used, advance to next cursor
+        for (let attempt = 0; attempt < 4; attempt++) {
+            const params = new URLSearchParams({
+                type: 'models',
+                q: query,
+                downloadable: 'true',
+                count: '24',
+                sort_by: '-relevance'
+            });
+            if (history.cursor) params.set('cursor', history.cursor);
+
+            const headers: Record<string, string> = { 'Authorization': `Token ${this.apiToken}` };
+            const res = await fetch(`https://api.sketchfab.com/v3/search?${params}`, { headers });
+            if (!res.ok) throw new Error(`Sketchfab search failed: ${res.status}`);
+
+            const data: SearchResult = await res.json();
+            const fresh = data.results.find(m => !history.uids.has(m.uid));
+            if (fresh) {
+                history.uids.add(fresh.uid);
+                this.voiceQueryHistory.set(query, history);
+                return fresh;
+            }
+
+            // All results on this page used — advance cursor or give up
+            if (!data.cursors?.next) {
+                this.voiceQueryHistory.set(query, history);
+                return null;
+            }
+            history.cursor = data.cursors.next;
+        }
+
+        return null;
     }
 
     private async getDownloadUrl(uid: string): Promise<string | null> {

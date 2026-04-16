@@ -125,6 +125,10 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         setCameraFov(fov);
     });
 
+    events.on('camera.setOrtho', (ortho: boolean) => {
+        scene.camera.ortho = ortho;
+    });
+
     // camera.tonemapping
 
     events.function('camera.tonemapping', () => {

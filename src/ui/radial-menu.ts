@@ -160,6 +160,8 @@ class RadialMenu extends Container {
             const hasSplats = events.invoke('selection.splats');
             console.log('[RadialMenu] checkSelection — hasSplats:', hasSplats, 'oneShotTool:', this.oneShotTool);
             if (hasSplats) {
+                // If the menu is already visible (e.g. shown at click point), keep it where it is
+                if (this.isVisible) return;
                 this.showNearSelection();
             } else {
                 this.hide();
@@ -171,9 +173,18 @@ class RadialMenu extends Container {
         events.on('selection.changed', checkSelection);
         events.on('splat.stateChanged', checkSelection);
 
-        // Reposition after transforms (e.g. voice-driven translate)
-        events.on('pivot.ended', () => {
-            if (!this.hidden && !this.oneShotTool) {
+        // Show menu immediately at click point when SAM3 starts processing
+        events.on('sam3.clickStarted', (pt: { x: number; y: number }) => {
+            if (this.oneShotTool) return;
+            this.showAtPoint(pt.x, pt.y);
+        });
+
+        // Reposition after transforms (e.g. voice-driven translate).
+        // splat.positionsChanged fires after the async GPU position update + bounds recompute,
+        // so selectionBound reflects the new location. pivot.ended fires too early — the bound
+        // is still stale at that point.
+        events.on('splat.positionsChanged', () => {
+            if (this.isVisible && !this.oneShotTool) {
                 this.showNearSelection();
             }
         });
@@ -207,37 +218,45 @@ class RadialMenu extends Container {
         this.events.fire(`tool.${toolName}`);
     }
 
-    private showNearSelection() {
+    private showAtPoint(x: number, y: number) {
         if (this.oneShotTool) return;
 
-        // Get screen position of the selection center
-        const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
-        console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);
+        const padding = 170;
+        const clampedX = Math.max(padding, Math.min(x, window.innerWidth - padding));
+        const clampedY = Math.max(padding, Math.min(y - 30, window.innerHeight - padding));
 
-        if (screenPos) {
-            // Position the menu near the selection, offset upward so the arc sits above
-            // Clamp to keep it on screen with some padding
-            const padding = 130;
-            const x = Math.max(padding, Math.min(screenPos.x, window.innerWidth - padding));
-            const y = Math.max(padding, Math.min(screenPos.y - 30, window.innerHeight - padding));
-
-            this.dom.style.left = `${x}px`;
-            this.dom.style.top = `${y}px`;
-            this.dom.style.bottom = '';
-            this.dom.style.transform = 'translate(-50%, -50%)';
-        } else {
-            // Fallback: center horizontally, near bottom
-            this.dom.style.left = '50%';
-            this.dom.style.top = '';
-            this.dom.style.bottom = '100px';
-            this.dom.style.transform = 'translateX(-50%)';
-        }
+        this.dom.style.left = `${clampedX}px`;
+        this.dom.style.top = `${clampedY}px`;
+        this.dom.style.bottom = '';
+        this.dom.style.transform = 'translate(-50%, -50%)';
 
         this.isVisible = true;
         this.dom.style.display = 'flex';
         requestAnimationFrame(() => {
             this.menuEl.classList.add('radial-menu-visible');
         });
+    }
+
+    private showNearSelection() {
+        if (this.oneShotTool) return;
+
+        const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
+        console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);
+
+        if (screenPos) {
+            this.showAtPoint(screenPos.x, screenPos.y);
+        } else {
+            // Fallback: center horizontally, near bottom
+            this.dom.style.left = '50%';
+            this.dom.style.top = '';
+            this.dom.style.bottom = '100px';
+            this.dom.style.transform = 'translateX(-50%)';
+            this.isVisible = true;
+            this.dom.style.display = 'flex';
+            requestAnimationFrame(() => {
+                this.menuEl.classList.add('radial-menu-visible');
+            });
+        }
     }
 
     hide() {

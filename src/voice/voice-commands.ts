@@ -1,4 +1,4 @@
-import { Mat4, Quat, Vec3 } from 'playcanvas';
+import { Entity, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Pivot } from '../pivot';
@@ -82,12 +82,12 @@ const TOOL_DEFINITIONS = [
         type: 'function' as const,
         function: {
             name: 'rotate',
-            description: 'Rotate the current selection around an axis.',
+            description: 'Rotate the current selection. Axis is camera-relative (matches translate): x = camera-right (pitch / tilt forward-backward — positive degrees tips top away from camera, "tilt backwards"), y = world-up (yaw / turn left-right — positive degrees spins clockwise from above), z = camera-forward (roll / tilt side-to-side — positive degrees rolls clockwise when looking along camera).',
             parameters: {
                 type: 'object',
                 properties: {
-                    axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'Axis to rotate around' },
-                    degrees: { type: 'number', description: 'Rotation in degrees' }
+                    axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'x=camera-right (pitch), y=world-up (yaw), z=camera-forward (roll)' },
+                    degrees: { type: 'number', description: 'Rotation in degrees (positive follows right-hand rule around the axis)' }
                 },
                 required: ['axis', 'degrees']
             }
@@ -128,14 +128,28 @@ const TOOL_DEFINITIONS = [
     {
         type: 'function' as const,
         function: {
-            name: 'search_and_place_asset',
-            description: 'Search for a 3D model and place it in the scene.',
+            name: 'place_asset',
+            description: 'Download a 3D model from Sketchfab matching the query and drop it at the scene center. The placed model is automatically selected with the move gizmo so the user can transform it next. Use for phrases like "place a chair", "add a table", "bring in a lamp".',
             parameters: {
                 type: 'object',
                 properties: {
-                    query: { type: 'string', description: 'Search query for the 3D model (e.g., "chair", "table")' }
+                    query: { type: 'string', description: 'Short search query (e.g., "chair", "red sofa", "coffee table")' }
                 },
                 required: ['query']
+            }
+        }
+    },
+    {
+        type: 'function' as const,
+        function: {
+            name: 'replace_asset',
+            description: 'Swap out the currently selected placed asset for a different one, keeping its position and rotation. If query is provided, searches for a model matching it. If omitted, re-uses the original query and cycles to the next result. Use for phrases like "I don\'t like this chair, give me a different one", "swap this out", "use a different one", "try another".',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: { type: 'string', description: 'Optional new search query. Omit to cycle through more results for the original query.' }
+                },
+                required: []
             }
         }
     },
@@ -215,12 +229,17 @@ class VoiceCommands {
 
         console.log(`[VoiceCommands] Processing: "${text}"`);
 
-        // Try deterministic match first
-        for (const cmd of DETERMINISTIC_COMMANDS) {
-            if (cmd.patterns.some(p => p.test(text))) {
-                console.log(`[VoiceCommands] Deterministic match: ${cmd.label}`);
-                cmd.action(this.events);
-                return;
+        // Only try deterministic matching for simple single-action utterances.
+        // Chain indicators (commas, "and", "then", "after") mean the user issued
+        // multiple commands and we must route to the AI so the whole sequence runs.
+        const looksLikeChain = /,|\band\b|\bthen\b|\bafter\b/i.test(text);
+        if (!looksLikeChain) {
+            for (const cmd of DETERMINISTIC_COMMANDS) {
+                if (cmd.patterns.some(p => p.test(text))) {
+                    console.log(`[VoiceCommands] Deterministic match: ${cmd.label}`);
+                    cmd.action(this.events);
+                    return;
+                }
             }
         }
 
@@ -242,11 +261,15 @@ class VoiceCommands {
                 content: `You are a voice command interpreter for a 3D Gaussian Splat editor. Convert spoken commands into tool calls.
 
 Rules:
-- Directions: left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Use NORMALIZED units: 1.0 = normal/default move, 0.3 = a little, 2.0 = a lot. The system will scale these to the scene automatically. Do NOT use tiny values like 0.05 or 0.1.
+- Translate directions (camera-relative): left=-x, right=+x, up=+y, down=-y, forward=+z, backward=-z. Use NORMALIZED units: 1.0 = normal/default move, 0.3 = a little, 2.0 = a lot. The system scales to the scene automatically. Do NOT use tiny values like 0.05 or 0.1.
+- Rotate axes (camera-relative, matching translate): x = camera-right (pitch — "tilt forward/backward"), y = world-up (yaw — "turn left/right"), z = camera-forward (roll — "lean/tilt side to side"). "Tilt backwards" = rotate({axis:'x', degrees:-45}). "Tilt forwards" = rotate({axis:'x', degrees:45}). "Turn right" = rotate({axis:'y', degrees:45}). "Turn left" = rotate({axis:'y', degrees:-45}).
 - You can chain multiple tool calls for compound commands like "move left then up".
 - To select a specific object by description (e.g. "select the can", "click the chair"), use select_object with a short description. This activates AI-powered segmentation (SAM3) to find and select the object. Set use_boxer=true only if the user explicitly says "boxer".
 - Only use editor_action select_all when the user explicitly says "select all" or "select everything".
 - For compound commands like "select the can and move it up", first call select_object, then translate. select_object waits for the AI to finish, so subsequent commands will operate on the correct selection.
+- For "place a X" / "add a X" / "bring in a X", use place_asset with query=X. This drops the model at the scene center and auto-selects it.
+- For "use a different one" / "I don't like this, try another" / "swap it out", use replace_asset with no query — it cycles to the next result of the original query at the same spot.
+- For "replace this with a X" / "swap it for a X", use replace_asset with query=X.
 - For ambiguous speech-to-text artifacts, prefer the most likely intended command.`
             },
             {
@@ -258,8 +281,10 @@ Rules:
         const scale = this.getSceneScale();
         console.log(`[VoiceCommands] Scene scale: ${scale.toFixed(3)}, suggested distances: a_little=${(0.05 * scale).toFixed(3)}, default=${(0.1 * scale).toFixed(3)}, a_lot=${(0.3 * scale).toFixed(3)}`);
 
-        // Loop up to 6 tool call rounds
-        for (let round = 0; round < 6; round++) {
+        // Loop up to 12 tool call rounds — long chains like
+        // "select X, rotate, translate, scale, clear, select Y, delete"
+        // can hit 8+ calls if the model doesn't batch
+        for (let round = 0; round < 12; round++) {
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
                 method: 'POST',
                 headers: {
@@ -345,9 +370,15 @@ Rules:
             case 'select_object':
                 return this.executeSelectObject(args.description, args.use_boxer ?? false);
 
-            case 'search_and_place_asset':
+            case 'place_asset':
                 this.events.fire('assetBrowser.searchAndPlace', args.query);
-                return `Searching for "${args.query}"...`;
+                return `Placing "${args.query}" at scene center`;
+
+            case 'replace_asset':
+                this.events.fire('assetBrowser.replaceSelected', args.query);
+                return args.query
+                    ? `Replacing with "${args.query}"`
+                    : 'Swapping to a different variant';
 
             case 'editor_action': {
                 const eventName = ACTION_MAP[args.action];
@@ -509,6 +540,17 @@ Rules:
 
         console.log(`[VoiceCommands] Translate: normalized=(${x}, ${y}, ${z}), sceneFactor=${sceneFactor.toFixed(3)}, world offset=(${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}, ${offset.z.toFixed(3)})`);
 
+        // If a placed asset is currently selected, translate the entity directly.
+        // Splat translation via pivot doesn't apply to glTF entities.
+        const placedEntity = this.events.invoke('assetBrowser.selectedPlacedEntity') as Entity | null;
+        if (placedEntity) {
+            this.events.fire('tool.move');
+            placedEntity.translate(offset.x, offset.y, offset.z);
+            if (scene) scene.forceRender = true;
+            console.log(`[VoiceCommands] Translate (entity): new position=${placedEntity.getPosition().toString()}`);
+            return `Translated placed asset by (${offset.x.toFixed(3)}, ${offset.y.toFixed(3)}, ${offset.z.toFixed(3)})`;
+        }
+
         // Activate move tool and wait for pivot to be placed
         this.events.fire('tool.move');
         await this.waitForPivot();
@@ -535,6 +577,45 @@ Rules:
     }
 
     private async executeRotate(axis: string, degrees: number): Promise<string> {
+        // Build a camera-relative axis vector in world space:
+        //   x = camera-right  (pitch)
+        //   y = world-up      (yaw — kept world-aligned so "turn right" feels natural regardless of camera tilt)
+        //   z = camera-forward (roll)
+        const worldAxis = new Vec3();
+        const scene = (window as any).scene;
+        if (scene?.camera && axis !== 'y') {
+            const wtm: Mat4 = scene.camera.worldTransform;
+            if (axis === 'x') {
+                // camera right (horizontal component so pitch stays intuitive even if camera rolls)
+                worldAxis.set(wtm.data[0], 0, wtm.data[2]);
+                worldAxis.normalize();
+            } else {
+                // camera forward, horizontal
+                worldAxis.set(-wtm.data[8], 0, -wtm.data[10]);
+                worldAxis.normalize();
+            }
+        } else {
+            worldAxis.set(0, 1, 0); // world up for yaw, or fallback
+        }
+
+        // Build a quaternion from (worldAxis, angle)
+        const rad = degrees * Math.PI / 180;
+        const half = rad * 0.5;
+        const s = Math.sin(half);
+        const deltaRot = new Quat(worldAxis.x * s, worldAxis.y * s, worldAxis.z * s, Math.cos(half));
+
+        // If a placed asset is currently selected, rotate the entity directly.
+        const placedEntity = this.events.invoke('assetBrowser.selectedPlacedEntity') as Entity | null;
+        if (placedEntity) {
+            this.events.fire('tool.rotate');
+            const currentRot = placedEntity.getRotation().clone();
+            const newRot = new Quat().mul2(deltaRot, currentRot);
+            placedEntity.setRotation(newRot);
+            if (scene) scene.forceRender = true;
+            console.log(`[VoiceCommands] Rotate (entity): axis=${axis}, degrees=${degrees}`);
+            return `Rotated placed asset ${degrees}° around ${axis}`;
+        }
+
         this.events.fire('tool.rotate');
         await this.waitForPivot();
 
@@ -545,22 +626,31 @@ Rules:
         const rot = pivot.transform.rotation.clone();
         const scale = pivot.transform.scale.clone();
 
-        const deltaRot = new Quat();
-        switch (axis) {
-            case 'x': deltaRot.setFromEulerAngles(degrees, 0, 0); break;
-            case 'y': deltaRot.setFromEulerAngles(0, degrees, 0); break;
-            case 'z': deltaRot.setFromEulerAngles(0, 0, degrees); break;
-        }
-        rot.mul(deltaRot);
+        // Apply delta in WORLD frame: newRot = deltaRot * oldRot
+        const newRot = new Quat().mul2(deltaRot, rot);
+
+        console.log(`[VoiceCommands] Rotate: axis=${axis} (${worldAxis.toString()}), degrees=${degrees}`);
 
         pivot.start();
-        pivot.moveTRS(pos, rot, scale);
+        pivot.moveTRS(pos, newRot, scale);
         pivot.end();
 
         return `Rotated ${degrees}° around ${axis} axis`;
     }
 
     private async executeScale(factor: number): Promise<string> {
+        // If a placed asset is currently selected, scale the entity directly.
+        const scene = (window as any).scene;
+        const placedEntity = this.events.invoke('assetBrowser.selectedPlacedEntity') as Entity | null;
+        if (placedEntity) {
+            this.events.fire('tool.scale');
+            const s = placedEntity.getLocalScale();
+            placedEntity.setLocalScale(s.x * factor, s.y * factor, s.z * factor);
+            if (scene) scene.forceRender = true;
+            console.log(`[VoiceCommands] Scale (entity): factor=${factor}, new scale=${placedEntity.getLocalScale().toString()}`);
+            return `Scaled placed asset by ${factor}`;
+        }
+
         this.events.fire('tool.scale');
         await this.waitForPivot();
 

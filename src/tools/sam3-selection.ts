@@ -293,6 +293,9 @@ class Sam3Selection {
             busy = true;
             abort = new AbortController();
             parent.style.cursor = 'wait';
+
+            // Optimistically show the radial menu at the click point while SAM3 processes
+            events.fire('sam3.clickStarted', { x: clickX, y: clickY });
             try {
                 const w = canvas.clientWidth;
                 const h = canvas.clientHeight;

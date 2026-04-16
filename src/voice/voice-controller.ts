@@ -34,6 +34,7 @@ class VoiceController {
     // Wake word listener
     private recognition: SpeechRecognition | null = null;
     private listening = false;
+    private lastWakeTriggerAt = 0;
 
     constructor(events: Events) {
         this.events = events;
@@ -104,16 +105,36 @@ class VoiceController {
         this.recognition.lang = 'en-US';
 
         this.recognition.onresult = (event: SpeechRecognitionEvent) => {
-            // Check all results for the wake word
+            // Already recording — ignore any interim results
+            if (this.active) return;
+
+            // Short cooldown after a trigger prevents the same phrase from re-firing
+            // across consecutive interim-result events
+            const now = Date.now();
+            if (now - this.lastWakeTriggerAt < 2000) return;
+
             for (let i = event.resultIndex; i < event.results.length; i++) {
-                const text = event.results[i][0].transcript.toLowerCase();
-                if (text.includes(WAKE_WORD)) {
-                    console.log(`[VoiceController] Wake word detected: "${text}"`);
-                    // Stop the wake listener temporarily and start recording
-                    this.pauseWakeWordListener();
-                    this.start();
-                    return;
-                }
+                const result = event.results[i];
+                const text = result[0].transcript.toLowerCase().trim();
+
+                // Only accept final results OR interim results where wake word is the ENTIRE utterance so far.
+                // This avoids "the computer program" triggering — interim would have more words, final would too.
+                const tokens = text.split(/\s+/).filter(Boolean);
+                if (tokens.length === 0) continue;
+
+                // Fire only when "computer" is the first word spoken.
+                // This is the natural way to invoke a voice assistant and drastically reduces false triggers.
+                if (tokens[0] !== WAKE_WORD) continue;
+
+                // Require the result to be final (or a stable interim with only the wake word)
+                // so we don't fire mid-sentence on a partial "computer..."
+                if (!result.isFinal && tokens.length > 1) continue;
+
+                console.log(`[VoiceController] Wake word detected: "${text}" (final: ${result.isFinal})`);
+                this.lastWakeTriggerAt = now;
+                this.pauseWakeWordListener();
+                this.start();
+                return;
             }
         };
 
@@ -173,10 +194,17 @@ class VoiceController {
     // --- Recording mode ---
 
     private async start() {
+        if (this.active) {
+            console.log('[VoiceController] start() ignored — already recording');
+            return;
+        }
         if (!this.apiKey) {
             console.error('[VoiceController] No OpenAI API key configured');
             return;
         }
+
+        // Flip active immediately to prevent re-entrant start() calls while getUserMedia is awaiting
+        this.active = true;
 
         try {
             this.stream = await navigator.mediaDevices.getUserMedia({
@@ -191,11 +219,13 @@ class VoiceController {
             this.hasSpoken = false;
 
             // Pick a supported mime type — webm/opus is preferred, mp4/aac as fallback
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-                ? 'audio/webm;codecs=opus'
-                : MediaRecorder.isTypeSupported('audio/mp4')
-                    ? 'audio/mp4'
-                    : '';
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ?
+                'audio/webm;codecs=opus' :
+                MediaRecorder.isTypeSupported('audio/webm') ?
+                    'audio/webm' :
+                    MediaRecorder.isTypeSupported('audio/mp4') ?
+                        'audio/mp4' :
+                        '';
             this.recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : {});
 
             this.recorder.ondataavailable = (e) => {
@@ -208,16 +238,17 @@ class VoiceController {
                 this.transcribe();
             };
 
-            this.recorder.start(250);
-            this.active = true;
+            // Don't use timeslice — request a single blob on stop for cleaner output
+            this.recorder.start();
             this.events.fire('voice.active', true);
 
             this.startSilenceDetection();
 
-            console.log('[VoiceController] Recording started (auto-stop on silence)');
+            console.log(`[VoiceController] Recording started — requested: "${mimeType}", recorder.mimeType: "${this.recorder.mimeType}"`);
 
         } catch (err) {
             console.error('[VoiceController] Start failed:', err);
+            this.active = false;
             this.cleanup();
         }
     }
@@ -295,8 +326,12 @@ class VoiceController {
             return;
         }
 
-        const actualMime = this.chunks[0]?.type || 'audio/webm';
+        // Prefer the recorder's authoritative mimeType over the first chunk's type
+        const recorderMime = this.recorder?.mimeType || '';
+        const chunkMime = this.chunks[0]?.type || '';
+        const actualMime = recorderMime || chunkMime || 'audio/webm';
         const blob = new Blob(this.chunks, { type: actualMime });
+        console.log(`[VoiceController] Blob built — size: ${blob.size}, recorderMime: "${recorderMime}", chunkMime: "${chunkMime}", blob.type: "${blob.type}", chunks: ${this.chunks.length}`);
         this.chunks = [];
         this.cleanup();
 
@@ -308,8 +343,18 @@ class VoiceController {
 
         this.events.fire('voice.transcribing', true);
 
-        // Pick filename extension matching the actual format
-        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+        // Pick filename extension matching the actual format.
+        // Whisper picks the decoder based on the filename extension, so the extension MUST match the container.
+        const mimeLower = actualMime.toLowerCase();
+        const ext = mimeLower.includes('mp4') || mimeLower.includes('m4a') || mimeLower.includes('aac') ?
+            'mp4' :
+            mimeLower.includes('ogg') ?
+                'ogg' :
+                mimeLower.includes('wav') ?
+                    'wav' :
+                    'webm';
+
+        console.log(`[VoiceController] Uploading as recording.${ext} (mime: ${actualMime}, size: ${blob.size}B)`);
 
         try {
             const formData = new FormData();
@@ -327,7 +372,8 @@ class VoiceController {
 
             // Fallback to whisper-1 if the audio format isn't supported
             if (response.status === 400) {
-                console.log('[VoiceController] gpt-4o-mini-transcribe rejected audio, retrying with whisper-1');
+                const firstErr = await response.text();
+                console.log(`[VoiceController] gpt-4o-mini-transcribe rejected audio (${firstErr}), retrying with whisper-1`);
                 const fallbackForm = new FormData();
                 fallbackForm.append('file', blob, `recording.${ext}`);
                 fallbackForm.append('model', 'whisper-1');
@@ -344,6 +390,9 @@ class VoiceController {
 
             if (!response.ok) {
                 const errText = await response.text();
+                // Expose blob so user can inspect/download it in DevTools if needed
+                (window as any).__lastVoiceBlob = blob;
+                console.error(`[VoiceController] Blob saved to window.__lastVoiceBlob for inspection (size: ${blob.size}, type: ${blob.type})`);
                 throw new Error(`Transcription failed: ${response.status} ${errText}`);
             }
 
