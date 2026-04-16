@@ -1,0 +1,64 @@
+src/main.ts
+  0b01e298452d79e0 34,260
+src/tools/walk-tool.ts
+  0b01e298452d79e0 1,11-13,23-27,58-63,77-81,135,165-182,227-228,230-232,235-238,250-253,265-271,278
+src/ui/shortcuts-popup.ts
+  0b01e298452d79e0 71-73,78-79,88-89
+src/voice/voice-controller.ts
+  0b01e298452d79e0 32-40
+src/shortcut-manager.ts
+  0b01e298452d79e0 23-27,41-50
+web/src/app/page.tsx
+  0b01e298452d79e0 67-73,604-620,723,727,729-730,737,739-740,745,748,752,761,777,781,801
+  702d54dc9981fd32 370-394,407,409-415,419,422-423,426,430,813,817
+src/ui/bottom-toolbar.ts
+  0b01e298452d79e0 15,94-98,173,182-185,310,328,390-391,399-400,406
+ops/sessions/20260416-002151.json
+  702d54dc9981fd32 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "5e77e7b97e9565bc71dd86a7b9b1f5ab3552d631",
+  "prompts": {
+    "0b01e298452d79e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "099293bf-76ed-408b-9521-e1ca4a95026e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 136,
+      "total_deletions": 56,
+      "accepted_lines": 136,
+      "overriden_lines": 0
+    },
+    "702d54dc9981fd32": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d937a-ff49-7733-a6c0-b6dd561cf2c7",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 23,
+      "total_deletions": 17,
+      "accepted_lines": 23,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
