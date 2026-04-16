@@ -21,7 +21,9 @@ function EditorFrame() {
   const hasPendingFile = typeof window !== "undefined" && !!window.__pendingFile;
   const hasPendingAsset = typeof window !== "undefined" && !!window.__pendingAsset;
 
-  let editorUrl = "http://localhost:3000";
+  const configuredEditorUrl =
+    process.env.NEXT_PUBLIC_EDITOR_URL?.trim() || "http://localhost:3000";
+  let editorUrl = configuredEditorUrl.replace(/\/$/, "");
   if (load) {
     editorUrl += `?load=${encodeURIComponent(load)}`;
   } else if (hasPendingFile || hasPendingAsset) {
