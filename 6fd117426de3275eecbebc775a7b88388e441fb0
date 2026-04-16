@@ -1,0 +1,75 @@
+src/ui/radial-menu.ts
+  2f43a14f52597f3f 163-164,176-181,221-239,247,254-258
+  f09db0d8a0dd1f52 182-187
+src/voice/voice-controller.ts
+  f09db0d8a0dd1f52 37,108-115,117-137,197-200,206-208,222-228,241-242,247,251,329-332,334,346-357,375-376,393-395
+src/voice/voice-commands.ts
+  f09db0d8a0dd1f52 1,85,89-90,131-132,136,142-155,232-242,264-265,270-272,284-287,373,375-381,543-553,580-618,629-632,635,642-653
+src/iframe-api.ts
+  702d54dc9981fd32 2,6-14,28-38,55-63,67-85,87,101-108,110-118
+src/tools/sam3-selection.ts
+  2f43a14f52597f3f 296-298
+src/ui/asset-browser.ts
+  f09db0d8a0dd1f52 56-62,222-223,225-226,228-232,235-238,277-280,315,787-971
+src/main.ts
+  702d54dc9981fd32 42-51,75-78,292-303
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "6fd117426de3275eecbebc775a7b88388e441fb0",
+  "prompts": {
+    "2f43a14f52597f3f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6b5939f6-9fd6-44a5-a512-fc487863fdfc",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 37,
+      "total_deletions": 18,
+      "accepted_lines": 36,
+      "overriden_lines": 0
+    },
+    "702d54dc9981fd32": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d937a-ff49-7733-a6c0-b6dd561cf2c7",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 94,
+      "total_deletions": 8,
+      "accepted_lines": 94,
+      "overriden_lines": 0
+    },
+    "f09db0d8a0dd1f52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b5534b-3093-4a8b-b623-24980e4b38a2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 426,
+      "total_deletions": 89,
+      "accepted_lines": 411,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 6,
+      "overriden_lines": 0
+    }
+  }
+}
