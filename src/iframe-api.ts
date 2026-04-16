@@ -74,7 +74,7 @@ interface CaptureThumbnailQuery {
 interface ThumbnailResponse {
     type: typeof THUMBNAIL;
     filename: string;
-    data: ArrayBuffer;
+    data: ArrayBuffer | Uint8Array;
 }
 
 const isSceneDirtyQuery = (data: any): data is IsSceneDirtyQuery => {
@@ -176,6 +176,34 @@ const removeExtension = (filename: string) => {
     return dot === -1 ? filename : filename.slice(0, dot);
 };
 
+const normalizeTransferableBuffer = (data: ArrayBuffer | Uint8Array) => {
+    if (data instanceof ArrayBuffer) {
+        return {
+            payload: data,
+            transferables: [data]
+        };
+    }
+
+    if (ArrayBuffer.isView(data)) {
+        const payload = data.buffer instanceof ArrayBuffer &&
+            data.byteOffset === 0 &&
+            data.byteLength === data.buffer.byteLength ?
+            data.buffer :
+            data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+
+        return {
+            payload,
+            transferables: [payload]
+        };
+    }
+
+    const payload = new Uint8Array(data as ArrayBufferLike).slice().buffer;
+    return {
+        payload,
+        transferables: [payload]
+    };
+};
+
 const registerIframeApi = (events: Events) => {
     window.addEventListener('message', async (event: MessageEvent) => {
         const source = event.source as Window | null;
@@ -217,15 +245,16 @@ const registerIframeApi = (events: Events) => {
                 height,
                 transparentBg,
                 showDebug
-            }) as ArrayBuffer;
+            }) as ArrayBuffer | Uint8Array;
             const splats = events.invoke('scene.splats') as Array<any>;
             const baseName = removeExtension(splats?.[0]?.name ?? 'supersplat');
+            const { payload, transferables } = normalizeTransferableBuffer(data);
             const response: ThumbnailResponse = {
                 type: THUMBNAIL,
                 filename: `${baseName}-thumbnail.png`,
-                data
+                data: payload
             };
-            source.postMessage(response, event.origin, [data]);
+            source.postMessage(response, event.origin, transferables);
         }
 
         if (isLoadFileMessage(event.data)) {
