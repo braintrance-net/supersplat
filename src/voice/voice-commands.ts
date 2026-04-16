@@ -425,6 +425,7 @@ Rules:
             console.log(`[VoiceCommands] ${tool.name} failed, trying fallback...`);
         }
 
+        this.events.fire('toast', `Couldn't find "${description}" — try a different description`, 'warning');
         return `Selection failed: both SAM3 and Boxer failed for "${description}"`;
     }
 

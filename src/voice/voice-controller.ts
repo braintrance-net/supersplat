@@ -189,7 +189,14 @@ class VoiceController {
 
             this.chunks = [];
             this.hasSpoken = false;
-            this.recorder = new MediaRecorder(this.stream, { mimeType: 'audio/webm;codecs=opus' });
+
+            // Pick a supported mime type — webm/opus is preferred, mp4/aac as fallback
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+                ? 'audio/webm;codecs=opus'
+                : MediaRecorder.isTypeSupported('audio/mp4')
+                    ? 'audio/mp4'
+                    : '';
+            this.recorder = new MediaRecorder(this.stream, mimeType ? { mimeType } : {});
 
             this.recorder.ondataavailable = (e) => {
                 if (e.data.size > 0) {
@@ -288,7 +295,8 @@ class VoiceController {
             return;
         }
 
-        const blob = new Blob(this.chunks, { type: 'audio/webm' });
+        const actualMime = this.chunks[0]?.type || 'audio/webm';
+        const blob = new Blob(this.chunks, { type: actualMime });
         this.chunks = [];
         this.cleanup();
 
@@ -300,19 +308,39 @@ class VoiceController {
 
         this.events.fire('voice.transcribing', true);
 
+        // Pick filename extension matching the actual format
+        const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
+
         try {
             const formData = new FormData();
-            formData.append('file', blob, 'recording.webm');
+            formData.append('file', blob, `recording.${ext}`);
             formData.append('model', 'gpt-4o-mini-transcribe');
             formData.append('response_format', 'text');
 
-            const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            let response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${this.apiKey}`
                 },
                 body: formData
             });
+
+            // Fallback to whisper-1 if the audio format isn't supported
+            if (response.status === 400) {
+                console.log('[VoiceController] gpt-4o-mini-transcribe rejected audio, retrying with whisper-1');
+                const fallbackForm = new FormData();
+                fallbackForm.append('file', blob, `recording.${ext}`);
+                fallbackForm.append('model', 'whisper-1');
+                fallbackForm.append('response_format', 'text');
+
+                response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${this.apiKey}`
+                    },
+                    body: fallbackForm
+                });
+            }
 
             if (!response.ok) {
                 const errText = await response.text();

@@ -109,8 +109,14 @@ class RadialMenu extends Container {
             }
         ];
 
-        // Build DOM items in a horizontal row
-        items.forEach((item) => {
+        // Build DOM items arranged in a semicircle arc
+        const totalItems = items.length;
+        const arcStart = -90;
+        const arcEnd = 90;
+        const arcSpan = arcEnd - arcStart;
+        const radius = 130; // px — large enough so 56px items never overlap
+
+        items.forEach((item, i) => {
             const el = document.createElement('button');
             el.id = item.id;
             el.className = `radial-item ${item.className || ''}`;
@@ -134,6 +140,14 @@ class RadialMenu extends Container {
             labelEl.textContent = item.label;
             el.appendChild(labelEl);
 
+            // Position in arc
+            const angle = arcStart + (arcSpan * i) / (totalItems - 1);
+            const rad = (angle * Math.PI) / 180;
+            const x = Math.sin(rad) * radius;
+            const y = -Math.cos(rad) * radius;
+            el.style.setProperty('--radial-x', `${x}px`);
+            el.style.setProperty('--radial-y', `${y}px`);
+
             el.addEventListener('click', (e) => {
                 e.stopPropagation();
                 item.action();
@@ -156,6 +170,13 @@ class RadialMenu extends Container {
         // splat.stateChanged = gaussians selected/deselected within a splat (SAM3, brush, etc.)
         events.on('selection.changed', checkSelection);
         events.on('splat.stateChanged', checkSelection);
+
+        // Reposition after transforms (e.g. voice-driven translate)
+        events.on('pivot.ended', () => {
+            if (!this.hidden && !this.oneShotTool) {
+                this.showNearSelection();
+            }
+        });
 
         // When selection is cleared, hide
         events.on('selection.deselect', () => {
