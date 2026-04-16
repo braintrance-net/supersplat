@@ -75,6 +75,15 @@ declare global {
         supersplatDebug?: {
             getCameraState: () => DebugCameraState;
             copyCameraState: () => Promise<string>;
+            getPresetState: () => {
+                camera: DebugCameraState;
+                splatTransform: {
+                    position: { x: number, y: number, z: number };
+                    rotationEuler: { x: number, y: number, z: number };
+                    scale: { x: number, y: number, z: number };
+                } | null;
+            };
+            copyPresetState: () => Promise<string>;
         };
     }
 }
@@ -289,14 +298,45 @@ const main = async () => {
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
 
+    const getCameraState = () => {
+        return events.invoke('camera.debugState') as DebugCameraState;
+    };
+
+    const getPresetState = () => {
+        const splats = events.invoke('scene.splats') as Array<any>;
+        const splat = splats?.[0];
+
+        return {
+            camera: getCameraState(),
+            splatTransform: splat ? {
+                position: (() => {
+                    const value = splat.entity.getLocalPosition();
+                    return { x: value.x, y: value.y, z: value.z };
+                })(),
+                rotationEuler: (() => {
+                    const value = splat.entity.getLocalEulerAngles();
+                    return { x: value.x, y: value.y, z: value.z };
+                })(),
+                scale: (() => {
+                    const value = splat.entity.getLocalScale();
+                    return { x: value.x, y: value.y, z: value.z };
+                })()
+            } : null
+        };
+    };
+
     window.supersplatDebug = {
-        getCameraState: () => {
-            return events.invoke('camera.debugState') as DebugCameraState;
-        },
+        getCameraState,
         copyCameraState: async () => {
-            const cameraState = events.invoke('camera.debugState') as DebugCameraState;
-            const json = JSON.stringify(cameraState, null, 2);
-            console.log('SuperSplat camera state\n', cameraState);
+            const json = JSON.stringify(getCameraState(), null, 2);
+            console.log('SuperSplat camera state\n', json);
+            await navigator.clipboard.writeText(json).catch(() => {});
+            return json;
+        },
+        getPresetState,
+        copyPresetState: async () => {
+            const json = JSON.stringify(getPresetState(), null, 2);
+            console.log('SuperSplat preset state\n', json);
             await navigator.clipboard.writeText(json).catch(() => {});
             return json;
         }

@@ -46,6 +46,8 @@ class EditorUI {
     popup: Popup;
 
     constructor(events: Events) {
+        const UI_MODE_STORAGE_KEY = 'supersplat-ui-mode';
+
         // favicon
         const link = document.createElement('link');
         link.rel = 'icon';
@@ -78,6 +80,11 @@ class EditorUI {
         // canvas
         const canvas = document.createElement('canvas');
         canvas.id = 'canvas';
+
+        const uiModeToggle = document.createElement('button');
+        uiModeToggle.id = 'ui-mode-toggle';
+        uiModeToggle.type = 'button';
+        uiModeToggle.textContent = '⚙';
 
         // app label
         const appLabel = new Label({
@@ -138,6 +145,7 @@ class EditorUI {
         const radialMenu = new RadialMenu(events);
 
         canvasContainer.dom.appendChild(canvas);
+        canvasContainer.dom.appendChild(uiModeToggle);
         canvasContainer.append(appLabel);
         canvasContainer.append(cursorLabel);
         canvasContainer.append(toolsContainer);
@@ -151,6 +159,27 @@ class EditorUI {
         canvasContainer.append(menu);
         canvasContainer.append(undoRedoToolbar);
         canvasContainer.append(radialMenu);
+
+        const setAdvancedUi = (advanced: boolean) => {
+            document.body.classList.toggle('advanced-ui', advanced);
+            document.body.classList.toggle('simplified-ui', !advanced);
+            localStorage.setItem(UI_MODE_STORAGE_KEY, advanced ? 'advanced' : 'simplified');
+
+            uiModeToggle.classList.toggle('active', advanced);
+            uiModeToggle.title = advanced ? 'Switch to current controls' : 'Switch to advanced controls';
+            uiModeToggle.setAttribute('aria-label', uiModeToggle.title);
+        };
+
+        setAdvancedUi(localStorage.getItem(UI_MODE_STORAGE_KEY) === 'advanced');
+
+        uiModeToggle.addEventListener('pointerdown', (event) => {
+            event.stopPropagation();
+        });
+
+        uiModeToggle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            setAdvancedUi(!document.body.classList.contains('advanced-ui'));
+        });
 
         // view axes container
         const viewCube = new ViewCube(events);

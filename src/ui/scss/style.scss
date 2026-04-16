@@ -187,15 +187,54 @@ body {
     pointer-events: none;
 }
 
-#app-label,
-#data-panel,
-#timeline-panel,
-#right-toolbar,
-#scene-panel,
-#menu-bar,
-#view-cube-container,
-#mode-toggle {
-    display: none !important;
+body.simplified-ui {
+    #app-label,
+    #data-panel,
+    #timeline-panel,
+    #right-toolbar,
+    #scene-panel,
+    #menu-bar,
+    #view-cube-container,
+    #mode-toggle {
+        display: none !important;
+    }
+}
+
+body.advanced-ui {
+    #bottom-toolbar {
+        display: none !important;
+    }
+}
+
+#ui-mode-toggle {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 40px;
+    height: 40px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(20, 20, 24, 0.9);
+    color: #fff;
+    font-size: 19px;
+    line-height: 1;
+    cursor: pointer;
+    pointer-events: auto;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    transition: background-color 0.15s ease, transform 0.15s ease;
+
+    &:hover {
+        background: rgba(38, 38, 44, 0.95);
+        transform: rotate(15deg);
+    }
+
+    &.active {
+        background: rgba(73, 126, 255, 0.95);
+    }
 }
 
 
