@@ -1,0 +1,25 @@
+src/ui/bottom-toolbar.ts
+  702d54dc9981fd32 7-10,12-16,18,39-78,89,96,98-99,128-130,138,140-289,293-313,317,328-331,336-338,344-359
+src/ui/scss/bottom-toolbar.scss
+  702d54dc9981fd32 17-19,33-58,60-63,69-72,91-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "c2a83856ad59295e881c6a8e6ac3a6345491d175",
+  "prompts": {
+    "702d54dc9981fd32": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d937a-ff49-7733-a6c0-b6dd561cf2c7",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 300,
+      "total_deletions": 47,
+      "accepted_lines": 311,
+      "overriden_lines": 0
+    }
+  }
+}
