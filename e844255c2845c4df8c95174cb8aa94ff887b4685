@@ -1,0 +1,68 @@
+web/src/app/page.tsx
+  b77bf645e5a53fe2 44,47-90,96,106,116,126,136,146,156,166,176,186,196,206,216,226,236,246,256,266,272-315,324-327,355,357,360,427-428,432-438,458,467-474,491-535,538,543,547-608,631,654-728,730,742,745-753,762-765,768,770-773,775-776,780,823-919
+src/ui/svg/walk.svg
+  0b01e298452d79e0 1-3
+src/voice/voice-commands.ts
+  f09db0d8a0dd1f52 294,297-308,315-316,412-426,428,438
+src/shaders/outline-shader.ts
+  f0ab20671f4bb23b 53-65,69,72-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.3.0",
+  "base_commit_sha": "e844255c2845c4df8c95174cb8aa94ff887b4685",
+  "prompts": {
+    "0b01e298452d79e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "099293bf-76ed-408b-9521-e1ca4a95026e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 3,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "b77bf645e5a53fe2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019d934e-2cf1-7972-80a2-25fc6bb08ce5",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 470,
+      "total_deletions": 127,
+      "accepted_lines": 397,
+      "overriden_lines": 1
+    },
+    "f09db0d8a0dd1f52": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "85b5534b-3093-4a8b-b623-24980e4b38a2",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 32,
+      "total_deletions": 4,
+      "accepted_lines": 32,
+      "overriden_lines": 0
+    },
+    "f0ab20671f4bb23b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b98f2b26-fda1-4094-8c0b-f969451d8621",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Jonathan Amdahl",
+      "messages": [],
+      "total_additions": 18,
+      "total_deletions": 15,
+      "accepted_lines": 24,
+      "overriden_lines": 0
+    }
+  }
+}
