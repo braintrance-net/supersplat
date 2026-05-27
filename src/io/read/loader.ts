@@ -15,6 +15,8 @@ import {
 } from '@playcanvas/splat-transform';
 import { GSplatData } from 'playcanvas';
 
+import { loadRadGSplatData } from './rad';
+
 /**
  * Default options for readFile.
  */
@@ -80,8 +82,13 @@ const dataTableToGSplatData = (dataTable: DataTable): GSplatData => {
  * @param skipReorder - Skip morton reordering (for files already in morton order or animation playback)
  */
 const loadGSplatData = async (filename: string, fileSystem: ReadFileSystem, skipReorder?: boolean): Promise<GSplatData> => {
-    const inputFormat = getInputFormat(filename);
     const lowerFilename = filename.toLowerCase();
+
+    if (lowerFilename.endsWith('.rad') || lowerFilename.endsWith('.radc')) {
+        return loadRadGSplatData(filename, fileSystem);
+    }
+
+    const inputFormat = getInputFormat(filename);
 
     // Handle bundled SOG (.sog extension) - wrap with ZipReadFileSystem
     if (inputFormat === 'sog' && lowerFilename.endsWith('.sog')) {

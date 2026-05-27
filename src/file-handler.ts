@@ -76,6 +76,12 @@ const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
             'application/x-gaussian-splat': ['.spz']
         }
     },
+    'rad': {
+        description: 'RAD File',
+        accept: {
+            'application/x-gaussian-splat': ['.rad', '.radc']
+        }
+    },
     'indexTxt': {
         description: 'Colmap Poses (Images.txt)',
         accept: {
@@ -100,7 +106,7 @@ const allImportTypes = {
     description: 'Supported Files',
     accept: {
         'application/ply': ['.ply'],
-        'application/x-gaussian-splat': ['.json', '.sog', '.splat', '.ksplat', '.spz'],
+        'application/x-gaussian-splat': ['.json', '.sog', '.splat', '.ksplat', '.spz', '.rad', '.radc'],
         'image/webp': ['.webp'],
         'application/json': ['.lcc'],
         'application/octet-stream': ['.bin'],
@@ -142,6 +148,10 @@ const isSog = (filenames: string[]) => {
 const isLcc = (filenames: string[]) => {
     const count = (extension: string) => filenames.reduce((sum, f) => sum + (f.endsWith(extension) ? 1 : 0), 0);
     return count('.lcc') === 1;
+};
+
+const isRad = (filenames: string[]) => {
+    return filenames.some(f => f.endsWith('.rad'));
 };
 
 type ImportFile = {
@@ -274,6 +284,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 mainIndex = filenames.findIndex(f => f === 'meta.json');
             } else if (filenames.some(f => f.endsWith('.lcc'))) {
                 mainIndex = filenames.findIndex(f => f.endsWith('.lcc'));
+            } else if (filenames.some(f => f.endsWith('.rad'))) {
+                mainIndex = filenames.findIndex(f => f.endsWith('.rad'));
             } else {
                 mainIndex = 0;  // Single file case
             }
@@ -311,7 +323,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // handle ply sequence
             events.fire('plysequence.setFrames', files.map(f => f.contents));
             events.fire('timeline.frame', 0);
-        } else if (isSog(filenames) || isLcc(filenames)) {
+        } else if (isSog(filenames) || isLcc(filenames) || isRad(filenames)) {
             if (isLcc(filenames)) {
                 const response = await events.invoke('showPopup', {
                     type: 'okcancel',
@@ -329,7 +341,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz'].every(ext => !filename.endsWith(ext))) {
+                if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz', '.rad', '.radc'].every(ext => !filename.endsWith(ext))) {
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }
@@ -342,7 +354,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (filename.endsWith('.ssproj')) {
                     // load ssproj document
                     await events.invoke('doc.load', files[i].contents ?? (await fetch(files[i].url)).arrayBuffer(), files[i].handle);
-                } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz'].some(ext => filename.endsWith(ext))) {
+                } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz', '.rad', '.radc'].some(ext => filename.endsWith(ext))) {
                     // load gaussian splat model
                     const model = await importSplatModel([files[i]], animationFrame);
                     if (model) result.push(model);
@@ -369,7 +381,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         fileSelector = document.createElement('input');
         fileSelector.setAttribute('id', 'file-selector');
         fileSelector.setAttribute('type', 'file');
-        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.bin,.txt,.ksplat,.spz');
+        fileSelector.setAttribute('accept', '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.bin,.txt,.ksplat,.spz,.rad,.radc');
         fileSelector.setAttribute('multiple', 'true');
 
         fileSelector.onchange = () => {
@@ -435,6 +447,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         filePickerTypes.lcc,
                         filePickerTypes.ksplat,
                         filePickerTypes.spz,
+                        filePickerTypes.rad,
                         filePickerTypes.indexTxt
                     ]
                 });
