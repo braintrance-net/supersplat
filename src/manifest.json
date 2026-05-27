@@ -36,7 +36,8 @@
         {
             "action": "./",
             "accept": {
-                "application/ply": [".ply"]
+                "application/ply": [".ply"],
+                "application/x-gaussian-splat": [".rad", ".radc"]
             }
         }
     ]

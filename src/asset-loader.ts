@@ -6,6 +6,11 @@ import { loadGSplatData, validateGSplatData } from './io';
 import { Splat } from './splat';
 
 const getOrientation = (filename: string) => {
+    const lowerFilename = filename.toLowerCase().split('?')[0];
+    if (lowerFilename.endsWith('.rad') || lowerFilename.endsWith('.radc')) {
+        return new Vec3(0, 0, 180);
+    }
+
     switch (getInputFormat(filename)) {
         case 'spz':
             return new Vec3(0, 0, 0);
