@@ -407,6 +407,8 @@ const applyCameraState = (scene: Scene, camera: CameraDebugState) => {
         new Vec3(camera.target.x, camera.target.y, camera.target.z),
         0
     );
+    scene.camera.onUpdate(0);
+    scene.forceRender = true;
 };
 
 const applyCamera = async (scene: Scene, frame: { camera: CameraDebugState }) => {
@@ -432,6 +434,10 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
         frames = [];
         const startedAt = performance.now();
         const originalCamera = events.invoke('camera.debugState') as CameraDebugState;
+        const activeTool = events.invoke('tool.active') as string | null;
+        if (activeTool) {
+            events.fire('tool.deactivate');
+        }
         const maxSide = Math.max(320, Math.min(1024, options.maxSide ?? DEFAULT_CAPTURE_SIDE));
         const screenshotMode: ScreenshotMode = options.screenshotMode === 'debug' ? 'debug' : 'normal';
 
@@ -488,7 +494,9 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
             return { ok: false, error: message, frames: [] as PublicReviewFrame[] };
         } finally {
             applyCameraState(scene, originalCamera);
-            scene.forceRender = true;
+            if (activeTool) {
+                events.fire(`tool.${activeTool}`);
+            }
             busy = false;
         }
     };
