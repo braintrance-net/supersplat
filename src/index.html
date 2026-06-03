@@ -22,17 +22,27 @@
 
                 const legacyCachePattern = /supersplat|playcanvas/i;
                 const currentBase = new URL(document.baseURI).pathname;
+                const controllerScriptURL = sw.controller?.scriptURL;
                 const isCurrentEditorRegistration = (reg) => {
                     const scopePath = new URL(reg.scope).pathname;
                     return scopePath.startsWith(currentBase) || currentBase.startsWith(scopePath);
                 };
+                const isControllerRegistration = (reg) => {
+                    return !!controllerScriptURL && [reg.active, reg.waiting, reg.installing].some(worker => worker?.scriptURL === controllerScriptURL);
+                };
+                const unregisterLegacyWorkers = sw.getRegistrations().then(regs => {
+                    const targets = regs.filter(reg => isCurrentEditorRegistration(reg) || isControllerRegistration(reg));
+                    return Promise.all(targets.map(reg => reg.unregister())).then(() => targets.length);
+                });
 
                 Promise.all([
-                    sw.getRegistrations().then(regs => Promise.all(regs.filter(isCurrentEditorRegistration).map(reg => reg.unregister()))),
+                    unregisterLegacyWorkers,
                     window.caches?.keys().then(keys => Promise.all(keys.filter(key => legacyCachePattern.test(key)).map(key => caches.delete(key))))
-                ]).then(() => {
-                    window.localStorage?.setItem(markerKey, 'done');
-                    if (sw.controller) {
+                ]).then(([unregisteredCount]) => {
+                    if (!sw.controller || unregisteredCount > 0) {
+                        window.localStorage?.setItem(markerKey, 'done');
+                    }
+                    if (sw.controller && unregisteredCount > 0) {
                         window.location.reload();
                     }
                 });
