@@ -391,9 +391,7 @@ const requestIdPayload = (requestId?: number) => {
 };
 
 const registerIframeApi = (events: Events) => {
-    let activeRequestId: number | undefined;
-
-    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId = activeRequestId) => {
+    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: number) => {
         const response = {
             type: SEMANTIC_LAYER,
             result: events.invoke('semanticAnnotations.layer') as SemanticLayer,
@@ -529,7 +527,6 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isLoadFileMessage(event.data)) {
-            activeRequestId = event.data.requestId;
             if (event.data.data) {
                 const file = new File([event.data.data], event.data.filename);
                 await events.invoke('import', [{

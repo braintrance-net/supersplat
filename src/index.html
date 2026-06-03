@@ -13,17 +13,30 @@
         <!-- Clear old SuperSplat service workers. This fork is served through host apps and
              stale service-worker caches can leave the iframe on an older editor bundle. -->
         <script>
-            const sw = navigator.serviceWorker;
-            if (sw) {
+            (() => {
+                const sw = navigator.serviceWorker;
+                const markerKey = 'supersplat:legacy-service-worker-clear:v1';
+                if (!sw || window.localStorage?.getItem(markerKey) === 'done') {
+                    return;
+                }
+
+                const legacyCachePattern = /supersplat|playcanvas/i;
+                const currentBase = new URL(document.baseURI).pathname;
+                const isCurrentEditorRegistration = (reg) => {
+                    const scopePath = new URL(reg.scope).pathname;
+                    return scopePath.startsWith(currentBase) || currentBase.startsWith(scopePath);
+                };
+
                 Promise.all([
-                    sw.getRegistrations().then(regs => Promise.all(regs.map(reg => reg.unregister()))),
-                    window.caches?.keys().then(keys => Promise.all(keys.map(key => caches.delete(key))))
+                    sw.getRegistrations().then(regs => Promise.all(regs.filter(isCurrentEditorRegistration).map(reg => reg.unregister()))),
+                    window.caches?.keys().then(keys => Promise.all(keys.filter(key => legacyCachePattern.test(key)).map(key => caches.delete(key))))
                 ]).then(() => {
+                    window.localStorage?.setItem(markerKey, 'done');
                     if (sw.controller) {
                         window.location.reload();
                     }
                 });
-            }
+            })();
         </script>
         <script>
             window.supersplatConfig = __SUPERSPLAT_CONFIG__;
