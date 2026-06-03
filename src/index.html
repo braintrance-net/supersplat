@@ -10,18 +10,43 @@
         <meta name="description" content="SuperSplat is an advanced browser-based editor for manipulating and optimizing 3D Gaussian Splats. It is open source and engine agnostic." />
         <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
 
-        <!-- Service worker -->
+        <!-- Clear old SuperSplat service workers. This fork is served through host apps and
+             stale service-worker caches can leave the iframe on an older editor bundle. -->
         <script>
-            const sw = navigator.serviceWorker;
-            const isLocalDevHost =
-                window.location.hostname === 'localhost' ||
-                window.location.hostname === '127.0.0.1';
+            (() => {
+                const sw = navigator.serviceWorker;
+                const markerKey = 'supersplat:legacy-service-worker-clear:v1';
+                if (!sw || window.localStorage?.getItem(markerKey) === 'done') {
+                    return;
+                }
 
-            if (sw && !isLocalDevHost) {
-                sw.register('./sw.js')
-                    .then(reg => console.log('service worker registered', reg))
-                    .catch(err => console.log('failed to register service worker', err));
-            }
+                const legacyCachePattern = /supersplat|playcanvas/i;
+                const currentBase = new URL(document.baseURI).pathname;
+                const controllerScriptURL = sw.controller?.scriptURL;
+                const isCurrentEditorRegistration = (reg) => {
+                    const scopePath = new URL(reg.scope).pathname;
+                    return scopePath.startsWith(currentBase) || currentBase.startsWith(scopePath);
+                };
+                const isControllerRegistration = (reg) => {
+                    return !!controllerScriptURL && [reg.active, reg.waiting, reg.installing].some(worker => worker?.scriptURL === controllerScriptURL);
+                };
+                const unregisterLegacyWorkers = sw.getRegistrations().then(regs => {
+                    const targets = regs.filter(reg => isCurrentEditorRegistration(reg) || isControllerRegistration(reg));
+                    return Promise.all(targets.map(reg => reg.unregister())).then(() => targets.length);
+                });
+
+                Promise.all([
+                    unregisterLegacyWorkers,
+                    window.caches?.keys().then(keys => Promise.all(keys.filter(key => legacyCachePattern.test(key)).map(key => caches.delete(key))))
+                ]).then(([unregisteredCount]) => {
+                    if (!sw.controller || unregisteredCount > 0) {
+                        window.localStorage?.setItem(markerKey, 'done');
+                    }
+                    if (sw.controller && unregisteredCount > 0) {
+                        window.location.reload();
+                    }
+                });
+            })();
         </script>
         <script>
             window.supersplatConfig = __SUPERSPLAT_CONFIG__;
