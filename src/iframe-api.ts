@@ -60,6 +60,7 @@ interface LoadFileMessage {
     data?: ArrayBuffer;
     camera?: CameraState;
     transform?: PresetTransform;
+    requestId?: number;
 }
 
 interface GetCameraStateQuery {
@@ -110,15 +111,18 @@ interface ApiConfigMessage {
 
 interface SemanticLayerGetMessage {
     type: typeof SEMANTIC_LAYER_GET;
+    requestId?: number;
 }
 
 interface SemanticLayerLoadMessage {
     type: typeof SEMANTIC_LAYER_LOAD;
     layer: Partial<SemanticLayer>;
+    requestId?: number;
 }
 
 interface SemanticScanRunMessage {
     type: typeof SEMANTIC_SCAN_RUN;
+    requestId?: number;
 }
 
 interface PreprocessReviewFramesMessage {
@@ -127,18 +131,22 @@ interface PreprocessReviewFramesMessage {
     maxReviewFrames?: number;
     helperBudget?: number;
     screenshotMode?: 'normal' | 'debug';
+    requestId?: number;
 }
 
 interface SemanticPreprocessScanMessage {
     type: typeof SEMANTIC_PREPROCESS_SCAN;
     acceptedViewIds?: string[];
     count?: number;
+    requestId?: number;
 }
 
 interface GameModeMessage {
     type: typeof GAME_MODE;
     enabled: boolean;
 }
+
+const hasOptionalRequestId = (data: any) => data.requestId === undefined || typeof data.requestId === 'number';
 
 const isSceneDirtyQuery = (data: any): data is IsSceneDirtyQuery => {
     return (
@@ -154,7 +162,8 @@ const isLoadFileMessage = (data: any): data is LoadFileMessage => {
         typeof data === 'object' &&
         data.type === LOAD_FILE &&
         typeof data.filename === 'string' &&
-        (data.data === undefined || data.data instanceof ArrayBuffer)
+        (data.data === undefined || data.data instanceof ArrayBuffer) &&
+        hasOptionalRequestId(data)
     );
 };
 
@@ -204,7 +213,7 @@ const isApiConfigMessage = (data: any): data is ApiConfigMessage => {
 };
 
 const isSemanticLayerGetMessage = (data: any): data is SemanticLayerGetMessage => {
-    return data && typeof data === 'object' && data.type === SEMANTIC_LAYER_GET;
+    return data && typeof data === 'object' && data.type === SEMANTIC_LAYER_GET && hasOptionalRequestId(data);
 };
 
 const isSemanticLayerLoadMessage = (data: any): data is SemanticLayerLoadMessage => {
@@ -213,12 +222,13 @@ const isSemanticLayerLoadMessage = (data: any): data is SemanticLayerLoadMessage
         typeof data === 'object' &&
         data.type === SEMANTIC_LAYER_LOAD &&
         data.layer &&
-        typeof data.layer === 'object'
+        typeof data.layer === 'object' &&
+        hasOptionalRequestId(data)
     );
 };
 
 const isSemanticScanRunMessage = (data: any): data is SemanticScanRunMessage => {
-    return data && typeof data === 'object' && data.type === SEMANTIC_SCAN_RUN;
+    return data && typeof data === 'object' && data.type === SEMANTIC_SCAN_RUN && hasOptionalRequestId(data);
 };
 
 const isPreprocessReviewFramesMessage = (data: any): data is PreprocessReviewFramesMessage => {
@@ -229,7 +239,8 @@ const isPreprocessReviewFramesMessage = (data: any): data is PreprocessReviewFra
         (data.maxSide === undefined || typeof data.maxSide === 'number') &&
         (data.maxReviewFrames === undefined || typeof data.maxReviewFrames === 'number') &&
         (data.helperBudget === undefined || typeof data.helperBudget === 'number') &&
-        (data.screenshotMode === undefined || data.screenshotMode === 'normal' || data.screenshotMode === 'debug')
+        (data.screenshotMode === undefined || data.screenshotMode === 'normal' || data.screenshotMode === 'debug') &&
+        hasOptionalRequestId(data)
     );
 };
 
@@ -239,7 +250,8 @@ const isSemanticPreprocessScanMessage = (data: any): data is SemanticPreprocessS
         typeof data === 'object' &&
         data.type === SEMANTIC_PREPROCESS_SCAN &&
         (data.acceptedViewIds === undefined || Array.isArray(data.acceptedViewIds)) &&
-        (data.count === undefined || typeof data.count === 'number')
+        (data.count === undefined || typeof data.count === 'number') &&
+        hasOptionalRequestId(data)
     );
 };
 
@@ -371,11 +383,21 @@ const normalizeTransferableBuffer = (data: ArrayBuffer | Uint8Array) => {
     };
 };
 
+const requestIdPayload = (requestId?: number) => {
+    if (typeof requestId === 'number') {
+        return { requestId };
+    }
+    return {};
+};
+
 const registerIframeApi = (events: Events) => {
-    const postSemanticLayer = (source: Window = window.parent, origin = '*') => {
+    let activeRequestId: number | undefined;
+
+    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId = activeRequestId) => {
         const response = {
             type: SEMANTIC_LAYER,
-            result: events.invoke('semanticAnnotations.layer') as SemanticLayer
+            result: events.invoke('semanticAnnotations.layer') as SemanticLayer,
+            ...requestIdPayload(requestId)
         };
         source.postMessage(response, origin);
     };
@@ -456,19 +478,20 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isSemanticLayerGetMessage(event.data)) {
-            postSemanticLayer(source, event.origin);
+            postSemanticLayer(source, event.origin, event.data.requestId);
         }
 
         if (isSemanticLayerLoadMessage(event.data)) {
             events.invoke('semanticAnnotations.loadLayer', event.data.layer);
-            postSemanticLayer(source, event.origin);
+            postSemanticLayer(source, event.origin, event.data.requestId);
         }
 
         if (isSemanticScanRunMessage(event.data)) {
             const result = await events.invoke('semanticScan.run');
             source.postMessage({
                 type: SEMANTIC_SCAN_RESULT,
-                result
+                result,
+                ...requestIdPayload(event.data.requestId)
             }, event.origin);
         }
 
@@ -481,7 +504,8 @@ const registerIframeApi = (events: Events) => {
             });
             source.postMessage({
                 type: PREPROCESS_REVIEW_FRAMES_RESULT,
-                result
+                result,
+                ...requestIdPayload(event.data.requestId)
             }, event.origin);
         }
 
@@ -492,7 +516,8 @@ const registerIframeApi = (events: Events) => {
             });
             source.postMessage({
                 type: SEMANTIC_PREPROCESS_SCAN_RESULT,
-                result
+                result,
+                ...requestIdPayload(event.data.requestId)
             }, event.origin);
         }
 
@@ -504,6 +529,7 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isLoadFileMessage(event.data)) {
+            activeRequestId = event.data.requestId;
             if (event.data.data) {
                 const file = new File([event.data.data], event.data.filename);
                 await events.invoke('import', [{
@@ -519,7 +545,8 @@ const registerIframeApi = (events: Events) => {
                 result: {
                     empty: events.invoke('scene.empty') as boolean,
                     semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer
-                }
+                },
+                ...requestIdPayload(event.data.requestId)
             }, event.origin);
         }
     });
