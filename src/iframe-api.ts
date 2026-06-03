@@ -531,9 +531,10 @@ const registerIframeApi = (events: Events) => {
             } else {
                 const restoreTool = gameModePreviousTool;
                 gameModePreviousTool = null;
-                if (restoreTool && restoreTool !== 'walk') {
+                const activeTool = events.invoke('tool.active') as string | null;
+                if (restoreTool && activeTool !== restoreTool) {
                     events.fire(`tool.${restoreTool}`);
-                } else if (events.invoke('tool.active')) {
+                } else if (!restoreTool && activeTool) {
                     events.fire('tool.deactivate');
                 }
             }
