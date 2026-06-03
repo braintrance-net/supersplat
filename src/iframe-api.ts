@@ -395,6 +395,13 @@ const registerIframeApi = (events: Events) => {
     let gameModePreviousTool: string | null = null;
     let gameModeActivatedWalk = false;
 
+    const resetGameModeState = () => {
+        gameModeActive = false;
+        gameModePreviousTool = null;
+        gameModeActivatedWalk = false;
+        events.fire('semanticAnnotations.interactionMode', 'edit');
+    };
+
     const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: number) => {
         const response = {
             type: SEMANTIC_LAYER,
@@ -552,21 +559,31 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isLoadFileMessage(event.data)) {
-            if (event.data.data) {
-                const file = new File([event.data.data], event.data.filename);
-                await events.invoke('import', [{
-                    filename: file.name,
-                    contents: file
-                }]);
-            }
+            let error: string | undefined;
+            resetGameModeState();
+            try {
+                if (event.data.data) {
+                    events.fire('scene.clear');
+                    const file = new File([event.data.data], event.data.filename);
+                    await events.invoke('import', [{
+                        filename: file.name,
+                        contents: file
+                    }]);
+                }
 
-            applyTransformState(events, event.data.transform);
-            applyCameraState(events, event.data.camera);
+                applyTransformState(events, event.data.transform);
+                applyCameraState(events, event.data.camera);
+            } catch (err) {
+                error = err instanceof Error ? err.message : 'Import failed';
+                console.error('[iframe-api] load-file failed:', err);
+                events.fire('toast', error, 'error');
+            }
             source.postMessage({
                 type: SCENE_LOADED,
                 result: {
                     empty: events.invoke('scene.empty') as boolean,
-                    semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer
+                    semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer,
+                    error
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
