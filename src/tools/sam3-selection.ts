@@ -466,16 +466,15 @@ class Sam3Selection {
                 let requestPoints: Sam3PromptPoint[];
                 let nextPromptSession: Sam3PromptSession;
                 let outputOp = op;
-                let label: Sam3PromptLabel = 1;
+                const label: Sam3PromptLabel = op === 'remove' ? 0 : 1;
 
                 if (op === 'set' || !canRefinePrompt) {
                     const img = await captureScene(events, w, h);
                     if (!this.active) return;
-                    nextPromptSession = { viewKey, image: img, points: [{ click_xy, label: 1 }] };
+                    nextPromptSession = { viewKey, image: img, points: [{ click_xy, label }] };
                     requestImage = nextPromptSession.image;
                     requestPoints = nextPromptSession.points;
                 } else {
-                    label = op === 'remove' ? 0 : 1;
                     outputOp = 'set';
                     nextPromptSession = {
                         ...promptSession!,
