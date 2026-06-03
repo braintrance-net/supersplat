@@ -416,6 +416,7 @@ const applyCamera = async (scene: Scene, frame: { camera: CameraDebugState }) =>
 
 const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
     let frames: CapturedReviewFrame[] = [];
+    let busy = false;
 
     const captureReviewFrames = async (options: {
         maxSide?: number,
@@ -423,6 +424,12 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
         helperBudget?: number,
         screenshotMode?: ScreenshotMode
     } = {}) => {
+        if (busy) {
+            return { ok: false, error: 'Semantic preprocessing is already running.', frames: [] as PublicReviewFrame[] };
+        }
+
+        busy = true;
+        frames = [];
         const startedAt = performance.now();
         const originalCamera = events.invoke('camera.debugState') as CameraDebugState;
         const maxSide = Math.max(320, Math.min(1024, options.maxSide ?? DEFAULT_CAPTURE_SIDE));
@@ -474,25 +481,39 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
                     screenshotMode
                 } satisfies CaptureTiming
             };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Semantic preprocessing capture failed';
+            frames = [];
+            events.fire('toast', message, 'error');
+            return { ok: false, error: message, frames: [] as PublicReviewFrame[] };
         } finally {
             applyCameraState(scene, originalCamera);
             scene.forceRender = true;
+            busy = false;
         }
     };
 
     const scanReviewFrames = async (options: { acceptedViewIds?: string[], count?: number } = {}) => {
-        const accepted = new Set(options.acceptedViewIds ?? frames.filter(frame => frame.quality.accepted).map(frame => frame.viewId));
-        const selectedFrames = frames.filter(frame => accepted.has(frame.viewId));
-        const originalCamera = events.invoke('camera.debugState') as CameraDebugState;
-        const annotations: SemanticAnnotation[] = [];
-
-        if (selectedFrames.length === 0) {
-            return { ok: false, error: 'No accepted preprocessing frames are available.', annotations };
+        if (busy) {
+            return { ok: false, error: 'Semantic preprocessing is already running.', annotations: [] as SemanticAnnotation[] };
         }
 
-        events.fire('startSpinner');
+        busy = true;
+        const originalCamera = events.invoke('camera.debugState') as CameraDebugState;
+        const annotations: SemanticAnnotation[] = [];
+        let spinnerStarted = false;
 
         try {
+            const accepted = new Set(options.acceptedViewIds ?? frames.filter(frame => frame.quality.accepted).map(frame => frame.viewId));
+            const selectedFrames = frames.filter(frame => accepted.has(frame.viewId));
+
+            if (selectedFrames.length === 0) {
+                return { ok: false, error: 'No accepted preprocessing frames are available.', annotations };
+            }
+
+            events.fire('startSpinner');
+            spinnerStarted = true;
+
             for (const frame of selectedFrames) {
                 const response = await fetch(`${getSemanticScanBackendUrl()}/api/semantic-scan`, {
                     method: 'POST',
@@ -543,9 +564,12 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
                         }
                     };
 
-                    events.fire('semanticAnnotations.add', annotation);
                     annotations.push(annotation);
                 }
+            }
+
+            for (const annotation of annotations) {
+                events.fire('semanticAnnotations.add', annotation);
             }
 
             events.fire('toast', annotations.length > 0 ? `Added ${annotations.length} preprocessed labels` : 'No surface hits for accepted frames', annotations.length > 0 ? 'success' : 'warning');
@@ -553,11 +577,14 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Semantic preprocessing scan failed';
             events.fire('toast', message, 'error');
-            return { ok: false, error: message, annotations };
+            return { ok: false, error: message, annotations: [] };
         } finally {
             applyCameraState(scene, originalCamera);
             scene.forceRender = true;
-            events.fire('stopSpinner');
+            if (spinnerStarted) {
+                events.fire('stopSpinner');
+            }
+            busy = false;
         }
     };
 
