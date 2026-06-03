@@ -524,7 +524,8 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
         let spinnerStarted = false;
 
         try {
-            const accepted = new Set(options.acceptedViewIds ?? frames.filter(frame => frame.quality.accepted).map(frame => frame.viewId));
+            const acceptedViewIds = options.acceptedViewIds?.length ? options.acceptedViewIds : undefined;
+            const accepted = new Set(acceptedViewIds ?? frames.filter(frame => frame.quality.accepted).map(frame => frame.viewId));
             const selectedFrames = frames.filter(frame => accepted.has(frame.viewId));
 
             if (selectedFrames.length === 0) {
