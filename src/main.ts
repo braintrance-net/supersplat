@@ -148,7 +148,6 @@ const main = async () => {
     registerTransformHandlerEvents(events);
     registerPlySequenceEvents(events);
     registerPublishEvents(events);
-    registerIframeApi(events);
     registerSemanticAnnotationEvents(events);
 
     // initialize shortcuts
@@ -354,6 +353,8 @@ const main = async () => {
             return json;
         }
     };
+
+    registerIframeApi(events);
 
     // voice controller
     const voiceController = new VoiceController(events);
