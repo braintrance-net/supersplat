@@ -45,6 +45,8 @@ type PresetState = {
     splatTransform: PresetTransform | null;
 };
 
+type RequestId = number | string | null;
+
 interface IsSceneDirtyQuery {
     type: typeof IS_SCENE_DIRTY;
 }
@@ -60,7 +62,7 @@ interface LoadFileMessage {
     data?: ArrayBuffer;
     camera?: CameraState;
     transform?: PresetTransform;
-    requestId?: number;
+    requestId?: RequestId;
 }
 
 interface GetCameraStateQuery {
@@ -111,18 +113,18 @@ interface ApiConfigMessage {
 
 interface SemanticLayerGetMessage {
     type: typeof SEMANTIC_LAYER_GET;
-    requestId?: number;
+    requestId?: RequestId;
 }
 
 interface SemanticLayerLoadMessage {
     type: typeof SEMANTIC_LAYER_LOAD;
     layer: Partial<SemanticLayer>;
-    requestId?: number;
+    requestId?: RequestId;
 }
 
 interface SemanticScanRunMessage {
     type: typeof SEMANTIC_SCAN_RUN;
-    requestId?: number;
+    requestId?: RequestId;
 }
 
 interface PreprocessReviewFramesMessage {
@@ -131,14 +133,14 @@ interface PreprocessReviewFramesMessage {
     maxReviewFrames?: number;
     helperBudget?: number;
     screenshotMode?: 'normal' | 'debug';
-    requestId?: number;
+    requestId?: RequestId;
 }
 
 interface SemanticPreprocessScanMessage {
     type: typeof SEMANTIC_PREPROCESS_SCAN;
     acceptedViewIds?: string[];
     count?: number;
-    requestId?: number;
+    requestId?: RequestId;
 }
 
 interface GameModeMessage {
@@ -146,7 +148,12 @@ interface GameModeMessage {
     enabled: boolean;
 }
 
-const hasOptionalRequestId = (data: any) => data.requestId === undefined || typeof data.requestId === 'number';
+const hasOptionalRequestId = (data: any) => (
+    data.requestId === undefined ||
+    data.requestId === null ||
+    typeof data.requestId === 'number' ||
+    typeof data.requestId === 'string'
+);
 
 const isSceneDirtyQuery = (data: any): data is IsSceneDirtyQuery => {
     return (
@@ -383,8 +390,8 @@ const normalizeTransferableBuffer = (data: ArrayBuffer | Uint8Array) => {
     };
 };
 
-const requestIdPayload = (requestId?: number) => {
-    if (typeof requestId === 'number') {
+const requestIdPayload = (requestId?: RequestId) => {
+    if (requestId !== undefined) {
         return { requestId };
     }
     return {};
@@ -414,7 +421,7 @@ const registerIframeApi = (events: Events) => {
         events.fire('semanticAnnotations.interactionMode', 'edit');
     };
 
-    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: number) => {
+    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: RequestId) => {
         const response = {
             type: SEMANTIC_LAYER,
             result: events.invoke('semanticAnnotations.layer') as SemanticLayer,
