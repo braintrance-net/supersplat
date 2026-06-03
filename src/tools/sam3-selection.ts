@@ -11,6 +11,18 @@ const getSam3BackendUrl = () => {
     return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;
 };
 
+const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'include' => {
+    if (!window.supersplatConfig?.sam3BackendUrl?.trim()) {
+        return 'same-origin';
+    }
+
+    try {
+        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+    } catch {
+        return 'same-origin';
+    }
+};
+
 const EPS_FRAC_OF_DEPTH = 0.02;
 const EPS_MIN_M = 0.005;
 const EPS_MAX_M = 0.12;
@@ -308,6 +320,7 @@ class Sam3Selection {
             let res = await fetch(`${sam3BackendUrl}/api/sam3/refine`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: getSam3FetchCredentials(sam3BackendUrl),
                 body: JSON.stringify(refineBody),
                 signal
             });
@@ -315,6 +328,7 @@ class Sam3Selection {
                 res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: getSam3FetchCredentials(sam3BackendUrl),
                     body: JSON.stringify(payload),
                     signal
                 });
@@ -580,6 +594,7 @@ class Sam3Selection {
                 const res = await fetch(`${sam3BackendUrl}/api/sam3/segment-text`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: getSam3FetchCredentials(sam3BackendUrl),
                     body: JSON.stringify({ image: img, text }),
                     signal: abort.signal
                 });

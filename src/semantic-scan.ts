@@ -58,6 +58,14 @@ const getSemanticScanBackendUrl = () => {
     return window.location.origin;
 };
 
+const getSemanticScanFetchCredentials = (backendUrl: string): 'same-origin' | 'include' => {
+    try {
+        return new URL(backendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+    } catch {
+        return 'same-origin';
+    }
+};
+
 const createId = () => {
     if (window.crypto?.randomUUID) {
         return window.crypto.randomUUID();
@@ -284,9 +292,11 @@ const registerSemanticScanEvents = (events: Events, scene: Scene) => {
         try {
             const camera = events.invoke('camera.debugState') as CameraDebugState;
             const frame = await captureScene(events, scene);
-            const response = await fetch(`${getSemanticScanBackendUrl()}/api/semantic-scan`, {
+            const semanticScanBackendUrl = getSemanticScanBackendUrl();
+            const response = await fetch(`${semanticScanBackendUrl}/api/semantic-scan`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
+                credentials: getSemanticScanFetchCredentials(semanticScanBackendUrl),
                 body: JSON.stringify({
                     image: frame.image,
                     mimeType: frame.mimeType,

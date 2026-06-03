@@ -103,6 +103,14 @@ const getSemanticScanBackendUrl = () => {
     return window.location.origin;
 };
 
+const getSemanticScanFetchCredentials = (backendUrl: string): 'same-origin' | 'include' => {
+    try {
+        return new URL(backendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+    } catch {
+        return 'same-origin';
+    }
+};
+
 const getCaptureSize = (scene: Scene, maxSide: number) => {
     const sourceWidth = scene.canvas.clientWidth || scene.targetSize.width || 1024;
     const sourceHeight = scene.canvas.clientHeight || scene.targetSize.height || 768;
@@ -536,9 +544,11 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
             spinnerStarted = true;
 
             for (const frame of selectedFrames) {
-                const response = await fetch(`${getSemanticScanBackendUrl()}/api/semantic-scan`, {
+                const semanticScanBackendUrl = getSemanticScanBackendUrl();
+                const response = await fetch(`${semanticScanBackendUrl}/api/semantic-scan`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    credentials: getSemanticScanFetchCredentials(semanticScanBackendUrl),
                     body: JSON.stringify({
                         image: frame.image.split(',')[1],
                         mimeType: frame.mimeType,
