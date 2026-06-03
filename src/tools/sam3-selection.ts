@@ -5,8 +5,10 @@ import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
+const DEFAULT_SAM3_BACKEND_URL = 'https://sam3.4dream.app';
+
 const getSam3BackendUrl = () => {
-    return window.supersplatConfig?.sam3BackendUrl || window.location.origin;
+    return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;
 };
 
 const EPS_FRAC_OF_DEPTH = 0.02;
@@ -446,39 +448,35 @@ class Sam3Selection {
                 const h = canvas.clientHeight;
                 const cam = scene.camera.camera;
                 const intr = extractIntrinsics(cam, w, h);
-                const modifierOp: Sam3SelectionMode | null = (e.ctrlKey || e.metaKey) ? 'add' : (e.shiftKey ? 'remove' : null);
+                const modifierOp: Sam3SelectionMode | null = e.shiftKey ? 'add' : ((e.ctrlKey || e.metaKey) ? 'remove' : null);
                 const op = modifierOp ?? selectionMode;
-                const label: Sam3PromptLabel = op === 'remove' ? 0 : 1;
                 const click_xy: [number, number] = [clickX, clickY];
                 const viewKey = buildViewKey(scene, splat, w, h);
 
                 const hasPromptSession = promptSession !== null && promptSession.points.length > 0;
-                const canRefinePrompt = op !== 'set' && hasPromptSession && promptSession.viewKey === viewKey;
+                const canRefinePrompt = hasPromptSession && promptSession.viewKey === viewKey;
 
-                if (op !== 'set' && !canRefinePrompt) {
-                    const message = hasPromptSession ?
-                        'Camera changed. Plain-click to start a new SAM mask for this view.' :
-                        'Plain-click to start a SAM mask before adding or removing points.';
+                if (hasPromptSession && !canRefinePrompt) {
                     promptSession = null;
-                    selectionMode = 'set';
-                    events.fire('sam3.selectionMode.changed', selectionMode);
-                    events.fire('toast', message, 'warning');
-                    return;
+                    events.fire('toast', 'Camera changed. Starting a new SAM mask for this view.', 'info');
                 }
 
                 let requestImage: string;
                 let requestJobId: string | undefined;
                 let requestPoints: Sam3PromptPoint[];
                 let nextPromptSession: Sam3PromptSession;
-                const outputOp: Sam3SelectionMode = 'set';
+                let outputOp = op;
+                let label: Sam3PromptLabel = 1;
 
-                if (op === 'set') {
+                if (op === 'set' || !canRefinePrompt) {
                     const img = await captureScene(events, w, h);
                     if (!this.active) return;
                     nextPromptSession = { viewKey, image: img, points: [{ click_xy, label: 1 }] };
                     requestImage = nextPromptSession.image;
                     requestPoints = nextPromptSession.points;
                 } else {
+                    label = op === 'remove' ? 0 : 1;
+                    outputOp = 'set';
                     nextPromptSession = {
                         ...promptSession!,
                         points: [...promptSession!.points, { click_xy, label }]
@@ -488,7 +486,7 @@ class Sam3Selection {
                     requestPoints = nextPromptSession.points;
                 }
 
-                console.log(`[SAM3] click=(${clickX},${clickY}) op=${op} promptPoints=${requestPoints.length}`);
+                console.log(`[SAM3] click=(${clickX},${clickY}) op=${op} applyOp=${outputOp} promptPoints=${requestPoints.length}`);
 
                 const sam3BackendUrl = getSam3BackendUrl();
                 const segmentResult = await fetchSegment(sam3BackendUrl, {

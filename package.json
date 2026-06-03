@@ -22,7 +22,7 @@
         "develop:desk:boxer": "cross-env BUILD_TYPE=debug DEFAULT_SPLAT_URL=/static/dev-assets/desk.ply DEFAULT_CAMERA_POSITION=-18.953201293945312,21.82550811767578,0.7397304773330688 DEFAULT_CAMERA_TARGET=1.1438245773315447,14.384140968322754,3.0117335319519043 DEFAULT_CAMERA_FOV=75 DEFAULT_CAMERA_ORTHO=false DEV_TOOLS=true BOXER_BACKEND_URL=http://localhost:47823 concurrently --kill-others \"npm run watch\" \"npm run serve\"",
         "develop:desk:boxer:hosted": "cross-env BUILD_TYPE=debug DEFAULT_SPLAT_URL=/static/dev-assets/desk.ply DEFAULT_CAMERA_POSITION=-18.953201293945312,21.82550811767578,0.7397304773330688 DEFAULT_CAMERA_TARGET=1.1438245773315447,14.384140968322754,3.0117335319519043 DEFAULT_CAMERA_FOV=75 DEFAULT_CAMERA_ORTHO=false DEV_TOOLS=true BOXER_BACKEND_URL=https://boxer.4dream.app concurrently --kill-others \"npm run watch\" \"npm run serve\"",
         "develop:desk:ai:hosted": "cross-env BUILD_TYPE=debug DEFAULT_SPLAT_URL=/static/dev-assets/desk.ply DEFAULT_CAMERA_POSITION=-18.953201293945312,21.82550811767578,0.7397304773330688 DEFAULT_CAMERA_TARGET=1.1438245773315447,14.384140968322754,3.0117335319519043 DEFAULT_CAMERA_FOV=75 DEFAULT_CAMERA_ORTHO=false DEV_TOOLS=true BOXER_BACKEND_URL=https://boxer.4dream.app SAM3_BACKEND_URL=https://sam3.4dream.app concurrently --kill-others \"npm run watch\" \"npm run serve\"",
-        "develop:auto-launch": "concurrently --kill-others \"xdg-open 'http://localhost:3000/'\" \"npm run watch\" \"npm run serve\"",
+        "develop:auto-launch": "concurrently --kill-others \"xdg-open 'http://localhost:8000/'\" \"npm run watch\" \"npm run serve\"",
         "lint": "eslint src"
     },
     "devDependencies": {
