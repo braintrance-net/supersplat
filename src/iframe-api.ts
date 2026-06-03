@@ -393,6 +393,7 @@ const requestIdPayload = (requestId?: number) => {
 const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
     let gameModePreviousTool: string | null = null;
+    let gameModeActivatedWalk = false;
 
     const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: number) => {
         const response = {
@@ -526,21 +527,25 @@ const registerIframeApi = (events: Events) => {
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             if (event.data.enabled) {
                 const activeTool = events.invoke('tool.active') as string | null;
-                if (!gameModeActive) {
+                const startingGameMode = !gameModeActive;
+                if (startingGameMode) {
                     gameModePreviousTool = activeTool;
+                    gameModeActivatedWalk = activeTool !== 'walk';
                     gameModeActive = true;
                 }
-                if (activeTool !== 'walk') {
+                if (startingGameMode && gameModeActivatedWalk) {
                     events.fire('tool.walk');
                 }
             } else {
                 const restoreTool = gameModePreviousTool;
+                const shouldRestoreTool = gameModeActivatedWalk && events.invoke('tool.active') === 'walk';
                 gameModeActive = false;
                 gameModePreviousTool = null;
+                gameModeActivatedWalk = false;
                 const activeTool = events.invoke('tool.active') as string | null;
-                if (restoreTool && activeTool !== restoreTool) {
+                if (shouldRestoreTool && restoreTool && activeTool !== restoreTool) {
                     events.fire(`tool.${restoreTool}`);
-                } else if (!restoreTool && activeTool) {
+                } else if (shouldRestoreTool && !restoreTool && activeTool) {
                     events.fire('tool.deactivate');
                 }
             }
