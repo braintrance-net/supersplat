@@ -420,17 +420,27 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
     let frames: CapturedReviewFrame[] = [];
     let busy = false;
 
+    const setBusy = (value: boolean) => {
+        if (busy !== value) {
+            busy = value;
+            events.fire('semanticPreprocess.running', busy);
+        }
+    };
+
+    const isSemanticScanRunning = () => events.invoke('semanticScan.running') === true;
+
     const captureReviewFrames = async (options: {
         maxSide?: number,
         maxReviewFrames?: number,
         helperBudget?: number,
         screenshotMode?: ScreenshotMode
     } = {}) => {
-        if (busy) {
-            return { ok: false, error: 'Semantic preprocessing is already running.', frames: [] as PublicReviewFrame[] };
+        if (busy || isSemanticScanRunning()) {
+            const message = busy ? 'Semantic preprocessing is already running.' : 'Semantic scan already running.';
+            return { ok: false, error: message, frames: [] as PublicReviewFrame[] };
         }
 
-        busy = true;
+        setBusy(true);
         frames = [];
         const startedAt = performance.now();
         const originalCamera = events.invoke('camera.debugState') as CameraDebugState;
@@ -497,16 +507,17 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
             if (activeTool) {
                 events.fire(`tool.${activeTool}`);
             }
-            busy = false;
+            setBusy(false);
         }
     };
 
     const scanReviewFrames = async (options: { acceptedViewIds?: string[], count?: number } = {}) => {
-        if (busy) {
-            return { ok: false, error: 'Semantic preprocessing is already running.', annotations: [] as SemanticAnnotation[] };
+        if (busy || isSemanticScanRunning()) {
+            const message = busy ? 'Semantic preprocessing is already running.' : 'Semantic scan already running.';
+            return { ok: false, error: message, annotations: [] as SemanticAnnotation[] };
         }
 
-        busy = true;
+        setBusy(true);
         const originalCamera = events.invoke('camera.debugState') as CameraDebugState;
         const annotations: SemanticAnnotation[] = [];
         let spinnerStarted = false;
@@ -592,10 +603,11 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
             if (spinnerStarted) {
                 events.fire('stopSpinner');
             }
-            busy = false;
+            setBusy(false);
         }
     };
 
+    events.function('semanticPreprocess.running', () => busy);
     events.function('semanticPreprocess.captureReviewFrames', captureReviewFrames);
     events.function('semanticPreprocess.scanReviewFrames', scanReviewFrames);
 };

@@ -246,6 +246,19 @@ const pickWorldPoint = async (scene: Scene, screenX: number, screenY: number) =>
 
 const toTuple = (value: { x: number, y: number, z: number }): [number, number, number] => [value.x, value.y, value.z];
 
+const applyCameraState = (scene: Scene, camera: CameraDebugState) => {
+    scene.camera.fov = camera.fov;
+    scene.events.fire('camera.fov', scene.camera.fov);
+    scene.camera.ortho = camera.ortho ?? false;
+    scene.camera.setPose(
+        new Vec3(camera.position.x, camera.position.y, camera.position.z),
+        new Vec3(camera.target.x, camera.target.y, camera.target.z),
+        0
+    );
+    scene.camera.onUpdate(0);
+    scene.forceRender = true;
+};
+
 const registerSemanticScanEvents = (events: Events, scene: Scene) => {
     let running = false;
 
@@ -257,15 +270,19 @@ const registerSemanticScanEvents = (events: Events, scene: Scene) => {
     };
 
     const run = async () => {
-        if (running) {
-            events.fire('toast', 'Semantic scan already running', 'info');
-            return { ok: false, error: 'Semantic scan already running', annotations: [] as SemanticAnnotation[] };
+        const preprocessing = events.invoke('semanticPreprocess.running') === true;
+        if (running || preprocessing) {
+            const message = running ? 'Semantic scan already running' : 'Semantic preprocessing is already running';
+            events.fire('toast', message, 'info');
+            return { ok: false, error: message, annotations: [] as SemanticAnnotation[] };
         }
 
         setRunning(true);
         events.fire('startSpinner');
+        let restoreCamera: CameraDebugState | null = null;
 
         try {
+            const camera = events.invoke('camera.debugState') as CameraDebugState;
             const frame = await captureScene(events, scene);
             const response = await fetch(`${getSemanticScanBackendUrl()}/api/semantic-scan`, {
                 method: 'POST',
@@ -284,7 +301,8 @@ const registerSemanticScanEvents = (events: Events, scene: Scene) => {
                 throw new Error(parsed.error || 'Semantic scan failed');
             }
 
-            const camera = events.invoke('camera.debugState') as CameraDebugState;
+            restoreCamera = events.invoke('camera.debugState') as CameraDebugState;
+            applyCameraState(scene, camera);
             let added = 0;
             const annotations: SemanticAnnotation[] = [];
 
@@ -331,6 +349,9 @@ const registerSemanticScanEvents = (events: Events, scene: Scene) => {
             events.fire('toast', message, 'error');
             return { ok: false, error: message, annotations: [] };
         } finally {
+            if (restoreCamera) {
+                applyCameraState(scene, restoreCamera);
+            }
             events.fire('stopSpinner');
             setRunning(false);
         }

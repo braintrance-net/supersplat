@@ -391,6 +391,7 @@ const requestIdPayload = (requestId?: number) => {
 };
 
 const registerIframeApi = (events: Events) => {
+    let gameModeActive = false;
     let gameModePreviousTool: string | null = null;
 
     const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: number) => {
@@ -524,12 +525,17 @@ const registerIframeApi = (events: Events) => {
         if (isGameModeMessage(event.data)) {
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             if (event.data.enabled) {
-                gameModePreviousTool = events.invoke('tool.active') as string | null;
-                if (gameModePreviousTool !== 'walk') {
+                const activeTool = events.invoke('tool.active') as string | null;
+                if (!gameModeActive) {
+                    gameModePreviousTool = activeTool;
+                    gameModeActive = true;
+                }
+                if (activeTool !== 'walk') {
                     events.fire('tool.walk');
                 }
             } else {
                 const restoreTool = gameModePreviousTool;
+                gameModeActive = false;
                 gameModePreviousTool = null;
                 const activeTool = events.invoke('tool.active') as string | null;
                 if (restoreTool && activeTool !== restoreTool) {
