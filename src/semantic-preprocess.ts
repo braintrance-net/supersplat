@@ -459,6 +459,7 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
                 helperBudget: options.helperBudget
             });
             const planningMs = performance.now() - planningStartedAt;
+            applyCameraState(scene, originalCamera);
             const screenshotStartedAt = performance.now();
             let normallySkippedCount = 0;
             for (const view of viewPlan) {
