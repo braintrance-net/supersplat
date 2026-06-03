@@ -149,24 +149,6 @@ const application = {
     cache: false
 };
 
-const serviceWorker = {
-    input: 'src/sw.ts',
-    output: {
-        dir: 'dist',
-        format: 'esm',
-        sourcemap: true
-    },
-    plugins: [
-        resolve(),
-        json(),
-        typescript()
-        // BUILD_TYPE !== 'debug' && terser()
-    ],
-    treeshake: 'smallest',
-    cache: false
-};
-
 export default [
-    application,
-    serviceWorker
+    application
 ];

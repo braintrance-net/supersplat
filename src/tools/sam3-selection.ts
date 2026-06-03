@@ -6,12 +6,17 @@ import { Scene } from '../scene';
 import { Splat } from '../splat';
 
 const getSam3BackendUrl = () => {
-    return window.supersplatConfig?.sam3BackendUrl || 'https://sam3.4dream.app';
+    return window.supersplatConfig?.sam3BackendUrl || window.location.origin;
 };
 
-const EPS_FRAC_OF_DEPTH = 0.025;
+const EPS_FRAC_OF_DEPTH = 0.02;
 const EPS_MIN_M = 0.005;
-const EPS_MAX_M = 1.0;
+const EPS_MAX_M = 0.12;
+
+const OCCLUSION_CELL_PX = 4;
+const OCCLUSION_FRAC_OF_DEPTH = 0.015;
+const OCCLUSION_MIN_M = 0.015;
+const OCCLUSION_MAX_M = 0.12;
 
 const captureScene = async (events: Events, width: number, height: number): Promise<string> => {
     const rgba: Uint8Array = await events.invoke('render.offscreen', width, height);
@@ -52,6 +57,47 @@ const extractIntrinsics = (cam: any, w: number, h: number) => {
 };
 
 type Candidate = { idx: number; wx: number; wy: number; wz: number; cz: number; u: number; v: number };
+type Sam3PromptLabel = 0 | 1;
+type Sam3PromptPoint = { click_xy: [number, number]; label: Sam3PromptLabel };
+type Sam3PromptSession = {
+    viewKey: string;
+    image: string;
+    jobId?: string;
+    points: Sam3PromptPoint[];
+};
+type Sam3SelectionMode = 'add' | 'remove' | 'set';
+type MaskProjectionMode = 'connected' | 'complete';
+type Sam3ImageSize = { width: number; height: number };
+type Sam3SegmentResponse = {
+    mask?: string;
+    width?: number;
+    height?: number;
+    job_id?: string;
+    supportsPromptRefinement?: boolean;
+    error?: string;
+};
+
+const keyMatrix = (values?: Float32Array | number[]): string => {
+    if (!values) return '';
+    return Array.from(values).map(value => value.toFixed(5)).join(',');
+};
+
+const buildViewKey = (scene: Scene, splat: Splat, width: number, height: number): string => {
+    const cam = scene.camera.camera as any;
+    const view = keyMatrix(cam.viewMatrix?.data);
+    const projection = keyMatrix(cam.projectionMatrix?.data) || `${cam.fov}:${cam.horizontalFov}:${cam.orthoHeight}`;
+    const splatTransform = keyMatrix(splat.entity.getWorldTransform().data as Float32Array);
+    return `${width}x${height}|${view}|${projection}|${splatTransform}`;
+};
+
+const normalizePromptPoint = (point: Sam3PromptPoint, imageSize: Sam3ImageSize): [number, number] => {
+    const width = Math.max(1, imageSize.width);
+    const height = Math.max(1, imageSize.height);
+    return [
+        Math.min(1, Math.max(0, point.click_xy[0] / width)),
+        Math.min(1, Math.max(0, point.click_xy[1] / height))
+    ];
+};
 
 const collectMaskCandidates = (
     splat: Splat,
@@ -91,6 +137,45 @@ const collectMaskCandidates = (
         out.push({ idx: i, wx, wy, wz, cz, u, v: vp });
     }
     return out;
+};
+
+const filterFrontSurfaceCandidates = (candidates: Candidate[], imgW: number, imgH: number): Candidate[] => {
+    const depthW = Math.ceil(imgW / OCCLUSION_CELL_PX);
+    const depthH = Math.ceil(imgH / OCCLUSION_CELL_PX);
+    const nearest = new Float32Array(depthW * depthH);
+    nearest.fill(Infinity);
+
+    for (const candidate of candidates) {
+        const x = Math.min(depthW - 1, Math.max(0, Math.floor(candidate.u / OCCLUSION_CELL_PX)));
+        const y = Math.min(depthH - 1, Math.max(0, Math.floor(candidate.v / OCCLUSION_CELL_PX)));
+        const idx = y * depthW + x;
+        if (candidate.cz < nearest[idx]) {
+            nearest[idx] = candidate.cz;
+        }
+    }
+
+    return candidates.filter((candidate) => {
+        const x = Math.min(depthW - 1, Math.max(0, Math.floor(candidate.u / OCCLUSION_CELL_PX)));
+        const y = Math.min(depthH - 1, Math.max(0, Math.floor(candidate.v / OCCLUSION_CELL_PX)));
+        let nearestDepth = Infinity;
+
+        for (let dy = -1; dy <= 1; dy++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= depthH) continue;
+
+            for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx;
+                if (xx < 0 || xx >= depthW) continue;
+                nearestDepth = Math.min(nearestDepth, nearest[yy * depthW + xx]);
+            }
+        }
+
+        const tolerance = Math.min(
+            OCCLUSION_MAX_M,
+            Math.max(OCCLUSION_MIN_M, nearestDepth * OCCLUSION_FRAC_OF_DEPTH)
+        );
+        return candidate.cz <= nearestDepth + tolerance;
+    });
 };
 
 const findSeedOnRay = (
@@ -189,6 +274,55 @@ class Sam3Selection {
         const canvas = scene.canvas;
         let busy = false;
         let abort: AbortController | null = null;
+        let selectionMode: Sam3SelectionMode = 'set';
+        let promptSession: Sam3PromptSession | null = null;
+
+        const fetchSegment = async (
+            sam3BackendUrl: string,
+            payload: {
+                image: string;
+                click_xy: [number, number];
+                label: Sam3PromptLabel;
+                job_id?: string;
+                points?: Sam3PromptPoint[];
+                image_size: Sam3ImageSize;
+            },
+            signal: AbortSignal
+        ): Promise<{ ok: true; data: Sam3SegmentResponse } | { ok: false; status: number; error: string; data: Sam3SegmentResponse }> => {
+            const points = payload.points ?? [{ click_xy: payload.click_xy, label: payload.label }];
+            const refineBody = {
+                image: payload.image,
+                session_id: payload.job_id,
+                job_id: payload.job_id,
+                object_id: 1,
+                frame_index: 0,
+                clear_old_points: true,
+                coordinate_space: 'normalized',
+                image_size: payload.image_size,
+                points: points.map(point => normalizePromptPoint(point, payload.image_size)),
+                labels: points.map(point => point.label)
+            };
+
+            let res = await fetch(`${sam3BackendUrl}/api/sam3/refine`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(refineBody),
+                signal
+            });
+            if (res.status === 404 || res.status === 405) {
+                res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                    signal
+                });
+            }
+            const data = await res.json().catch(() => ({})) as Sam3SegmentResponse;
+            if (!res.ok) {
+                return { ok: false, status: res.status, error: data.error || res.statusText, data };
+            }
+            return { ok: true, data };
+        };
 
         // Shared logic: given a mask and optional click point, select splats
         const processMask = (
@@ -196,10 +330,13 @@ class Sam3Selection {
             mask: Uint8Array, maskW: number, maskH: number,
             imgW: number, imgH: number,
             intr: { fx: number; fy: number; cx: number; cy: number },
-            clickX?: number, clickY?: number
+            op: Sam3SelectionMode,
+            clickX?: number, clickY?: number,
+            projectionMode: MaskProjectionMode = 'connected'
         ) => {
             const t0 = performance.now();
-            const candidates = collectMaskCandidates(splat, scene, mask, maskW, maskH, imgW, imgH, intr);
+            const projectedCandidates = collectMaskCandidates(splat, scene, mask, maskW, maskH, imgW, imgH, intr);
+            const candidates = filterFrontSurfaceCandidates(projectedCandidates, imgW, imgH);
             if (candidates.length === 0) {
                 events.fire('toast', 'Nothing detected', 'warning');
                 return;
@@ -225,29 +362,37 @@ class Sam3Selection {
                 }
             }
 
-            const seed = findSeedOnRay(candidates, seedX, seedY, 20);
-            if (seed < 0) {
-                events.fire('toast', 'Nothing detected', 'warning');
-                return;
-            }
-            const clickDepth = candidates[seed].cz;
-            const eps = Math.min(EPS_MAX_M, Math.max(EPS_MIN_M, clickDepth * EPS_FRAC_OF_DEPTH));
-            const kept = regionGrow(candidates, seed, eps);
-
             const pickedIdx = new Set<number>();
-            for (const k of kept) pickedIdx.add(candidates[k].idx);
+            let logDetails = '';
+            if (projectionMode === 'complete') {
+                for (const candidate of candidates) pickedIdx.add(candidate.idx);
+                logDetails = ' completeMask=true';
+            } else {
+                const seed = findSeedOnRay(candidates, seedX, seedY, 20);
+                if (seed < 0) {
+                    events.fire('toast', 'Nothing detected', 'warning');
+                    return;
+                }
+                const clickDepth = candidates[seed].cz;
+                const eps = Math.min(EPS_MAX_M, Math.max(EPS_MIN_M, clickDepth * EPS_FRAC_OF_DEPTH));
+                const kept = regionGrow(candidates, seed, eps);
+                for (const k of kept) pickedIdx.add(candidates[k].idx);
+                logDetails = ` depth=${clickDepth.toFixed(2)} eps=${eps.toFixed(3)} seed=${seed} kept=${kept.size}`;
+            }
+
             if (pickedIdx.size === 0) {
                 events.fire('toast', 'Nothing detected', 'warning');
                 return;
             }
 
-            console.log(
-                `[SAM3] candidates=${candidates.length} seed=${seed} kept=${kept.size}` +
-                ` (${(performance.now() - t0).toFixed(0)}ms)`
-            );
+            console.log(`[SAM3] op=${op} candidates=${candidates.length}/${projectedCandidates.length}${logDetails} (${(performance.now() - t0).toFixed(0)}ms)`);
 
-            const op = new SelectOp(splat, 'add', i => pickedIdx.has(i));
-            events.fire('edit.add', op);
+            const selectOp = new SelectOp(splat, op, i => pickedIdx.has(i));
+            events.fire('edit.add', selectOp);
+
+            if (op === 'remove') {
+                return;
+            }
 
             // trigger reveal animation
             const centers = splat.entity.gsplat.instance.sorter.centers;
@@ -301,31 +446,105 @@ class Sam3Selection {
                 const h = canvas.clientHeight;
                 const cam = scene.camera.camera;
                 const intr = extractIntrinsics(cam, w, h);
+                const modifierOp: Sam3SelectionMode | null = (e.ctrlKey || e.metaKey) ? 'add' : (e.shiftKey ? 'remove' : null);
+                const op = modifierOp ?? selectionMode;
+                const label: Sam3PromptLabel = op === 'remove' ? 0 : 1;
+                const click_xy: [number, number] = [clickX, clickY];
+                const viewKey = buildViewKey(scene, splat, w, h);
 
-                const img = await captureScene(events, w, h);
-                if (!this.active) return;
-                console.log(`[SAM3] click=(${clickX},${clickY})`);
+                const hasPromptSession = promptSession !== null && promptSession.points.length > 0;
+                const canRefinePrompt = op !== 'set' && hasPromptSession && promptSession.viewKey === viewKey;
+
+                if (op !== 'set' && !canRefinePrompt) {
+                    const message = hasPromptSession ?
+                        'Camera changed. Plain-click to start a new SAM mask for this view.' :
+                        'Plain-click to start a SAM mask before adding or removing points.';
+                    promptSession = null;
+                    selectionMode = 'set';
+                    events.fire('sam3.selectionMode.changed', selectionMode);
+                    events.fire('toast', message, 'warning');
+                    return;
+                }
+
+                let requestImage: string;
+                let requestJobId: string | undefined;
+                let requestPoints: Sam3PromptPoint[];
+                let nextPromptSession: Sam3PromptSession;
+                const outputOp: Sam3SelectionMode = 'set';
+
+                if (op === 'set') {
+                    const img = await captureScene(events, w, h);
+                    if (!this.active) return;
+                    nextPromptSession = { viewKey, image: img, points: [{ click_xy, label: 1 }] };
+                    requestImage = nextPromptSession.image;
+                    requestPoints = nextPromptSession.points;
+                } else {
+                    nextPromptSession = {
+                        ...promptSession!,
+                        points: [...promptSession!.points, { click_xy, label }]
+                    };
+                    requestImage = nextPromptSession.image;
+                    requestJobId = promptSession!.jobId;
+                    requestPoints = nextPromptSession.points;
+                }
+
+                console.log(`[SAM3] click=(${clickX},${clickY}) op=${op} promptPoints=${requestPoints.length}`);
 
                 const sam3BackendUrl = getSam3BackendUrl();
-                const res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ image: img, click_xy: [clickX, clickY], label: 1 }),
-                    signal: abort.signal
-                });
+                const segmentResult = await fetchSegment(sam3BackendUrl, {
+                    image: requestImage,
+                    click_xy,
+                    label,
+                    job_id: requestJobId,
+                    points: requestPoints,
+                    image_size: { width: w, height: h }
+                }, abort.signal);
+
                 if (!this.active) return;
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    console.error(`[SAM3] ${res.status}: ${err.error || res.statusText}`);
+                if (segmentResult.ok === false) {
+                    console.error(`[SAM3] ${segmentResult.status}: ${segmentResult.error}`);
                     events.fire('toast', 'SAM3 backend error', 'error');
                     return;
                 }
-                const data = await res.json() as { mask: string; width: number; height: number };
-                if (!this.active) return;
+
+                const data = segmentResult.data;
+                if (requestPoints.length > 1 && data.supportsPromptRefinement !== true) {
+                    console.error('[SAM3] backend did not apply prompt refinement');
+                    events.fire('toast', 'SAM prompt refinement is not available on this backend.', 'error');
+                    return;
+                }
+
+                if (!data.mask || data.width === undefined || data.height === undefined) {
+                    console.error('[SAM3] segmentation response missing mask data');
+                    events.fire('toast', 'SAM3 backend error', 'error');
+                    return;
+                }
+
+                promptSession = nextPromptSession;
+                if (data.job_id) {
+                    promptSession.jobId = data.job_id;
+                }
+
+                if (outputOp === 'set' && requestPoints.length > 1) {
+                    console.log(`[SAM3] prompt refinement applied points=${requestPoints.length}`);
+                }
+
                 const mask = await maskPngToArray(data.mask, data.width, data.height);
                 if (!this.active) return;
 
-                processMask(splat, mask, data.width, data.height, w, h, intr, clickX, clickY);
+                processMask(
+                    splat,
+                    mask,
+                    data.width,
+                    data.height,
+                    w,
+                    h,
+                    intr,
+                    outputOp,
+                    clickX,
+                    clickY,
+                    requestPoints.length > 1 ? 'complete' : 'connected'
+                );
             } catch (err: any) {
                 if (err?.name === 'AbortError') return;
                 console.error('[SAM3] click failed:', err);
@@ -348,12 +567,14 @@ class Sam3Selection {
 
             busy = true;
             abort = new AbortController();
+            promptSession = null;
             parent.style.cursor = 'wait';
             try {
                 const w = canvas.clientWidth;
                 const h = canvas.clientHeight;
                 const cam = scene.camera.camera;
                 const intr = extractIntrinsics(cam, w, h);
+                const op = selectionMode;
                 const img = await captureScene(events, w, h);
                 if (!this.active) return;
 
@@ -377,7 +598,7 @@ class Sam3Selection {
                 const mask = await maskPngToArray(data.mask, data.width, data.height);
                 if (!this.active) return;
 
-                processMask(splat, mask, data.width, data.height, w, h, intr);
+                processMask(splat, mask, data.width, data.height, w, h, intr, op);
             } catch (err: any) {
                 if (err?.name === 'AbortError') return;
                 console.error('[SAM3] text query failed:', err);
@@ -389,11 +610,20 @@ class Sam3Selection {
             }
         };
 
+        const modeHandler = (mode: Sam3SelectionMode) => {
+            selectionMode = mode;
+            events.fire('sam3.selectionMode.changed', selectionMode);
+        };
+
+        events.on('sam3.selectionMode', modeHandler);
+        events.fire('sam3.selectionMode.changed', selectionMode);
+
         this.activate = () => {
             this.active = true;
             parent.style.cursor = 'crosshair';
             parent.addEventListener('pointerdown', pointerHandler, true);
             events.on('ai.textQuery', textHandler);
+            events.fire('sam3.selectionMode.changed', selectionMode);
         };
 
         this.deactivate = () => {
@@ -403,6 +633,7 @@ class Sam3Selection {
             events.off('ai.textQuery', textHandler);
             abort?.abort();
             abort = null;
+            promptSession = null;
             busy = false;
         };
     }

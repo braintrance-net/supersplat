@@ -123,6 +123,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             events.invoke('docDeserialize.timeline', document.timeline);
             events.invoke('docDeserialize.poseSets', document.poseSets);
             events.invoke('docDeserialize.view', document.view);
+            events.invoke('docDeserialize.semantics', document.semantics);
             scene.camera.docDeserialize(document.camera);
 
             // refresh the pivot to reflect the loaded transform
@@ -159,6 +160,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 view: events.invoke('docSerialize.view'),
                 poseSets: events.invoke('docSerialize.poseSets'),
                 timeline: events.invoke('docSerialize.timeline'),
+                semantics: events.invoke('docSerialize.semantics'),
                 splats: splats.map(s => s.docSerialize())
             };
 

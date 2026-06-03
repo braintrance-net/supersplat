@@ -105,10 +105,46 @@ body.advanced-ui {
     background-color: $bg-light-tertiary;
 }
 
-#bottom-toolbar-touch {
+#bottom-toolbar-touch,
+#bottom-toolbar-semantic-scan {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+#sam3-mode-wrap {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    margin: 0 4px;
+    padding: 2px;
+    border: 1px solid $bg-light-tertiary;
+    border-radius: 6px;
+    background-color: $bcg-secondary;
+}
+
+.sam3-mode-button {
+    height: 26px;
+    min-width: 44px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: $text-dark;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+
+    &:hover:not(.active) {
+        background-color: $bg-light-hover;
+        color: $text-primary;
+    }
+
+    &.active {
+        background-color: $clr-hilight;
+        color: $clr-active;
+    }
 }
 
 #ai-prompt-wrap {

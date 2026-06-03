@@ -4,15 +4,16 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { localize } from './localization';
 import assetBrowserSvg from './svg/asset-browser.svg';
+import micSvg from './svg/microphone.svg';
+import redoSvg from './svg/redo.svg';
 import brushSvg from './svg/select-brush.svg';
 import eyedropperSvg from './svg/select-eyedropper.svg';
 import floodSvg from './svg/select-flood.svg';
 import lassoSvg from './svg/select-lasso.svg';
-import micSvg from './svg/microphone.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
-import redoSvg from './svg/redo.svg';
 import sphereSvg from './svg/select-sphere.svg';
+import semanticScanSvg from './svg/semantic-scan.svg';
 import boxSvg from './svg/show-hide-splats.svg';
 import touchSvg from './svg/touch.svg';
 import undoSvg from './svg/undo.svg';
@@ -86,6 +87,40 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const semanticScan = new Button({
+            id: 'bottom-toolbar-semantic-scan',
+            class: 'bottom-toolbar-tool'
+        });
+
+        const samModeWrap = document.createElement('div');
+        samModeWrap.id = 'sam3-mode-wrap';
+
+        const samModeButtons = [
+            { mode: 'set', label: 'New' },
+            { mode: 'add', label: 'Add' },
+            { mode: 'remove', label: 'Remove' }
+        ] as const;
+
+        const activateSam3Selection = () => {
+            if (events.invoke('tool.active') !== 'sam3Selection') {
+                events.fire('tool.sam3Selection');
+            }
+        };
+
+        for (const { mode, label } of samModeButtons) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.dataset.mode = mode;
+            button.textContent = label;
+            button.className = 'sam3-mode-button';
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                events.fire('sam3.selectionMode', mode);
+                activateSam3Selection();
+            });
+            samModeWrap.appendChild(button);
+        }
+
         const simplifiedAssetBrowser = new Button({
             id: 'bottom-toolbar-asset-browser',
             class: 'bottom-toolbar-tool'
@@ -93,10 +128,13 @@ class BottomToolbar extends Container {
 
         mic.dom.appendChild(createSvg(micSvg));
         touch.dom.appendChild(createSvg(touchSvg));
+        semanticScan.dom.appendChild(createSvg(semanticScanSvg));
         simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
         appendSimplified(mic);
         appendSimplified(touch);
+        appendSimplified(samModeWrap);
+        appendSimplified(semanticScan);
 
         const aiInputWrap = document.createElement('div');
         aiInputWrap.id = 'ai-prompt-wrap';
@@ -135,10 +173,12 @@ class BottomToolbar extends Container {
             events.fire('voice.toggleWakeWord');
         });
         touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
+        semanticScan.dom.addEventListener('click', () => events.fire('semanticScan.run'));
         simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
         tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
+        tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
         // Advanced toolbar from original braintrance branch
@@ -303,6 +343,16 @@ class BottomToolbar extends Container {
             scale.class[toolName === 'scale' ? 'add' : 'remove']('active');
             measure.class[toolName === 'measure' ? 'add' : 'remove']('active');
             eyedropper.class[toolName === 'eyedropperSelection' ? 'add' : 'remove']('active');
+        });
+
+        events.on('sam3.selectionMode.changed', (mode: string) => {
+            for (const button of Array.from(samModeWrap.querySelectorAll<HTMLButtonElement>('.sam3-mode-button'))) {
+                button.classList.toggle('active', button.dataset.mode === mode);
+            }
+        });
+
+        events.on('semanticScan.running', (running: boolean) => {
+            semanticScan.class[running ? 'add' : 'remove']('active');
         });
 
         events.on('tool.coordSpace', (space: 'local' | 'world') => {

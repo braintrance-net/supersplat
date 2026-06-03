@@ -14,6 +14,9 @@ import { registerRenderEvents } from './render';
 import { Scene } from './scene';
 import { getSceneConfig } from './scene-config';
 import { registerSelectionEvents } from './selection';
+import { registerSemanticAnnotationEvents } from './semantic-annotations';
+import { registerSemanticPreprocessEvents } from './semantic-preprocess';
+import { registerSemanticScanEvents } from './semantic-scan';
 import { ShortcutManager } from './shortcut-manager';
 import { registerTimelineEvents } from './timeline';
 import { BoxSelection } from './tools/box-selection';
@@ -24,31 +27,32 @@ import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
 import { MeasureTool } from './tools/measure-tool';
 import { MoveTool } from './tools/move-tool';
+import { PlaceTool } from './tools/place-tool';
 import { PolygonSelection } from './tools/polygon-selection';
 import { RectSelection } from './tools/rect-selection';
 import { RotateTool } from './tools/rotate-tool';
 import { Sam3Selection } from './tools/sam3-selection';
 import { ScaleTool } from './tools/scale-tool';
 import { SphereSelection } from './tools/sphere-selection';
-import { PlaceTool } from './tools/place-tool';
 import { ToolManager } from './tools/tool-manager';
 import { WalkTool } from './tools/walk-tool';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
 import { localizeInit } from './ui/localization';
+import { SemanticAnnotationOverlay } from './ui/semantic-annotation-overlay';
 import { VoiceController } from './voice/voice-controller';
 
-declare global {
-    interface DebugCameraState {
-        position: { x: number, y: number, z: number };
-        target: { x: number, y: number, z: number };
-        fov: number;
-        azim: number;
-        elevation: number;
-        distance: number;
-        ortho: boolean;
-    }
+type DebugCameraState = {
+    position: { x: number, y: number, z: number };
+    target: { x: number, y: number, z: number };
+    fov: number;
+    azim: number;
+    elevation: number;
+    distance: number;
+    ortho: boolean;
+};
 
+declare global {
     interface LaunchParams {
         readonly files: FileSystemFileHandle[];
     }
@@ -68,6 +72,7 @@ declare global {
             };
             boxerBackendUrl?: string;
             sam3BackendUrl?: string;
+            semanticScanBackendUrl?: string;
             enableDevTools?: boolean;
             sketchfabApiToken?: string;
             openaiApiKey?: string;
@@ -144,6 +149,7 @@ const main = async () => {
     registerPlySequenceEvents(events);
     registerPublishEvents(events);
     registerIframeApi(events);
+    registerSemanticAnnotationEvents(events);
 
     // initialize shortcuts
     const shortcutManager = new ShortcutManager(events);
@@ -285,6 +291,7 @@ const main = async () => {
     toolManager.register('place', new PlaceTool(events, scene, editorUI.canvasContainer.dom));
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
+    const semanticAnnotationOverlay = new SemanticAnnotationOverlay(events, scene, editorUI.canvasContainer.dom);
 
     // Walk mode is the default tool
     events.fire('tool.walk');
@@ -296,6 +303,8 @@ const main = async () => {
     registerSelectionEvents(events, scene);
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
+    registerSemanticScanEvents(events, scene);
+    registerSemanticPreprocessEvents(events, scene);
     initFileHandler(scene, events, editorUI.appContainer.dom);
 
     const getCameraState = () => {
@@ -347,7 +356,7 @@ const main = async () => {
     };
 
     // voice controller
-    new VoiceController(events);
+    const voiceController = new VoiceController(events);
 
     // load async models
     scene.start();
