@@ -61,6 +61,7 @@ const defaultCamera = defaultCameraPosition && defaultCameraTarget ? {
     fov: parseNumber(process.env.DEFAULT_CAMERA_FOV),
     ortho: process.env.DEFAULT_CAMERA_ORTHO === undefined ? undefined : process.env.DEFAULT_CAMERA_ORTHO === 'true'
 } : undefined;
+const exposeClientApiKeys = process.env.EXPOSE_CLIENT_API_KEYS === 'true';
 
 const SUPERSPLAT_CONFIG = JSON.stringify({
     defaultLoadUrl: process.env.DEFAULT_SPLAT_URL || '',
@@ -68,8 +69,8 @@ const SUPERSPLAT_CONFIG = JSON.stringify({
     boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
     enableDevTools: process.env.DEV_TOOLS === 'true',
-    sketchfabApiToken: process.env.SKETCHFAB_API_TOKEN || '',
-    openaiApiKey: process.env.OPENAI_API_KEY || ''
+    sketchfabApiToken: exposeClientApiKeys ? process.env.SKETCHFAB_API_TOKEN || '' : '',
+    openaiApiKey: exposeClientApiKeys ? process.env.OPENAI_API_KEY || '' : ''
 }).replace(/</g, '\\u003c');
 
 const outputHeader = () => {
