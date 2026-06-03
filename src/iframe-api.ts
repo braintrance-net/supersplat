@@ -395,10 +395,22 @@ const registerIframeApi = (events: Events) => {
     let gameModePreviousTool: string | null = null;
     let gameModeActivatedWalk = false;
 
-    const resetGameModeState = () => {
+    const restoreGameModeTool = () => {
+        const restoreTool = gameModePreviousTool;
+        const shouldRestoreTool = gameModeActivatedWalk && events.invoke('tool.active') === 'walk';
         gameModeActive = false;
         gameModePreviousTool = null;
         gameModeActivatedWalk = false;
+        const activeTool = events.invoke('tool.active') as string | null;
+        if (shouldRestoreTool && restoreTool && activeTool !== restoreTool) {
+            events.fire(`tool.${restoreTool}`);
+        } else if (shouldRestoreTool && !restoreTool && activeTool) {
+            events.fire('tool.deactivate');
+        }
+    };
+
+    const resetGameModeState = () => {
+        restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
     };
 
@@ -544,17 +556,7 @@ const registerIframeApi = (events: Events) => {
                     events.fire('tool.walk');
                 }
             } else {
-                const restoreTool = gameModePreviousTool;
-                const shouldRestoreTool = gameModeActivatedWalk && events.invoke('tool.active') === 'walk';
-                gameModeActive = false;
-                gameModePreviousTool = null;
-                gameModeActivatedWalk = false;
-                const activeTool = events.invoke('tool.active') as string | null;
-                if (shouldRestoreTool && restoreTool && activeTool !== restoreTool) {
-                    events.fire(`tool.${restoreTool}`);
-                } else if (shouldRestoreTool && !restoreTool && activeTool) {
-                    events.fire('tool.deactivate');
-                }
+                restoreGameModeTool();
             }
         }
 

@@ -307,7 +307,7 @@ const stationFromCamera = (id: string, label: string, scene: Scene, camera: Came
         position,
         azim: camera.azim,
         elevation: camera.elevation,
-        distanceWorld: Math.max(scene.camera.sceneRadius * 0.2, Math.min(distanceWorld, scene.camera.sceneRadius * 2.4)),
+        distanceWorld,
         fov: camera.fov,
         ortho: camera.ortho,
         role: 'seed',
