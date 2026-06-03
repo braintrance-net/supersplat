@@ -388,12 +388,30 @@ const pickWorldPoint = async (scene: Scene, screenX: number, screenY: number) =>
     return null;
 };
 
-const applyCamera = (scene: Scene, frame: { camera: CameraDebugState }) => {
+const renderScene = async (scene: Scene) => {
+    await new Promise<void>((resolve) => {
+        const handle = scene.events.on('postrender', () => {
+            handle.off();
+            resolve();
+        });
+        scene.forceRender = true;
+    });
+};
+
+const applyCameraState = (scene: Scene, camera: CameraDebugState) => {
+    scene.camera.fov = camera.fov;
+    scene.events.fire('camera.fov', scene.camera.fov);
+    scene.camera.ortho = camera.ortho ?? false;
     scene.camera.setPose(
-        new Vec3(frame.camera.position.x, frame.camera.position.y, frame.camera.position.z),
-        new Vec3(frame.camera.target.x, frame.camera.target.y, frame.camera.target.z),
+        new Vec3(camera.position.x, camera.position.y, camera.position.z),
+        new Vec3(camera.target.x, camera.target.y, camera.target.z),
         0
     );
+};
+
+const applyCamera = async (scene: Scene, frame: { camera: CameraDebugState }) => {
+    applyCameraState(scene, frame.camera);
+    await renderScene(scene);
 };
 
 const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
@@ -457,11 +475,7 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
                 } satisfies CaptureTiming
             };
         } finally {
-            scene.camera.setPose(
-                new Vec3(originalCamera.position.x, originalCamera.position.y, originalCamera.position.z),
-                new Vec3(originalCamera.target.x, originalCamera.target.y, originalCamera.target.z),
-                0
-            );
+            applyCameraState(scene, originalCamera);
             scene.forceRender = true;
         }
     };
@@ -497,7 +511,7 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
                     throw new Error(parsed.error || 'Semantic preprocessing scan failed');
                 }
 
-                applyCamera(scene, frame);
+                await applyCamera(scene, frame);
 
                 for (const detection of parsed.data.detections) {
                     const screenY = clamp01(detection.point[0] / 1000);
@@ -541,11 +555,7 @@ const registerSemanticPreprocessEvents = (events: Events, scene: Scene) => {
             events.fire('toast', message, 'error');
             return { ok: false, error: message, annotations };
         } finally {
-            scene.camera.setPose(
-                new Vec3(originalCamera.position.x, originalCamera.position.y, originalCamera.position.z),
-                new Vec3(originalCamera.target.x, originalCamera.target.y, originalCamera.target.z),
-                0
-            );
+            applyCameraState(scene, originalCamera);
             scene.forceRender = true;
             events.fire('stopSpinner');
         }
