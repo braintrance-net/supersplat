@@ -1,4 +1,4 @@
-import { Color, Mat4, Ray, Vec3 } from 'playcanvas';
+import { Asset, Color, Entity, Mat4, Ray, Vec3 } from 'playcanvas';
 
 import { ElementType } from '../element';
 import { Events } from '../events';
@@ -46,6 +46,33 @@ type MultiplayerHeightCalibration = {
     groundY?: number;
 };
 
+type MultiplayerAvatarAnimation = 'idle' | 'run';
+
+type MultiplayerAvatarInstance = {
+    entity: Entity;
+    state: MultiplayerAvatarAnimation;
+    lastPosition: Vec3;
+    lastUpdateMs: number;
+};
+
+type MultiplayerAvatarContainer = {
+    instantiateRenderEntity?: (options?: object) => Entity;
+    instantiateModelEntity?: (options?: object) => Entity;
+    animations?: Array<{ name: string; resource?: unknown }>;
+};
+
+type MultiplayerAnimLayer = {
+    play: (name?: string) => void;
+    transition: (to: string, time?: number, transitionOffset?: number) => void;
+};
+
+type MultiplayerAnimComponent = {
+    loadStateGraph: (stateGraph: object) => void;
+    assignAnimation: (nodePath: string, animTrack: unknown, layerName?: string, speed?: number, loop?: boolean) => void;
+    baseLayer: MultiplayerAnimLayer | null;
+    playing: boolean;
+};
+
 const OCCLUSION_CELL_PX = 4;
 const OCCLUSION_FRAC_OF_DEPTH = 0.015;
 const OCCLUSION_MIN_M = 0.015;
@@ -57,6 +84,11 @@ const MULTIPLAYER_MIN_HEIGHT = 0.95;
 const MULTIPLAYER_MAX_HEIGHT = 2.35;
 const MULTIPLAYER_RAYCAST_MAX_SAMPLES = 260_000;
 const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
+const MULTIPLAYER_AVATAR_URL = '/static/dev-assets/kenney/kenney-avatar-animated.glb';
+const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
+const MULTIPLAYER_AVATAR_RUN_SPEED = 0.035;
+const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
+const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -258,8 +290,12 @@ class SemanticAnnotationOverlay {
     private readonly hitVolumes = new Map<string, MaskHitVolume>();
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
+    private readonly multiplayerAvatarInstances = new Map<string, MultiplayerAvatarInstance>();
     private annotations: SemanticAnnotation[] = [];
     private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
+    private multiplayerAvatarAsset: Asset | null = null;
+    private multiplayerAvatarLoading = false;
+    private multiplayerAvatarFailed = false;
     private interactionMode: 'edit' | 'game' = 'edit';
     private activeGameTargetIds = new Set<string>();
     private foundAnnotationIds = new Set<string>();
@@ -279,6 +315,7 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
+        events.on('update', this.onSceneUpdate, this);
         events.on('prerender', this.drawHitVolumes, this);
         events.on('postrender', this.update, this);
         events.function('semanticAnnotations.captureAnchor', this.captureAnchor.bind(this));
@@ -294,6 +331,7 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
+        this.events.off('update', this.onSceneUpdate, this);
         this.events.off('prerender', this.drawHitVolumes, this);
         this.events.off('postrender', this.update, this);
         this.container.parentElement?.removeEventListener('pointerdown', this.onPointerDown);
@@ -301,6 +339,10 @@ class SemanticAnnotationOverlay {
         this.container.remove();
         this.markers.clear();
         this.multiplayerMarkers.clear();
+        for (const avatar of this.multiplayerAvatarInstances.values()) {
+            avatar.entity.destroy();
+        }
+        this.multiplayerAvatarInstances.clear();
     }
 
     private setAnnotations(annotations: SemanticAnnotation[]) {
@@ -328,7 +370,12 @@ class SemanticAnnotationOverlay {
                 marker.remove();
                 this.multiplayerMarkers.delete(id);
                 this.multiplayerHeightCalibrations.delete(id);
+                this.destroyMultiplayerAvatar(id);
             }
+        }
+
+        if (this.multiplayerPlayers.length > 0) {
+            this.loadMultiplayerAvatarAsset();
         }
 
         for (const player of this.multiplayerPlayers) {
@@ -427,6 +474,175 @@ class SemanticAnnotationOverlay {
             details,
             at: new Date().toISOString()
         }, '*');
+    }
+
+    private onSceneUpdate() {
+        if (this.multiplayerAvatarInstances.size > 0) {
+            this.scene.forceRender = true;
+        }
+    }
+
+    private loadMultiplayerAvatarAsset() {
+        if (this.multiplayerAvatarAsset || this.multiplayerAvatarLoading || this.multiplayerAvatarFailed) {
+            return;
+        }
+
+        this.multiplayerAvatarLoading = true;
+        this.scene.app.assets.loadFromUrl(MULTIPLAYER_AVATAR_URL, 'container', (error: unknown, asset?: Asset) => {
+            this.multiplayerAvatarLoading = false;
+            if (error || !asset) {
+                this.multiplayerAvatarFailed = true;
+                this.emitDiagnostic('multiplayer-avatar-load-failed', {
+                    url: MULTIPLAYER_AVATAR_URL,
+                    error: error instanceof Error ? error.message : String(error ?? 'unknown')
+                });
+                return;
+            }
+
+            this.multiplayerAvatarAsset = asset;
+            this.update();
+            this.scene.forceRender = true;
+        });
+    }
+
+    private destroyMultiplayerAvatar(id: string) {
+        const avatar = this.multiplayerAvatarInstances.get(id);
+        if (!avatar) {
+            return;
+        }
+        avatar.entity.destroy();
+        this.multiplayerAvatarInstances.delete(id);
+    }
+
+    private setMultiplayerAvatarLayers(entity: Entity) {
+        const worldLayerId = this.scene.worldLayer?.id;
+        if (worldLayerId === undefined) {
+            return;
+        }
+
+        const renders = entity.findComponents('render') as Array<{ layers?: number[]; meshInstances?: Array<{ castShadow?: boolean; receiveShadow?: boolean }> }>;
+        for (const render of renders) {
+            render.layers = [worldLayerId];
+            for (const meshInstance of render.meshInstances ?? []) {
+                meshInstance.castShadow = false;
+                meshInstance.receiveShadow = false;
+            }
+        }
+    }
+
+    private setupMultiplayerAvatarAnimation(entity: Entity, resource: MultiplayerAvatarContainer) {
+        const animations = resource.animations ?? [];
+        const idle = animations.find(animation => /idle/i.test(animation.name))?.resource;
+        const run = animations.find(animation => /run/i.test(animation.name))?.resource;
+        if (!idle || !run) {
+            return;
+        }
+
+        entity.addComponent('anim', { activate: true });
+        const anim = (entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
+        if (!anim) {
+            return;
+        }
+
+        anim.loadStateGraph({
+            layers: [
+                {
+                    name: 'Base',
+                    states: [
+                        { name: 'START' },
+                        { name: 'Idle', defaultState: true, speed: 1, loop: true },
+                        { name: 'Run', speed: 1, loop: true }
+                    ],
+                    transitions: [
+                        { from: 'START', to: 'Idle' }
+                    ]
+                }
+            ],
+            parameters: {}
+        });
+        anim.assignAnimation('Idle', idle, undefined, 1, true);
+        anim.assignAnimation('Run', run, undefined, 1, true);
+        anim.playing = true;
+        anim.baseLayer?.play('Idle');
+    }
+
+    private ensureMultiplayerAvatar(player: MultiplayerOverlayPlayer) {
+        const existing = this.multiplayerAvatarInstances.get(player.id);
+        if (existing) {
+            return existing;
+        }
+
+        this.loadMultiplayerAvatarAsset();
+        const resource = this.multiplayerAvatarAsset?.resource as MultiplayerAvatarContainer | undefined;
+        if (!resource) {
+            return null;
+        }
+
+        const entity = resource.instantiateRenderEntity?.({ castShadows: false, receiveShadows: false }) ??
+            resource.instantiateModelEntity?.({ castShadows: false, receiveShadows: false });
+        if (!entity) {
+            this.multiplayerAvatarFailed = true;
+            return null;
+        }
+
+        entity.name = `multiplayer-avatar-${player.id}`;
+        entity.enabled = false;
+        this.setMultiplayerAvatarLayers(entity);
+        this.setupMultiplayerAvatarAnimation(entity, resource);
+        this.scene.contentRoot.addChild(entity);
+
+        const instance = {
+            entity,
+            state: 'idle',
+            lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
+            lastUpdateMs: performance.now()
+        } satisfies MultiplayerAvatarInstance;
+        this.multiplayerAvatarInstances.set(player.id, instance);
+        return instance;
+    }
+
+    private transitionMultiplayerAvatar(instance: MultiplayerAvatarInstance, state: MultiplayerAvatarAnimation) {
+        if (instance.state === state) {
+            return;
+        }
+
+        instance.state = state;
+        const anim = (instance.entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
+        anim?.baseLayer?.transition(state === 'run' ? 'Run' : 'Idle', MULTIPLAYER_AVATAR_TRANSITION_SECONDS);
+    }
+
+    private updateMultiplayerAvatar(
+        player: MultiplayerOverlayPlayer,
+        instance: MultiplayerAvatarInstance,
+        avatarWorldHeight: number,
+        nowMs: number
+    ) {
+        const feetX = player.position[0];
+        const feetY = player.position[1] - avatarWorldHeight;
+        const feetZ = player.position[2];
+        const dx = feetX - instance.lastPosition.x;
+        const dz = feetZ - instance.lastPosition.z;
+        const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
+        const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
+        this.transitionMultiplayerAvatar(instance, planarSpeed > MULTIPLAYER_AVATAR_RUN_SPEED ? 'run' : 'idle');
+
+        let forwardX = dx;
+        let forwardZ = dz;
+        if (player.target) {
+            forwardX = player.target[0] - player.position[0];
+            forwardZ = player.target[2] - player.position[2];
+        }
+        if (forwardX * forwardX + forwardZ * forwardZ > 1e-6) {
+            const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES;
+            instance.entity.setEulerAngles(0, yaw, 0);
+        }
+
+        const scale = avatarWorldHeight / MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
+        instance.entity.enabled = true;
+        instance.entity.setLocalScale(scale, scale, scale);
+        instance.entity.setPosition(feetX, feetY, feetZ);
+        instance.lastPosition.set(feetX, feetY, feetZ);
+        instance.lastUpdateMs = nowMs;
     }
 
     private syncMarkers() {
@@ -1062,6 +1278,11 @@ class SemanticAnnotationOverlay {
     }
 
     private updateMultiplayerPlayers(clientWidth: number, clientHeight: number, cameraPosition: Vec3) {
+        if (this.multiplayerPlayers.length > 0) {
+            this.loadMultiplayerAvatarAsset();
+        }
+
+        const nowMs = performance.now();
         for (const player of this.multiplayerPlayers) {
             const marker = this.multiplayerMarkers.get(player.id);
             if (!marker) {
@@ -1081,11 +1302,20 @@ class SemanticAnnotationOverlay {
 
             marker.hidden = !visible;
             if (!visible) {
+                const avatar = this.multiplayerAvatarInstances.get(player.id);
+                if (avatar) {
+                    avatar.entity.enabled = false;
+                }
                 continue;
             }
 
             const calibration = this.calibrateMultiplayerHeight(player);
             const avatarWorldHeight = calibration.height;
+            const avatar = this.ensureMultiplayerAvatar(player);
+            if (avatar) {
+                this.updateMultiplayerAvatar(player, avatar, avatarWorldHeight, nowMs);
+            }
+            marker.classList.toggle('has-3d-avatar', Boolean(avatar));
 
             this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
@@ -1103,7 +1333,9 @@ class SemanticAnnotationOverlay {
 
             marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
             marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
-            marker.style.transform = `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
+            marker.style.transform = avatar ?
+                `translate(${headX.toFixed(1)}px, ${headY.toFixed(1)}px)` :
+                `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
 
             if (player.target) {

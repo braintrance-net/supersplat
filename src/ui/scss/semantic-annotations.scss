@@ -254,6 +254,31 @@
     opacity: 0.72;
 }
 
+.multiplayer-avatar-marker.has-3d-avatar {
+    width: 1px;
+    height: 1px;
+    filter: none;
+    transform-origin: 0 0;
+
+    .multiplayer-avatar-shadow,
+    .multiplayer-avatar-aim,
+    .multiplayer-avatar-body {
+        display: none;
+    }
+
+    .multiplayer-avatar-label {
+        top: -28px;
+        bottom: auto;
+        width: max-content;
+        max-width: 96px;
+        min-width: 34px;
+        height: 18px;
+        padding: 0 7px;
+        font-size: 10px;
+        transform: translateX(-50%);
+    }
+}
+
 .multiplayer-avatar-body {
     position: absolute;
     left: 50%;
