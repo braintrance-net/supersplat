@@ -50,9 +50,25 @@ type MultiplayerAvatarAnimation = 'idle' | 'run';
 
 type MultiplayerAvatarInstance = {
     entity: Entity;
+    rig: MultiplayerAvatarRig | null;
     state: MultiplayerAvatarAnimation;
+    phase: number;
     lastPosition: Vec3;
     lastUpdateMs: number;
+};
+
+type MultiplayerAvatarRigBone = {
+    entity: Entity;
+    baseEuler: Vec3;
+};
+
+type MultiplayerAvatarRig = {
+    leftArm?: MultiplayerAvatarRigBone;
+    rightArm?: MultiplayerAvatarRigBone;
+    leftLeg?: MultiplayerAvatarRigBone;
+    rightLeg?: MultiplayerAvatarRigBone;
+    spine?: MultiplayerAvatarRigBone;
+    head?: MultiplayerAvatarRigBone;
 };
 
 type MultiplayerAvatarContainer = {
@@ -579,6 +595,69 @@ class SemanticAnnotationOverlay {
         }
     }
 
+    private multiplayerRigBone(entity: Entity, name: string): MultiplayerAvatarRigBone | undefined {
+        const bone = entity.findByName(name) as Entity | null;
+        if (!bone) {
+            return undefined;
+        }
+        const euler = bone.getLocalEulerAngles();
+        return {
+            entity: bone,
+            baseEuler: new Vec3(euler.x, euler.y, euler.z)
+        };
+    }
+
+    private createMultiplayerAvatarRig(entity: Entity): MultiplayerAvatarRig {
+        return {
+            leftArm: this.multiplayerRigBone(entity, 'LeftArm'),
+            rightArm: this.multiplayerRigBone(entity, 'RightArm'),
+            leftLeg: this.multiplayerRigBone(entity, 'LeftUpLeg'),
+            rightLeg: this.multiplayerRigBone(entity, 'RightUpLeg'),
+            spine: this.multiplayerRigBone(entity, 'Spine'),
+            head: this.multiplayerRigBone(entity, 'Head')
+        };
+    }
+
+    private setMultiplayerRigBone(bone: MultiplayerAvatarRigBone | undefined, x = 0, y = 0, z = 0) {
+        if (!bone) {
+            return;
+        }
+        bone.entity.setLocalEulerAngles(
+            bone.baseEuler.x + x,
+            bone.baseEuler.y + y,
+            bone.baseEuler.z + z
+        );
+    }
+
+    private animateMultiplayerAvatarRig(instance: MultiplayerAvatarInstance, dt: number) {
+        const rig = instance.rig;
+        if (!rig) {
+            return;
+        }
+
+        const running = instance.state === 'run';
+        instance.phase += dt * (running ? 9.5 : 2.4);
+        const stride = Math.sin(instance.phase);
+        const counterStride = Math.sin(instance.phase + Math.PI);
+        const lift = Math.sin(instance.phase * 2);
+
+        if (running) {
+            this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5);
+            this.setMultiplayerRigBone(rig.rightArm, counterStride * 28, 0, -5);
+            this.setMultiplayerRigBone(rig.leftLeg, counterStride * 30, 0, 2);
+            this.setMultiplayerRigBone(rig.rightLeg, stride * 30, 0, -2);
+            this.setMultiplayerRigBone(rig.spine, lift * 2, 0, stride * 5);
+            this.setMultiplayerRigBone(rig.head, lift * 1.2, stride * 4, 0);
+        } else {
+            this.setMultiplayerRigBone(rig.leftArm, 3 + stride * 3, 0, 2);
+            this.setMultiplayerRigBone(rig.rightArm, 3 + counterStride * 3, 0, -2);
+            this.setMultiplayerRigBone(rig.leftLeg);
+            this.setMultiplayerRigBone(rig.rightLeg);
+            this.setMultiplayerRigBone(rig.spine, lift * 0.7, 0, stride * 1.5);
+            this.setMultiplayerRigBone(rig.head, lift * 0.5, stride * 1.8, 0);
+        }
+    }
+
     private ensureMultiplayerAvatar(player: MultiplayerOverlayPlayer) {
         const existing = this.multiplayerAvatarInstances.get(player.id);
         if (existing) {
@@ -606,7 +685,9 @@ class SemanticAnnotationOverlay {
 
         const instance = {
             entity,
+            rig: this.createMultiplayerAvatarRig(entity),
             state: 'idle',
+            phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
             lastUpdateMs: performance.now()
         } satisfies MultiplayerAvatarInstance;
@@ -638,6 +719,7 @@ class SemanticAnnotationOverlay {
         const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
         const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
         this.transitionMultiplayerAvatar(instance, planarSpeed > MULTIPLAYER_AVATAR_RUN_SPEED ? 'run' : 'idle');
+        this.animateMultiplayerAvatarRig(instance, dt);
 
         let forwardX = dx;
         let forwardZ = dz;
