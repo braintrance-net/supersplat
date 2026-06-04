@@ -659,6 +659,7 @@ const registerIframeApi = (events: Events) => {
     let perfTotalGapMs = 0;
     let perfMaxGapMs = 0;
     let perfLastFrameAt: number | null = null;
+    let lastAutoSemanticLayerSignature = '';
 
     const restoreGameModeTool = () => {
         const restoreTool = gameModePreviousTool;
@@ -679,10 +680,22 @@ const registerIframeApi = (events: Events) => {
         events.fire('semanticAnnotations.interactionMode', 'edit');
     };
 
-    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: RequestId) => {
+    const semanticLayerSignature = (layer: Pick<SemanticLayer, 'annotations'> | Partial<SemanticLayer>) => JSON.stringify((layer.annotations ?? []).map(annotation => ({
+        id: annotation.id,
+        label: annotation.label,
+        position: annotation.position,
+        radius: annotation.radius,
+        targetImage: annotation.targetImage ? {
+            src: annotation.targetImage.src,
+            maskSrc: annotation.targetImage.maskSrc,
+            fullMaskSrc: annotation.targetImage.fullMaskSrc
+        } : null
+    })));
+
+    const postSemanticLayer = (source: Window = window.parent, origin = '*', requestId?: RequestId, layer?: SemanticLayer) => {
         const response = {
             type: SEMANTIC_LAYER,
-            result: events.invoke('semanticAnnotations.layer') as SemanticLayer,
+            result: layer ?? events.invoke('semanticAnnotations.layer') as SemanticLayer,
             ...requestIdPayload(requestId)
         };
         source.postMessage(response, origin);
@@ -690,7 +703,12 @@ const registerIframeApi = (events: Events) => {
 
     events.on('semanticAnnotations.changed', () => {
         if (window.parent && window.parent !== window) {
-            postSemanticLayer();
+            const layer = events.invoke('semanticAnnotations.layer') as SemanticLayer;
+            const signature = semanticLayerSignature(layer);
+            if (signature !== lastAutoSemanticLayerSignature) {
+                lastAutoSemanticLayerSignature = signature;
+                postSemanticLayer(window.parent, '*', undefined, layer);
+            }
         }
     });
 
@@ -948,6 +966,7 @@ const registerIframeApi = (events: Events) => {
 
         if (isSemanticLayerLoadMessage(event.data)) {
             events.invoke('semanticAnnotations.loadLayer', event.data.layer);
+            lastAutoSemanticLayerSignature = semanticLayerSignature(event.data.layer);
             postSemanticLayer(source, event.origin, event.data.requestId);
         }
 
