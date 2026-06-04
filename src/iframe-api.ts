@@ -686,6 +686,7 @@ const registerIframeApi = (events: Events) => {
     };
 
     const resetGameModeState = () => {
+        events.fire('walk.embeddedControls', false);
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
     };
