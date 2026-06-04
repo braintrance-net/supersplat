@@ -1405,7 +1405,8 @@ class SemanticAnnotationOverlay {
                 const avatar = this.multiplayerAvatarInstances.get(player.id);
                 if (avatar) {
                     avatar.entity.enabled = false;
-                    avatar.lastUpdateMs = performance.now();
+                    avatar.lastPosition.set(player.position[0], player.position[1], player.position[2]);
+                    avatar.lastUpdateMs = nowMs;
                 }
                 continue;
             }
