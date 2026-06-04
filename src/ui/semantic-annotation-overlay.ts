@@ -495,10 +495,18 @@ class SemanticAnnotationOverlay {
         }, '*');
     }
 
-    private onSceneUpdate() {
-        if (this.multiplayerAvatarInstances.size > 0) {
-            this.scene.forceRender = true;
+    private onSceneUpdate(deltaTime = 1 / 60) {
+        if (this.multiplayerAvatarInstances.size === 0) {
+            return;
         }
+
+        const rigDeltaTime = Math.min(Math.max(deltaTime, 1 / 120), 1 / 15);
+        for (const avatar of this.multiplayerAvatarInstances.values()) {
+            if (avatar.entity.enabled) {
+                this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
+            }
+        }
+        this.scene.forceRender = true;
     }
 
     private loadMultiplayerAvatarAsset() {
@@ -584,10 +592,8 @@ class SemanticAnnotationOverlay {
         anim.assignAnimation('Idle', idle, undefined, 1, true);
         anim.assignAnimation('Run', run, undefined, 1, true);
         anim.rebind();
-        anim.playing = true;
-        if (anim.playable) {
-            anim.baseLayer?.play('Idle');
-        } else {
+        anim.playing = false;
+        if (!anim.playable) {
             this.emitDiagnostic('multiplayer-avatar-animation-unplayable', {
                 rootBone: animationRoot.name,
                 animations: animations.map(animation => animation.name)
@@ -719,7 +725,6 @@ class SemanticAnnotationOverlay {
         const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
         const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
         this.transitionMultiplayerAvatar(instance, planarSpeed > MULTIPLAYER_AVATAR_RUN_SPEED ? 'run' : 'idle');
-        this.animateMultiplayerAvatarRig(instance, dt);
 
         let forwardX = dx;
         let forwardZ = dz;
@@ -1400,6 +1405,7 @@ class SemanticAnnotationOverlay {
                 const avatar = this.multiplayerAvatarInstances.get(player.id);
                 if (avatar) {
                     avatar.entity.enabled = false;
+                    avatar.lastUpdateMs = performance.now();
                 }
                 continue;
             }
