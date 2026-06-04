@@ -220,7 +220,7 @@
     width: var(--multiplayer-avatar-width);
     height: var(--multiplayer-avatar-height);
     pointer-events: none;
-    transform-origin: 50% 14%;
+    transform-origin: 50% 13%;
     will-change: transform;
     filter: drop-shadow(0 14px 20px rgba(0, 0, 0, 0.5));
 }
@@ -228,7 +228,7 @@
 .multiplayer-avatar-shadow {
     position: absolute;
     left: 50%;
-    bottom: 1.8%;
+    bottom: -1%;
     width: 79%;
     height: 11.6%;
     border: 1px solid color-mix(in srgb, var(--multiplayer-avatar-color), transparent 45%);
@@ -240,7 +240,7 @@
 .multiplayer-avatar-aim {
     position: absolute;
     left: 50%;
-    top: 44.6%;
+    top: 40%;
     width: 66%;
     height: 2px;
     border-radius: 999px;
@@ -259,7 +259,7 @@
     left: 50%;
     top: 0;
     width: 76%;
-    height: 84%;
+    height: 100%;
     transform: translateX(-50%);
 }
 
@@ -273,9 +273,9 @@
 }
 
 .multiplayer-avatar-head {
-    top: 3.6%;
+    top: 0;
     width: 48%;
-    height: 25.5%;
+    height: 26%;
     border: 2px solid color-mix(in srgb, var(--multiplayer-avatar-color), white 24%);
     border-radius: 999px 999px 65% 65%;
     background:
@@ -287,9 +287,9 @@
 }
 
 .multiplayer-avatar-chest {
-    top: 31.9%;
+    top: 28%;
     width: 64%;
-    height: 40.4%;
+    height: 37%;
     border: 2px solid color-mix(in srgb, var(--multiplayer-avatar-color), white 8%);
     border-radius: 10px 10px 7px 7px;
     background:
@@ -298,9 +298,9 @@
 }
 
 .multiplayer-avatar-arms {
-    top: 38.3%;
+    top: 34%;
     width: 95%;
-    height: 26.6%;
+    height: 24%;
 
     &::before,
     &::after {
@@ -326,9 +326,9 @@
 }
 
 .multiplayer-avatar-legs {
-    top: 69.1%;
+    top: 63%;
     width: 61%;
-    height: 28.7%;
+    height: 35%;
 
     &::before,
     &::after {
