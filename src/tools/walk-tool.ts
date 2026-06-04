@@ -35,6 +35,7 @@ const COLLISION_SLOW_SAMPLE_INTERVAL_MS = 1800;
 const COLLISION_REPORT_INTERVAL_MS = 1800;
 const COLLISION_SLOW_SAMPLE_MS = 28;
 const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
+const COLLISION_POINTER_LOOK_DEFER_MS = 160;
 
 class WalkTool {
     private events: Events;
@@ -50,6 +51,7 @@ class WalkTool {
     private onPointerLockChangeBound: (() => void) | null = null;
     private externalWalkInput: WalkInputState = {};
     private lastExternalMoveAt = performance.now();
+    private lastLookAt = 0;
     private externalVerticalVelocity = 0;
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
@@ -262,10 +264,12 @@ class WalkTool {
             return;
         }
 
+        this.lastLookAt = performance.now();
         this.look(dx, dy);
     }
 
     private onExternalPointerLook(dx = 0, dy = 0) {
+        this.lastLookAt = performance.now();
         this.look(Math.max(-200, Math.min(200, dx)), Math.max(-200, Math.min(200, dy)));
     }
 
@@ -378,6 +382,9 @@ class WalkTool {
             }
             return;
         }
+        if (now - this.lastLookAt < COLLISION_POINTER_LOOK_DEFER_MS) {
+            return;
+        }
         const sampleInterval = (this.collisionProxy.sampleMs ?? 0) > COLLISION_SLOW_SAMPLE_MS ?
             COLLISION_SLOW_SAMPLE_INTERVAL_MS :
             COLLISION_SAMPLE_INTERVAL_MS;
@@ -427,6 +434,7 @@ class WalkTool {
             frontDistance: this.collisionProxy.frontDistance === null ? null : Number(this.collisionProxy.frontDistance.toFixed(3)),
             viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3)),
             sampleMs: this.collisionProxy.sampleMs === null ? null : Number(this.collisionProxy.sampleMs.toFixed(1)),
+            lookAgeMs: Number(Math.max(0, now - this.lastLookAt).toFixed(1)),
             elevation: Number(this.camera.elevation.toFixed(2))
         });
     }
