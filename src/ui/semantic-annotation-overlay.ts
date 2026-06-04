@@ -702,7 +702,7 @@ class SemanticAnnotationOverlay {
                 );
 
                 hit = surfaceInside || surfaceNearVolume || (rayDistance !== null && !blockedByCloserSurface);
-                rank = surfaceInside ? distance : rayDistance ?? distance;
+                rank = surfaceInside || surfaceNearVolume ? surfaceVolumeDistance : rayDistance ?? distance;
                 details = {
                     ...details,
                     source: volume.source,
