@@ -1,4 +1,4 @@
-import { Color, Mat4, Vec3 } from 'playcanvas';
+import { Color, Mat4, Ray, Vec3 } from 'playcanvas';
 
 import { ElementType } from '../element';
 import { Events } from '../events';
@@ -457,6 +457,47 @@ class SemanticAnnotationOverlay {
         return Math.sqrt(dx * dx + dy * dy + dz * dz) <= margin;
     }
 
+    private rayVolumeDistance(ray: Ray, volume: MaskHitVolume) {
+        const margin = Math.max(0.05, Math.min(0.35, volume.radius * 0.18));
+        const minX = volume.min.x - margin;
+        const minY = volume.min.y - margin;
+        const minZ = volume.min.z - margin;
+        const maxX = volume.max.x + margin;
+        const maxY = volume.max.y + margin;
+        const maxZ = volume.max.z + margin;
+        let tMin = 0;
+        let tMax = Infinity;
+
+        const testAxis = (origin: number, direction: number, min: number, max: number) => {
+            if (Math.abs(direction) < 1e-6) {
+                return origin >= min && origin <= max;
+            }
+
+            let near = (min - origin) / direction;
+            let far = (max - origin) / direction;
+            if (near > far) {
+                const temp = near;
+                near = far;
+                far = temp;
+            }
+            tMin = Math.max(tMin, near);
+            tMax = Math.min(tMax, far);
+            return tMin <= tMax;
+        };
+
+        if (!testAxis(ray.origin.x, ray.direction.x, minX, maxX)) {
+            return null;
+        }
+        if (!testAxis(ray.origin.y, ray.direction.y, minY, maxY)) {
+            return null;
+        }
+        if (!testAxis(ray.origin.z, ray.direction.z, minZ, maxZ)) {
+            return null;
+        }
+
+        return tMax >= 0 ? Math.max(0, tMin) : null;
+    }
+
     private volumeFromWorldPoints(
         annotation: SemanticAnnotation,
         points: Array<{ x: number; y: number; z: number }>,
@@ -561,7 +602,6 @@ class SemanticAnnotationOverlay {
     }
 
     private drawHitVolumes() {
-        let drew = false;
         for (const annotation of this.annotations) {
             const volume = this.hitVolumes.get(annotation.id);
             if (!volume || !this.shouldShowVolume(annotation)) {
@@ -570,15 +610,10 @@ class SemanticAnnotationOverlay {
 
             const color = this.foundAnnotationIds.has(annotation.id) ? HIT_VOLUME_FOUND_COLOR : HIT_VOLUME_COLOR;
             this.scene.app.drawWireAlignedBox(volume.min, volume.max, color, true, this.scene.worldLayer);
-            drew = true;
-        }
-
-        if (drew) {
-            this.scene.forceRender = true;
         }
     }
 
-    private findCenterHit(surfacePoint?: Vec3 | null) {
+    private findCenterHit(surfacePoint?: Vec3 | null, centerRay?: Ray | null) {
         let bestAnnotation: SemanticAnnotation | null = null;
         let bestDistance = Infinity;
 
@@ -588,20 +623,34 @@ class SemanticAnnotationOverlay {
             }
 
             const volume = this.hitVolumes.get(annotation.id);
-            if (this.requiresMaskVolume(annotation) && !volume) {
-                continue;
-            }
-
             const world = this.annotationCenter(annotation);
             const radius = this.annotationHitRadius(annotation);
             const distance = surfacePoint ? new Vec3().sub2(world, surfacePoint).length() : Infinity;
 
-            const hit = volume ?
-                (surfacePoint ? this.pointInsideVolume(surfacePoint, volume) : false) :
-                distance <= radius;
-            if (hit && distance < bestDistance) {
+            let hit = distance <= radius;
+            let rank = distance;
+            if (volume) {
+                const surfaceInside = surfacePoint ? this.pointInsideVolume(surfacePoint, volume) : false;
+                const rayDistance = centerRay ? this.rayVolumeDistance(centerRay, volume) : null;
+                const surfaceDistance = surfacePoint && centerRay ?
+                    new Vec3().sub2(surfacePoint, centerRay.origin).length() :
+                    Infinity;
+                const occlusionMargin = Math.max(0.08, volume.radius * 0.15);
+                const blockedByCloserSurface = Boolean(
+                    centerRay &&
+                    surfacePoint &&
+                    rayDistance !== null &&
+                    !surfaceInside &&
+                    surfaceDistance < rayDistance - occlusionMargin
+                );
+
+                hit = surfaceInside || (rayDistance !== null && !blockedByCloserSurface);
+                rank = surfaceInside ? distance : rayDistance ?? distance;
+            }
+
+            if (hit && rank < bestDistance) {
                 bestAnnotation = annotation;
-                bestDistance = distance;
+                bestDistance = rank;
             }
         }
 
@@ -726,8 +775,11 @@ class SemanticAnnotationOverlay {
             return { ok: false, reason: 'inactive' };
         }
 
+        const centerRay = new Ray();
+        const { width, height } = this.scene.camera.targetSize;
+        this.scene.camera.getRay(width * 0.5, height * 0.5, centerRay);
         const hit = await this.scene.camera.intersect(0.5, 0.5);
-        const matched = this.findCenterHit(hit?.position ?? null);
+        const matched = this.findCenterHit(hit?.position ?? null, centerRay);
 
         if (matched) {
             this.events.fire('semanticAnnotations.activate', matched.id);

@@ -35,6 +35,7 @@ interface SearchResult {
 class AssetBrowser extends Container {
     private events: Events;
     private apiToken: string;
+    private proxyBaseUrl: string;
     private nextCursor: string | null = null;
     private currentQuery = '';
     private gridContainer: HTMLDivElement;
@@ -72,6 +73,7 @@ class AssetBrowser extends Container {
         this.events = events;
         const devConfig = (window as any).supersplatConfig ?? {};
         this.apiToken = devConfig.sketchfabApiToken || '';
+        this.proxyBaseUrl = this.resolveProxyBaseUrl(devConfig.sketchfabProxyBaseUrl);
 
         // Stop pointer events from reaching canvas
         ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'dblclick'].forEach((eventName) => {
@@ -408,12 +410,7 @@ class AssetBrowser extends Container {
                 params.set('cursor', cursor);
             }
 
-            const headers: Record<string, string> = {};
-            if (this.apiToken) {
-                headers['Authorization'] = `Token ${this.apiToken}`;
-            }
-
-            const response = await fetch(`https://api.sketchfab.com/v3/search?${params}`, { headers });
+            const response = await fetch(this.sketchfabSearchUrl(params), { headers: this.sketchfabHeaders() });
             if (!response.ok) throw new Error(`Search failed: ${response.status}`);
 
             const data: SearchResult = await response.json();
@@ -483,11 +480,11 @@ class AssetBrowser extends Container {
     }
 
     private async placeInScene(model: SketchfabModel, card: HTMLElement) {
-        if (!this.apiToken) {
+        if (!this.hasSketchfabAccess()) {
             await this.events.invoke('showPopup', {
                 type: 'error',
-                header: 'API Token Required',
-                message: 'Set SKETCHFAB_API_TOKEN in .env to download models.'
+                header: 'Sketchfab Unavailable',
+                message: 'Set SKETCHFAB_API_TOKEN on the editor proxy or expose a local development token.'
             });
             return;
         }
@@ -803,7 +800,7 @@ class AssetBrowser extends Container {
             return;
         }
 
-        if (!this.apiToken) {
+        if (!this.hasSketchfabAccess()) {
             this.events.fire('toast', 'Sketchfab API token not configured', 'error');
             return;
         }
@@ -946,8 +943,7 @@ class AssetBrowser extends Container {
             });
             if (history.cursor) params.set('cursor', history.cursor);
 
-            const headers: Record<string, string> = { 'Authorization': `Token ${this.apiToken}` };
-            const res = await fetch(`https://api.sketchfab.com/v3/search?${params}`, { headers });
+            const res = await fetch(this.sketchfabSearchUrl(params), { headers: this.sketchfabHeaders() });
             if (!res.ok) throw new Error(`Sketchfab search failed: ${res.status}`);
 
             const data: SearchResult = await res.json();
@@ -970,16 +966,42 @@ class AssetBrowser extends Container {
     }
 
     private async getDownloadUrl(uid: string): Promise<string | null> {
-        const headers: Record<string, string> = {
-            'Authorization': `Token ${this.apiToken}`
-        };
-
-        const response = await fetch(`https://api.sketchfab.com/v3/models/${uid}/download`, { headers });
+        const response = await fetch(this.sketchfabDownloadUrl(uid), { headers: this.sketchfabHeaders() });
         if (!response.ok) return null;
 
         const data = await response.json();
         // Prefer glb, fall back to gltf
         return data.glb?.url || data.gltf?.url || null;
+    }
+
+    private hasSketchfabAccess() {
+        return !!this.apiToken || !!this.proxyBaseUrl;
+    }
+
+    private resolveProxyBaseUrl(configured?: string) {
+        if (configured) {
+            return configured.replace(/\/$/, '');
+        }
+        if (/^board-demo-editor(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(window.location.hostname)) {
+            return window.location.origin;
+        }
+        return '';
+    }
+
+    private sketchfabHeaders() {
+        return this.proxyBaseUrl ? {} : { Authorization: `Token ${this.apiToken}` };
+    }
+
+    private sketchfabSearchUrl(params: URLSearchParams) {
+        return this.proxyBaseUrl ?
+            `${this.proxyBaseUrl}/api/sketchfab/search?${params}` :
+            `https://api.sketchfab.com/v3/search?${params}`;
+    }
+
+    private sketchfabDownloadUrl(uid: string) {
+        return this.proxyBaseUrl ?
+            `${this.proxyBaseUrl}/api/sketchfab/models/${encodeURIComponent(uid)}/download` :
+            `https://api.sketchfab.com/v3/models/${encodeURIComponent(uid)}/download`;
     }
 }
 

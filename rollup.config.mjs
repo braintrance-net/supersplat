@@ -68,6 +68,8 @@ const SUPERSPLAT_CONFIG = JSON.stringify({
     defaultCamera,
     boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
+    sketchfabProxyBaseUrl: process.env.SKETCHFAB_PROXY_BASE_URL || '',
+    openAiProxyBaseUrl: process.env.OPENAI_PROXY_BASE_URL || '',
     enableDevTools: process.env.DEV_TOOLS === 'true',
     sketchfabApiToken: exposeClientApiKeys ? process.env.SKETCHFAB_API_TOKEN || '' : '',
     openaiApiKey: exposeClientApiKeys ? process.env.OPENAI_API_KEY || '' : ''

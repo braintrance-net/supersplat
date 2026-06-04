@@ -650,6 +650,11 @@ const registerIframeApi = (events: Events) => {
     let gameModeActivatedWalk = false;
     let lastPointerLookDiagnosticAt = 0;
     let pointerLookStats = emptyPointerLookStats();
+    let pendingPointerLookDx = 0;
+    let pendingPointerLookDy = 0;
+    let pendingPointerLookFrame: number | null = null;
+    let pendingPointerLookSource: Window | null = null;
+    let pendingPointerLookOrigin = '*';
     let perfFrameCount = 0;
     let perfTotalGapMs = 0;
     let perfMaxGapMs = 0;
@@ -688,6 +693,44 @@ const registerIframeApi = (events: Events) => {
             postSemanticLayer();
         }
     });
+
+    const flushPointerLook = () => {
+        pendingPointerLookFrame = null;
+        const dx = pendingPointerLookDx;
+        const dy = pendingPointerLookDy;
+        pendingPointerLookDx = 0;
+        pendingPointerLookDy = 0;
+        if (dx === 0 && dy === 0) {
+            return;
+        }
+
+        const applyStart = performance.now();
+        events.fire('walk.pointerLook', dx, dy);
+        const applyMs = performance.now() - applyStart;
+        pointerLookStats.totalApplyMs += applyMs;
+        pointerLookStats.maxApplyMs = Math.max(pointerLookStats.maxApplyMs, applyMs);
+
+        const source = pendingPointerLookSource;
+        const now = performance.now();
+        if (!source || now - lastPointerLookDiagnosticAt <= 2000) {
+            return;
+        }
+
+        lastPointerLookDiagnosticAt = now;
+        const gapCount = Math.max(0, pointerLookStats.count - 1);
+        postDiagnostic(source, pendingPointerLookOrigin, 'pointer-look-perf', {
+            events: pointerLookStats.count,
+            forcedWalks: pointerLookStats.forcedWalkCount,
+            avgDx: Number((pointerLookStats.totalAbsDx / Math.max(1, pointerLookStats.count)).toFixed(2)),
+            avgDy: Number((pointerLookStats.totalAbsDy / Math.max(1, pointerLookStats.count)).toFixed(2)),
+            avgGapMs: Number((pointerLookStats.totalGapMs / Math.max(1, gapCount)).toFixed(1)),
+            maxGapMs: Number(pointerLookStats.maxGapMs.toFixed(1)),
+            avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
+            maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
+            activeTool: events.invoke('tool.active') as string | null
+        });
+        pointerLookStats = emptyPointerLookStats();
+    };
 
     events.on('postrender', () => {
         const now = performance.now();
@@ -879,28 +922,12 @@ const registerIframeApi = (events: Events) => {
             pointerLookStats.count += 1;
             pointerLookStats.totalAbsDx += Math.abs(event.data.dx);
             pointerLookStats.totalAbsDy += Math.abs(event.data.dy);
-
-            const applyStart = performance.now();
-            events.fire('walk.pointerLook', event.data.dx, event.data.dy);
-            const applyMs = performance.now() - applyStart;
-            pointerLookStats.totalApplyMs += applyMs;
-            pointerLookStats.maxApplyMs = Math.max(pointerLookStats.maxApplyMs, applyMs);
-
-            if (receivedAt - lastPointerLookDiagnosticAt > 2000) {
-                lastPointerLookDiagnosticAt = receivedAt;
-                const gapCount = Math.max(0, pointerLookStats.count - 1);
-                postDiagnostic(source, event.origin, 'pointer-look-perf', {
-                    events: pointerLookStats.count,
-                    forcedWalks: pointerLookStats.forcedWalkCount,
-                    avgDx: Number((pointerLookStats.totalAbsDx / Math.max(1, pointerLookStats.count)).toFixed(2)),
-                    avgDy: Number((pointerLookStats.totalAbsDy / Math.max(1, pointerLookStats.count)).toFixed(2)),
-                    avgGapMs: Number((pointerLookStats.totalGapMs / Math.max(1, gapCount)).toFixed(1)),
-                    maxGapMs: Number(pointerLookStats.maxGapMs.toFixed(1)),
-                    avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
-                    maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
-                    activeTool: events.invoke('tool.active') as string | null
-                });
-                pointerLookStats = emptyPointerLookStats();
+            pendingPointerLookDx += event.data.dx;
+            pendingPointerLookDy += event.data.dy;
+            pendingPointerLookSource = source;
+            pendingPointerLookOrigin = event.origin;
+            if (pendingPointerLookFrame === null) {
+                pendingPointerLookFrame = window.requestAnimationFrame(flushPointerLook);
             }
             return;
         }
