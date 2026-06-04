@@ -962,23 +962,36 @@ class SemanticAnnotationOverlay {
             return { ok: false, reason: 'inactive' };
         }
 
+        const startedAt = performance.now();
         const normalizedScreenPoint = screenPoint ?? [0.5, 0.5];
         const x = Math.max(0, Math.min(1, normalizedScreenPoint[0]));
         const y = Math.max(0, Math.min(1, normalizedScreenPoint[1]));
         const centerRay = new Ray();
         const { width, height } = this.scene.camera.targetSize;
         this.scene.camera.getRay(width * x, height * y, centerRay);
+        const intersectStartedAt = performance.now();
         const hit = await this.scene.camera.intersect(x, y);
+        const intersectMs = performance.now() - intersectStartedAt;
+        const matchStartedAt = performance.now();
         const matched = this.findCenterHit(hit?.position ?? null, centerRay);
+        const matchMs = performance.now() - matchStartedAt;
+        const clickEvalMs = performance.now() - startedAt;
+        const clickDiagnostics = {
+            screenPoint: [Number(x.toFixed(4)), Number(y.toFixed(4))],
+            hasSurfaceHit: Boolean(hit?.position),
+            intersectMs: Number(intersectMs.toFixed(1)),
+            matchMs: Number(matchMs.toFixed(1)),
+            clickEvalMs: Number(clickEvalMs.toFixed(1))
+        };
 
         if (matched) {
             this.events.fire('semanticAnnotations.activate', matched.id);
-            return { ok: true, annotationId: matched.id, candidates: this.lastClickCandidates, ...this.hitboxDiagnosticDetails() };
+            return { ok: true, annotationId: matched.id, candidates: this.lastClickCandidates, ...clickDiagnostics, ...this.hitboxDiagnosticDetails() };
         }
 
         const point = hit?.position ? [hit.position.x, hit.position.y, hit.position.z] : null;
         this.events.fire('semanticAnnotations.miss', point);
-        return { ok: false, point, candidates: this.lastClickCandidates, ...this.hitboxDiagnosticDetails() };
+        return { ok: false, point, candidates: this.lastClickCandidates, ...clickDiagnostics, ...this.hitboxDiagnosticDetails() };
     }
 
     private async captureAnchor() {
