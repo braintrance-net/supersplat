@@ -5,6 +5,7 @@ import { Events } from '../events';
 import { Scene } from '../scene';
 import { SemanticAnnotation } from '../semantic-annotations';
 import { Splat } from '../splat';
+import { State } from '../splat-state';
 
 type MaskHitVolume = {
     center: Vec3;
@@ -40,12 +41,22 @@ type MultiplayerOverlayPlayer = {
     target?: [number, number, number];
 };
 
+type MultiplayerHeightCalibration = {
+    height: number;
+    groundY?: number;
+};
+
 const OCCLUSION_CELL_PX = 4;
 const OCCLUSION_FRAC_OF_DEPTH = 0.015;
 const OCCLUSION_MIN_M = 0.015;
 const OCCLUSION_MAX_M = 0.12;
 const HIT_VOLUME_COLOR = new Color(0.66, 1, 0.47, 0.95);
 const HIT_VOLUME_FOUND_COLOR = new Color(0.3, 1, 0.46, 1);
+const MULTIPLAYER_DEFAULT_HEIGHT = 1.65;
+const MULTIPLAYER_MIN_HEIGHT = 0.95;
+const MULTIPLAYER_MAX_HEIGHT = 2.35;
+const MULTIPLAYER_RAYCAST_MAX_SAMPLES = 260_000;
+const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -246,6 +257,7 @@ class SemanticAnnotationOverlay {
     private readonly captureViewMatrix = new Mat4();
     private readonly hitVolumes = new Map<string, MaskHitVolume>();
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
+    private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
     private annotations: SemanticAnnotation[] = [];
     private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
     private interactionMode: 'edit' | 'game' = 'edit';
@@ -315,6 +327,7 @@ class SemanticAnnotationOverlay {
             if (!ids.has(id)) {
                 marker.remove();
                 this.multiplayerMarkers.delete(id);
+                this.multiplayerHeightCalibrations.delete(id);
             }
         }
 
@@ -643,6 +656,104 @@ class SemanticAnnotationOverlay {
         );
     }
 
+    private calibrateMultiplayerHeight(player: MultiplayerOverlayPlayer) {
+        const existing = this.multiplayerHeightCalibrations.get(player.id);
+        if (existing) {
+            return existing;
+        }
+
+        const head = {
+            x: player.position[0],
+            y: player.position[1],
+            z: player.position[2]
+        };
+        let measuredHeight: number | null = null;
+        let measuredGroundY: number | undefined;
+
+        const splats = (this.scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
+        const totalCenters = splats.reduce((total, splat) => {
+            const centers: Float32Array | undefined = splat.entity.gsplat?.instance?.sorter?.centers;
+            return total + (centers ? centers.length / 3 : 0);
+        }, 0);
+        const stride = Math.max(1, Math.ceil(totalCenters / MULTIPLAYER_RAYCAST_MAX_SAMPLES));
+        const radiusSquares = MULTIPLAYER_GROUND_RADII.map(radius => radius * radius);
+        const bestYByRadius = MULTIPLAYER_GROUND_RADII.map(() => -Infinity);
+        const maxRadiusSq = radiusSquares[radiusSquares.length - 1] ?? 0;
+        let visited = 0;
+
+        for (const splat of splats) {
+            const sorter: { centers?: Float32Array } | undefined = splat.entity.gsplat?.instance?.sorter;
+            const centers = sorter?.centers;
+            if (!centers) {
+                continue;
+            }
+
+            const state = splat.splatData.getProp('state') as Uint8Array | undefined;
+            const worldTransform = splat.entity.getWorldTransform().data as Float32Array;
+            const count = centers.length / 3;
+            for (let i = 0; i < count; i += 1) {
+                visited += 1;
+                if (visited % stride !== 0) {
+                    continue;
+                }
+                if (state && ((state[i] ?? 0) & State.deleted) !== 0) {
+                    continue;
+                }
+
+                const localX = centers[i * 3];
+                const localY = centers[i * 3 + 1];
+                const localZ = centers[i * 3 + 2];
+                const worldX = worldTransform[0] * localX + worldTransform[4] * localY + worldTransform[8] * localZ + worldTransform[12];
+                const worldY = worldTransform[1] * localX + worldTransform[5] * localY + worldTransform[9] * localZ + worldTransform[13];
+                const worldZ = worldTransform[2] * localX + worldTransform[6] * localY + worldTransform[10] * localZ + worldTransform[14];
+
+                if (worldY >= head.y - 0.05) {
+                    continue;
+                }
+
+                const dx = worldX - head.x;
+                const dz = worldZ - head.z;
+                const distanceSq = dx * dx + dz * dz;
+                if (distanceSq > maxRadiusSq) {
+                    continue;
+                }
+
+                for (let radiusIndex = 0; radiusIndex < radiusSquares.length; radiusIndex += 1) {
+                    const radiusSq = radiusSquares[radiusIndex] ?? 0;
+                    if (distanceSq <= radiusSq) {
+                        bestYByRadius[radiusIndex] = Math.max(bestYByRadius[radiusIndex] ?? -Infinity, worldY);
+                    }
+                }
+            }
+        }
+
+        for (let radiusIndex = 0; radiusIndex < bestYByRadius.length; radiusIndex += 1) {
+            const groundY = bestYByRadius[radiusIndex] ?? -Infinity;
+            if (Number.isFinite(groundY)) {
+                const height = head.y - groundY;
+                if (height >= MULTIPLAYER_MIN_HEIGHT && height <= MULTIPLAYER_MAX_HEIGHT) {
+                    measuredHeight = height;
+                    measuredGroundY = groundY;
+                    break;
+                }
+            }
+        }
+
+        if (measuredHeight === null && player.target) {
+            const headToTargetY = player.position[1] - player.target[1];
+            if (Number.isFinite(headToTargetY) && headToTargetY >= MULTIPLAYER_MIN_HEIGHT && headToTargetY <= MULTIPLAYER_MAX_HEIGHT) {
+                measuredHeight = headToTargetY;
+            }
+        }
+
+        const calibration = {
+            height: measuredHeight ?? MULTIPLAYER_DEFAULT_HEIGHT,
+            groundY: measuredGroundY
+        } satisfies MultiplayerHeightCalibration;
+        this.multiplayerHeightCalibrations.set(player.id, calibration);
+        return calibration;
+    }
+
     private drawHitVolumes() {
         for (const annotation of this.annotations) {
             const volume = this.hitVolumes.get(annotation.id);
@@ -960,13 +1071,8 @@ class SemanticAnnotationOverlay {
                 continue;
             }
 
-            let avatarWorldHeight = 1.65;
-            if (player.target) {
-                const headToTargetY = player.position[1] - player.target[1];
-                if (Number.isFinite(headToTargetY) && headToTargetY >= 0.85 && headToTargetY <= 2.35) {
-                    avatarWorldHeight = headToTargetY;
-                }
-            }
+            const calibration = this.calibrateMultiplayerHeight(player);
+            const avatarWorldHeight = calibration.height;
 
             this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
