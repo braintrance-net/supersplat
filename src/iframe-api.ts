@@ -659,6 +659,7 @@ const emptyPointerLookStats = () => ({
 
 const POINTER_LOOK_LONG_GAP_MS = 80;
 const POINTER_LOOK_IDLE_RESET_MS = 1000;
+const LONG_TASK_REPORT_MS = 5000;
 
 const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
@@ -682,6 +683,41 @@ const registerIframeApi = (events: Events) => {
     let rafLastFrameAt: number | null = null;
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
+
+    if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+        let longTaskCount = 0;
+        let longTaskTotalMs = 0;
+        let longTaskMaxMs = 0;
+        let lastLongTaskReportAt = performance.now();
+        const flushLongTasks = (reason: string) => {
+            if (longTaskCount === 0 || !window.parent || window.parent === window) {
+                return;
+            }
+            postDiagnostic(window.parent, '*', 'editor-longtask', {
+                reason,
+                count: longTaskCount,
+                totalMs: Number(longTaskTotalMs.toFixed(1)),
+                maxMs: Number(longTaskMaxMs.toFixed(1)),
+                activeTool: events.invoke('tool.active') as string | null
+            });
+            longTaskCount = 0;
+            longTaskTotalMs = 0;
+            longTaskMaxMs = 0;
+            lastLongTaskReportAt = performance.now();
+        };
+        const longTaskObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+                longTaskCount += 1;
+                longTaskTotalMs += entry.duration;
+                longTaskMaxMs = Math.max(longTaskMaxMs, entry.duration);
+            }
+            if (performance.now() - lastLongTaskReportAt >= LONG_TASK_REPORT_MS) {
+                flushLongTasks('interval');
+            }
+        });
+        longTaskObserver.observe({ type: 'longtask', buffered: true });
+        window.setInterval(() => flushLongTasks('interval'), LONG_TASK_REPORT_MS);
+    }
 
     const resetPointerLookState = () => {
         pointerLookStats = emptyPointerLookStats();
