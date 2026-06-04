@@ -22,6 +22,7 @@ type CollisionProxyState = {
     blocked: boolean;
     lastSampleAt: number;
     lastReportAt: number;
+    sampleMs: number | null;
 };
 
 const tmpVec = new Vec3();
@@ -50,6 +51,7 @@ class WalkTool {
     private externalVerticalVelocity = 0;
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
+    private embeddedControls = false;
     private lastArrowPositionAt = 0;
     private collisionProxy: CollisionProxyState = {
         pending: false,
@@ -57,7 +59,8 @@ class WalkTool {
         viewDistance: 0,
         blocked: false,
         lastSampleAt: 0,
-        lastReportAt: 0
+        lastReportAt: 0,
+        sampleMs: null
     };
 
     constructor(events: Events, scene: Scene, container: HTMLElement) {
@@ -66,11 +69,14 @@ class WalkTool {
         this.container = container;
         this.events.on('walk.pointerLook', this.onExternalPointerLook, this);
         this.events.on('walk.input', this.onExternalWalkInput, this);
+        this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
     }
 
     activate() {
         this.active = true;
-        this.createOverlay();
+        if (!this.embeddedControls) {
+            this.createOverlay();
+        }
         this.ensureUpdateLoop();
     }
 
@@ -98,6 +104,10 @@ class WalkTool {
     }
 
     private createOverlay() {
+        if (this.overlay || this.embeddedControls) {
+            return;
+        }
+
         this.overlay = document.createElement('div');
         this.overlay.id = 'walk-tool-overlay';
         this.overlay.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:10;';
@@ -116,6 +126,21 @@ class WalkTool {
         this.container.addEventListener('pointerdown', this.onPointerDownBound);
         document.addEventListener('mousemove', this.onPointerLockMouseMoveBound);
         document.addEventListener('pointerlockchange', this.onPointerLockChangeBound);
+    }
+
+    private onEmbeddedControls(enabled = false) {
+        this.embeddedControls = enabled;
+        if (enabled) {
+            if (document.pointerLockElement === this.container) {
+                document.exitPointerLock();
+            }
+            this.destroyOverlay();
+            return;
+        }
+
+        if (this.active) {
+            this.createOverlay();
+        }
     }
 
     private createArrow(direction: ArrowDirection): HTMLElement {
@@ -360,8 +385,10 @@ class WalkTool {
         this.collisionProxy.pending = true;
         this.collisionProxy.lastSampleAt = now;
         this.collisionProxy.viewDistance = viewDistance;
+        const sampleStartedAt = performance.now();
 
         camera.intersect(0.5, 0.5).then((hit) => {
+            const sampleMs = performance.now() - sampleStartedAt;
             const distance = typeof hit?.distance === 'number' && Number.isFinite(hit.distance) ? hit.distance : null;
             const clearance = Math.max(0.12, Math.min(0.9, viewDistance * 0.18));
             const canBlockFromView = Math.abs(camera.elevation) <= COLLISION_MAX_BLOCK_ELEVATION_DEG;
@@ -370,13 +397,15 @@ class WalkTool {
             this.collisionProxy.pending = false;
             this.collisionProxy.frontDistance = distance;
             this.collisionProxy.blocked = blocked;
-            if (changed || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
-                this.reportCollisionProxy(performance.now(), changed ? 'changed' : 'sampled');
+            this.collisionProxy.sampleMs = sampleMs;
+            if (changed || sampleMs >= 40 || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.reportCollisionProxy(performance.now(), changed ? 'changed' : sampleMs >= 40 ? 'slow-sample' : 'sampled');
             }
         }).catch((error: unknown) => {
             this.collisionProxy.pending = false;
             this.collisionProxy.frontDistance = null;
             this.collisionProxy.blocked = false;
+            this.collisionProxy.sampleMs = null;
             this.events.fire('walk.collisionProxy', {
                 ok: false,
                 error: error instanceof Error ? error.message : 'collision proxy sample failed'
@@ -392,6 +421,7 @@ class WalkTool {
             blocked: this.collisionProxy.blocked,
             frontDistance: this.collisionProxy.frontDistance === null ? null : Number(this.collisionProxy.frontDistance.toFixed(3)),
             viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3)),
+            sampleMs: this.collisionProxy.sampleMs === null ? null : Number(this.collisionProxy.sampleMs.toFixed(1)),
             elevation: Number(this.camera.elevation.toFixed(2))
         });
     }
