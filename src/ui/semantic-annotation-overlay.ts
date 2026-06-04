@@ -70,7 +70,10 @@ type MultiplayerAnimComponent = {
     loadStateGraph: (stateGraph: object) => void;
     assignAnimation: (nodePath: string, animTrack: unknown, layerName?: string, speed?: number, loop?: boolean) => void;
     baseLayer: MultiplayerAnimLayer | null;
+    rootBone: Entity;
+    playable: boolean;
     playing: boolean;
+    rebind: () => void;
 };
 
 const OCCLUSION_CELL_PX = 4;
@@ -538,11 +541,13 @@ class SemanticAnnotationOverlay {
             return;
         }
 
-        entity.addComponent('anim', { activate: true });
+        const animationRoot = (entity.findByName('RootNode') ?? entity.findByName('Root') ?? entity) as Entity;
+        entity.addComponent('anim', { activate: true, rootBone: animationRoot });
         const anim = (entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
         if (!anim) {
             return;
         }
+        anim.rootBone = animationRoot;
 
         anim.loadStateGraph({
             layers: [
@@ -562,8 +567,16 @@ class SemanticAnnotationOverlay {
         });
         anim.assignAnimation('Idle', idle, undefined, 1, true);
         anim.assignAnimation('Run', run, undefined, 1, true);
+        anim.rebind();
         anim.playing = true;
-        anim.baseLayer?.play('Idle');
+        if (anim.playable) {
+            anim.baseLayer?.play('Idle');
+        } else {
+            this.emitDiagnostic('multiplayer-avatar-animation-unplayable', {
+                rootBone: animationRoot.name,
+                animations: animations.map(animation => animation.name)
+            });
+        }
     }
 
     private ensureMultiplayerAvatar(player: MultiplayerOverlayPlayer) {
