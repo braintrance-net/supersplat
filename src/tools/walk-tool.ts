@@ -31,6 +31,7 @@ const moveVec = new Vec3();
 const screenPos = new Vec3();
 const COLLISION_SAMPLE_INTERVAL_MS = 90;
 const COLLISION_REPORT_INTERVAL_MS = 800;
+const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 
 class WalkTool {
     private events: Events;
@@ -320,7 +321,6 @@ class WalkTool {
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
                 focalPoint.add(moveVec);
-                this.clampToSceneBounds(focalPoint);
                 changed = true;
             }
         }
@@ -363,7 +363,8 @@ class WalkTool {
         camera.intersect(0.5, 0.5).then((hit) => {
             const distance = typeof hit?.distance === 'number' && Number.isFinite(hit.distance) ? hit.distance : null;
             const clearance = Math.max(0.12, Math.min(0.9, viewDistance * 0.18));
-            const blocked = distance !== null && distance < viewDistance - clearance;
+            const canBlockFromView = Math.abs(camera.elevation) <= COLLISION_MAX_BLOCK_ELEVATION_DEG;
+            const blocked = canBlockFromView && distance !== null && distance < viewDistance - clearance;
             const changed = blocked !== this.collisionProxy.blocked;
             this.collisionProxy.pending = false;
             this.collisionProxy.frontDistance = distance;
@@ -389,23 +390,9 @@ class WalkTool {
             reason,
             blocked: this.collisionProxy.blocked,
             frontDistance: this.collisionProxy.frontDistance === null ? null : Number(this.collisionProxy.frontDistance.toFixed(3)),
-            viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3))
+            viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3)),
+            elevation: Number(this.camera.elevation.toFixed(2))
         });
-    }
-
-    private clampToSceneBounds(position: Vec3) {
-        const bound = this.scene.bound;
-        const margin = Math.max(0.05, Math.min(0.5, this.camera.sceneRadius * 0.02));
-        const minX = bound.center.x - bound.halfExtents.x + margin;
-        const maxX = bound.center.x + bound.halfExtents.x - margin;
-        const minZ = bound.center.z - bound.halfExtents.z + margin;
-        const maxZ = bound.center.z + bound.halfExtents.z - margin;
-        if (Number.isFinite(minX) && Number.isFinite(maxX) && minX < maxX) {
-            position.x = Math.max(minX, Math.min(maxX, position.x));
-        }
-        if (Number.isFinite(minZ) && Number.isFinite(maxZ) && minZ < maxZ) {
-            position.z = Math.max(minZ, Math.min(maxZ, position.z));
-        }
     }
 
     private look(dx: number, dy: number) {
