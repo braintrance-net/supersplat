@@ -1,4 +1,4 @@
-import { applyCors, getEnv, getRequestUrl, handleOptions, sendJson, sendUpstream } from '../_proxy';
+import { applyCors, getEnv, getRequestUrl, handleOptions, requireAllowedProxyRequest, sendJson, sendUpstream } from '../_proxy';
 
 const SKETCHFAB_SEARCH_URL = 'https://api.sketchfab.com/v3/search';
 
@@ -8,6 +8,9 @@ export default async function handler(req: any, res: any) {
     }
     if (req.method !== 'GET') {
         return sendJson(req, res, 405, { error: 'Method not allowed' });
+    }
+    if (!requireAllowedProxyRequest(req, res)) {
+        return;
     }
 
     const token = getEnv('SKETCHFAB_API_TOKEN')?.trim();

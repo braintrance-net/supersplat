@@ -1,4 +1,4 @@
-import { getEnv, handleOptions, readBody, sendJson, sendUpstream } from '../../_proxy';
+import { getEnv, handleOptions, readBody, requireAllowedProxyRequest, sendJson, sendUpstream } from '../../_proxy';
 
 const OPENAI_TRANSCRIPTIONS_URL = 'https://api.openai.com/v1/audio/transcriptions';
 
@@ -14,6 +14,9 @@ export default async function handler(req: any, res: any) {
     }
     if (req.method !== 'POST') {
         return sendJson(req, res, 405, { error: 'Method not allowed' });
+    }
+    if (!requireAllowedProxyRequest(req, res)) {
+        return;
     }
 
     const apiKey = getEnv('OPENAI_API_KEY')?.trim();
