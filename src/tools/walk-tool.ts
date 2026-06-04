@@ -1,16 +1,25 @@
 import { Vec3 } from 'playcanvas';
 
+import { Camera } from '../camera';
 import { Events } from '../events';
 import { Scene } from '../scene';
-import { Camera } from '../camera';
 
 type ArrowDirection = 'north' | 'south' | 'east' | 'west';
+type WalkInputState = {
+    forward?: boolean;
+    backward?: boolean;
+    left?: boolean;
+    right?: boolean;
+    sprint?: boolean;
+    slide?: boolean;
+    jump?: boolean;
+};
 
 const tmpVec = new Vec3();
+const forwardVec = new Vec3();
+const rightVec = new Vec3();
+const moveVec = new Vec3();
 const screenPos = new Vec3();
-
-// Max pixels the pointer can move between down/up and still count as a click
-const CLICK_THRESHOLD = 5;
 
 class WalkTool {
     private events: Events;
@@ -21,27 +30,33 @@ class WalkTool {
     private animFrame: number | null = null;
     private active = false;
 
-    // Pointer tracking for distinguishing clicks from drags
-    private pointerDownPos: { x: number; y: number } | null = null;
     private onPointerDownBound: ((e: PointerEvent) => void) | null = null;
-    private onPointerUpBound: ((e: PointerEvent) => void) | null = null;
+    private onPointerLockMouseMoveBound: ((e: MouseEvent) => void) | null = null;
+    private onPointerLockChangeBound: (() => void) | null = null;
+    private externalWalkInput: WalkInputState = {};
+    private lastExternalMoveAt = performance.now();
+    private externalVerticalVelocity = 0;
+    private externalGroundY: number | null = null;
+    private externalJumpWasPressed = false;
 
     constructor(events: Events, scene: Scene, container: HTMLElement) {
         this.events = events;
         this.scene = scene;
         this.container = container;
+        this.events.on('walk.pointerLook', this.onExternalPointerLook, this);
+        this.events.on('walk.input', this.onExternalWalkInput, this);
     }
 
     activate() {
         this.active = true;
         this.createOverlay();
-        this.updateLoop();
+        this.ensureUpdateLoop();
     }
 
     deactivate() {
         this.active = false;
         this.destroyOverlay();
-        if (this.animFrame !== null) {
+        if (!this.hasExternalWalkInput() && this.animFrame !== null) {
             cancelAnimationFrame(this.animFrame);
             this.animFrame = null;
         }
@@ -74,11 +89,12 @@ class WalkTool {
             this.arrows.set(dir, arrow);
         }
 
-        // Track pointer down/up to distinguish clicks from drags
         this.onPointerDownBound = (e: PointerEvent) => this.onPointerDown(e);
-        this.onPointerUpBound = (e: PointerEvent) => this.onPointerUp(e);
+        this.onPointerLockMouseMoveBound = (e: MouseEvent) => this.onPointerLockMouseMove(e);
+        this.onPointerLockChangeBound = () => this.onPointerLockChange();
         this.container.addEventListener('pointerdown', this.onPointerDownBound);
-        this.container.addEventListener('pointerup', this.onPointerUpBound);
+        document.addEventListener('mousemove', this.onPointerLockMouseMoveBound);
+        document.addEventListener('pointerlockchange', this.onPointerLockChangeBound);
     }
 
     private createArrow(direction: ArrowDirection): HTMLElement {
@@ -108,7 +124,7 @@ class WalkTool {
         const svg = el.querySelector('svg') as SVGElement;
         el.addEventListener('pointerenter', () => {
             el.style.opacity = '1';
-            if (svg) svg.style.transform = 'scale(1.15) ' + svg.style.transform;
+            if (svg) svg.style.transform = `scale(1.15) ${svg.style.transform}`;
         });
         el.addEventListener('pointerleave', () => {
             el.style.opacity = '0.8';
@@ -152,49 +168,183 @@ class WalkTool {
     private onPointerDown(e: PointerEvent) {
         // Ignore if clicking on an arrow element
         if ((e.target as HTMLElement).closest('.walk-arrow')) return;
-        // Record where the pointer went down
-        this.pointerDownPos = { x: e.clientX, y: e.clientY };
-    }
-
-    private async onPointerUp(e: PointerEvent) {
-        if (!this.pointerDownPos) return;
-
-        const dx = e.clientX - this.pointerDownPos.x;
-        const dy = e.clientY - this.pointerDownPos.y;
-        this.pointerDownPos = null;
-
-        // Only treat as click if pointer barely moved (not a drag)
-        if (Math.sqrt(dx * dx + dy * dy) > CLICK_THRESHOLD) return;
-
-        // Ignore if the up target is an arrow
-        if ((e.target as HTMLElement).closest('.walk-arrow')) return;
-
-        const rect = this.container.getBoundingClientRect();
-        const nx = (e.clientX - rect.left) / rect.width;
-        const ny = (e.clientY - rect.top) / rect.height;
-
-        const result = await this.camera.intersect(nx, ny);
-        if (result) {
-            this.moveTowardPoint(result.position, result.distance);
+        if (e.pointerType === 'mouse' && e.button === 0) {
+            this.requestPointerLock();
         }
     }
 
-    private moveTowardPoint(worldPos: Vec3, currentDistance: number) {
+    private requestPointerLock() {
+        if (document.pointerLockElement === this.container) {
+            return;
+        }
+
+        try {
+            const result = this.container.requestPointerLock();
+            if (result instanceof Promise) {
+                result.catch((error) => {
+                    this.events.fire('walk.pointerLock', {
+                        locked: false,
+                        error: error instanceof Error ? error.message : 'Pointer lock was rejected'
+                    });
+                });
+            }
+        } catch (error) {
+            // Browser policy may reject pointer lock if the click is not a user gesture.
+            this.events.fire('walk.pointerLock', {
+                locked: false,
+                error: error instanceof Error ? error.message : 'Pointer lock was rejected'
+            });
+        }
+    }
+
+    private onPointerLockChange() {
+        const locked = document.pointerLockElement === this.container;
+        this.container.classList.toggle('walk-pointer-locked', locked);
+        this.events.fire('walk.pointerLock', { locked });
+    }
+
+    private onPointerLockMouseMove(event: MouseEvent) {
+        if (!this.active || document.pointerLockElement !== this.container) {
+            return;
+        }
+
+        const dx = event.movementX || 0;
+        const dy = event.movementY || 0;
+        if (dx === 0 && dy === 0) {
+            return;
+        }
+
+        this.look(dx, dy);
+    }
+
+    private onExternalPointerLook(dx = 0, dy = 0) {
+        this.look(Math.max(-200, Math.min(200, dx)), Math.max(-200, Math.min(200, dy)));
+    }
+
+    private onExternalWalkInput(input: WalkInputState = {}) {
+        this.externalWalkInput = {
+            forward: Boolean(input.forward),
+            backward: Boolean(input.backward),
+            left: Boolean(input.left),
+            right: Boolean(input.right),
+            sprint: Boolean(input.sprint),
+            slide: Boolean(input.slide),
+            jump: Boolean(input.jump)
+        };
+        this.ensureUpdateLoop();
+    }
+
+    private hasExternalWalkInput() {
+        const input = this.externalWalkInput;
+        return Boolean(
+            input.forward ||
+            input.backward ||
+            input.left ||
+            input.right ||
+            input.sprint ||
+            input.slide ||
+            input.jump ||
+            Math.abs(this.externalVerticalVelocity) > 0.0001
+        );
+    }
+
+    private ensureUpdateLoop() {
+        if (this.animFrame === null) {
+            this.lastExternalMoveAt = performance.now();
+            this.animFrame = requestAnimationFrame(() => this.updateLoop());
+        }
+    }
+
+    private applyExternalWalkInput() {
+        const input = this.externalWalkInput;
+        const forwardAmount = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
+        const rightAmount = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+        const moving = forwardAmount !== 0 || rightAmount !== 0;
+
+        const now = performance.now();
+        const dt = Math.min(0.05, Math.max(0.001, (now - this.lastExternalMoveAt) / 1000));
+        this.lastExternalMoveAt = now;
+
         const camera = this.camera;
+        const focalPoint = camera.focalPoint;
+        let changed = false;
 
-        const closerDistance = currentDistance * 0.4;
-        const minDistance = camera.sceneRadius * 0.05;
-        const targetDistance = Math.max(closerDistance, minDistance);
+        if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
+            this.externalGroundY = focalPoint.y;
+        }
 
-        camera.setFocalPoint(worldPos);
-        camera.setDistance(targetDistance / camera.sceneRadius * camera.fovFactor);
+        if (input.jump && !this.externalJumpWasPressed && this.externalVerticalVelocity === 0) {
+            this.externalGroundY = focalPoint.y;
+            this.externalVerticalVelocity = camera.sceneRadius * 0.55;
+        }
+        this.externalJumpWasPressed = Boolean(input.jump);
+
+        if (moving) {
+            Camera.calcForwardVec(forwardVec, camera.azim, 0);
+            forwardVec.y = 0;
+            const forwardLength = Math.hypot(forwardVec.x, forwardVec.z) || 1;
+            forwardVec.mulScalar(-1 / forwardLength);
+
+            rightVec.set(-forwardVec.z, 0, forwardVec.x);
+            moveVec.set(0, 0, 0);
+            moveVec.add(forwardVec.clone().mulScalar(forwardAmount));
+            moveVec.add(rightVec.clone().mulScalar(rightAmount));
+
+            const moveLength = Math.hypot(moveVec.x, moveVec.z);
+            if (moveLength > 0) {
+                moveVec.mulScalar(1 / moveLength);
+                const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
+                moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
+                focalPoint.add(moveVec);
+                changed = true;
+            }
+        }
+
+        if (this.externalVerticalVelocity !== 0 && this.externalGroundY !== null) {
+            focalPoint.y += this.externalVerticalVelocity * dt;
+            this.externalVerticalVelocity -= camera.sceneRadius * 1.5 * dt;
+            if (focalPoint.y <= this.externalGroundY) {
+                focalPoint.y = this.externalGroundY;
+                this.externalVerticalVelocity = 0;
+            }
+            changed = true;
+        }
+
+        if (changed) {
+            camera.setFocalPoint(focalPoint, 0);
+            this.scene.forceRender = true;
+        }
+    }
+
+    private look(dx: number, dy: number) {
+        const camera = this.camera;
+        const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
+
+        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
+        const cameraPosition = camera.focalPoint.add(forwardVec.clone().mulScalar(distance));
+
+        const sensitivity = camera.scene.config.controls.orbitSensitivity;
+        const azim = camera.azim - dx * sensitivity;
+        const elev = camera.elevation - dy * sensitivity;
+
+        Camera.calcForwardVec(forwardVec, azim, elev);
+        const focalPoint = cameraPosition.clone().sub(forwardVec.clone().mulScalar(distance));
+
+        camera.setAzimElev(azim, elev, 0);
+        camera.setFocalPoint(focalPoint, 0);
         this.scene.forceRender = true;
     }
 
     private updateLoop() {
-        if (!this.active) return;
+        if (!this.active && !this.hasExternalWalkInput()) {
+            this.animFrame = null;
+            return;
+        }
 
-        this.positionArrows();
+        if (this.active) {
+            this.positionArrows();
+        }
+        this.applyExternalWalkInput();
         this.animFrame = requestAnimationFrame(() => this.updateLoop());
     }
 
@@ -255,16 +405,23 @@ class WalkTool {
             this.container.removeEventListener('pointerdown', this.onPointerDownBound);
             this.onPointerDownBound = null;
         }
-        if (this.onPointerUpBound) {
-            this.container.removeEventListener('pointerup', this.onPointerUpBound);
-            this.onPointerUpBound = null;
+        if (this.onPointerLockMouseMoveBound) {
+            document.removeEventListener('mousemove', this.onPointerLockMouseMoveBound);
+            this.onPointerLockMouseMoveBound = null;
         }
+        if (this.onPointerLockChangeBound) {
+            document.removeEventListener('pointerlockchange', this.onPointerLockChangeBound);
+            this.onPointerLockChangeBound = null;
+        }
+        if (document.pointerLockElement === this.container) {
+            document.exitPointerLock();
+        }
+        this.container.classList.remove('walk-pointer-locked');
         if (this.overlay) {
             this.overlay.remove();
             this.overlay = null;
         }
         this.arrows.clear();
-        this.pointerDownPos = null;
     }
 }
 

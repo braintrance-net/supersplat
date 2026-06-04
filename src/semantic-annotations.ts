@@ -5,6 +5,7 @@ type SemanticAnnotationCamera = {
     target: [number, number, number];
     fov: number;
     ortho?: boolean;
+    viewMatrix?: number[];
 };
 
 type SemanticAnnotationSource = {
@@ -23,6 +24,25 @@ type SemanticAnnotation = {
     description: string;
     position: [number, number, number];
     color?: string;
+    radius?: number;
+    targetImage?: {
+        src: string;
+        maskSrc?: string;
+        fullSrc?: string;
+        fullMaskSrc?: string;
+        fullWidth?: number;
+        fullHeight?: number;
+        width: number;
+        height: number;
+        points?: Array<{ xy: [number, number], label: 0 | 1 }>;
+        jobId?: string;
+    };
+    presetId?: string;
+    order?: number;
+    difficulty?: 'easy' | 'medium' | 'hard';
+    createdAt?: string;
+    updatedAt?: string;
+    authoringVersion?: number;
     source: SemanticAnnotationSource;
 };
 
@@ -43,6 +63,43 @@ const isFiniteTuple2 = (value: unknown): value is [number, number] => (
     value.every(item => typeof item === 'number' && Number.isFinite(item))
 );
 
+const isFiniteNumberArray = (value: unknown, length: number): value is number[] => (
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every(item => typeof item === 'number' && Number.isFinite(item))
+);
+
+const isPromptPoint = (value: unknown): value is { xy: [number, number], label: 0 | 1 } => {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+
+    const point = value as { xy?: unknown, label?: unknown };
+    return isFiniteTuple2(point.xy) && (point.label === 0 || point.label === 1);
+};
+
+const isTargetImage = (value: unknown): value is NonNullable<SemanticAnnotation['targetImage']> => {
+    if (!value || typeof value !== 'object') {
+        return false;
+    }
+
+    const image = value as NonNullable<SemanticAnnotation['targetImage']>;
+    return (
+        typeof image.src === 'string' &&
+        (!image.maskSrc || typeof image.maskSrc === 'string') &&
+        (!image.fullSrc || typeof image.fullSrc === 'string') &&
+        (!image.fullMaskSrc || typeof image.fullMaskSrc === 'string') &&
+        (!image.fullWidth || (Number.isInteger(image.fullWidth) && image.fullWidth > 0)) &&
+        (!image.fullHeight || (Number.isInteger(image.fullHeight) && image.fullHeight > 0)) &&
+        Number.isInteger(image.width) &&
+        image.width > 0 &&
+        Number.isInteger(image.height) &&
+        image.height > 0 &&
+        (!image.points || (Array.isArray(image.points) && image.points.every(isPromptPoint))) &&
+        (!image.jobId || typeof image.jobId === 'string')
+    );
+};
+
 const isSemanticAnnotation = (value: unknown): value is SemanticAnnotation => {
     if (!value || typeof value !== 'object') {
         return false;
@@ -55,6 +112,14 @@ const isSemanticAnnotation = (value: unknown): value is SemanticAnnotation => {
         typeof annotation.description === 'string' &&
         isFiniteTuple3(annotation.position) &&
         (!annotation.color || typeof annotation.color === 'string') &&
+        (!annotation.radius || typeof annotation.radius === 'number') &&
+        (!annotation.targetImage || isTargetImage(annotation.targetImage)) &&
+        (!annotation.presetId || typeof annotation.presetId === 'string') &&
+        (!annotation.order || typeof annotation.order === 'number') &&
+        (!annotation.difficulty || annotation.difficulty === 'easy' || annotation.difficulty === 'medium' || annotation.difficulty === 'hard') &&
+        (!annotation.createdAt || typeof annotation.createdAt === 'string') &&
+        (!annotation.updatedAt || typeof annotation.updatedAt === 'string') &&
+        (!annotation.authoringVersion || typeof annotation.authoringVersion === 'number') &&
         !!annotation.source &&
         typeof annotation.source.provider === 'string' &&
         typeof annotation.source.model === 'string' &&
@@ -64,6 +129,7 @@ const isSemanticAnnotation = (value: unknown): value is SemanticAnnotation => {
         isFiniteTuple3(annotation.source.camera.position) &&
         isFiniteTuple3(annotation.source.camera.target) &&
         typeof annotation.source.camera.fov === 'number' &&
+        (!annotation.source.camera.viewMatrix || isFiniteNumberArray(annotation.source.camera.viewMatrix, 16)) &&
         typeof annotation.source.capturedAt === 'string'
     );
 };
@@ -71,6 +137,13 @@ const isSemanticAnnotation = (value: unknown): value is SemanticAnnotation => {
 const cloneAnnotation = (annotation: SemanticAnnotation): SemanticAnnotation => ({
     ...annotation,
     position: [...annotation.position],
+    targetImage: annotation.targetImage ? {
+        ...annotation.targetImage,
+        points: annotation.targetImage.points?.map(point => ({
+            xy: [...point.xy],
+            label: point.label
+        }))
+    } : undefined,
     source: {
         ...annotation.source,
         screenPoint: [...annotation.source.screenPoint],
@@ -78,7 +151,8 @@ const cloneAnnotation = (annotation: SemanticAnnotation): SemanticAnnotation => 
         camera: {
             ...annotation.source.camera,
             position: [...annotation.source.camera.position],
-            target: [...annotation.source.camera.target]
+            target: [...annotation.source.camera.target],
+            viewMatrix: annotation.source.camera.viewMatrix ? [...annotation.source.camera.viewMatrix] : undefined
         }
     }
 });
