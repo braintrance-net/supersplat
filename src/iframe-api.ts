@@ -650,10 +650,14 @@ const emptyPointerLookStats = () => ({
     totalApplyMs: 0,
     maxApplyMs: 0,
     totalGapMs: 0,
+    gapCount: 0,
     maxGapMs: 0,
+    longGaps: 0,
+    maxLongGapMs: 0,
     lastAt: null as number | null
 });
 
+const POINTER_LOOK_LONG_GAP_MS = 80;
 const POINTER_LOOK_IDLE_RESET_MS = 1000;
 
 const registerIframeApi = (events: Events) => {
@@ -780,14 +784,15 @@ const registerIframeApi = (events: Events) => {
         }
 
         lastPointerLookDiagnosticAt = now;
-        const gapCount = Math.max(0, pointerLookStats.count - 1);
         postDiagnostic(source, pendingPointerLookOrigin, 'pointer-look-perf', {
             events: pointerLookStats.count,
             forcedWalks: pointerLookStats.forcedWalkCount,
             avgDx: Number((pointerLookStats.totalAbsDx / Math.max(1, pointerLookStats.count)).toFixed(2)),
             avgDy: Number((pointerLookStats.totalAbsDy / Math.max(1, pointerLookStats.count)).toFixed(2)),
-            avgGapMs: Number((pointerLookStats.totalGapMs / Math.max(1, gapCount)).toFixed(1)),
+            avgGapMs: Number((pointerLookStats.totalGapMs / Math.max(1, pointerLookStats.gapCount)).toFixed(1)),
             maxGapMs: Number(pointerLookStats.maxGapMs.toFixed(1)),
+            longGaps: pointerLookStats.longGaps,
+            maxLongGapMs: Number(pointerLookStats.maxLongGapMs.toFixed(1)),
             avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
             maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
             activeTool: events.invoke('tool.active') as string | null,
@@ -1004,8 +1009,12 @@ const registerIframeApi = (events: Events) => {
                 if (gapMs > POINTER_LOOK_IDLE_RESET_MS) {
                     pointerLookStats = emptyPointerLookStats();
                     pointerLookIdleResetCount += 1;
+                } else if (gapMs > POINTER_LOOK_LONG_GAP_MS) {
+                    pointerLookStats.longGaps += 1;
+                    pointerLookStats.maxLongGapMs = Math.max(pointerLookStats.maxLongGapMs, gapMs);
                 } else {
                     pointerLookStats.totalGapMs += gapMs;
+                    pointerLookStats.gapCount += 1;
                     pointerLookStats.maxGapMs = Math.max(pointerLookStats.maxGapMs, gapMs);
                 }
             }
