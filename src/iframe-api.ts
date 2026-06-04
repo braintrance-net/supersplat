@@ -654,6 +654,8 @@ const emptyPointerLookStats = () => ({
     lastAt: null as number | null
 });
 
+const POINTER_LOOK_IDLE_RESET_MS = 1000;
+
 const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
     let gameModePreviousTool: string | null = null;
@@ -669,7 +671,38 @@ const registerIframeApi = (events: Events) => {
     let perfTotalGapMs = 0;
     let perfMaxGapMs = 0;
     let perfLastFrameAt: number | null = null;
+    let lastPostRenderAt: number | null = null;
+    let rafFrameCount = 0;
+    let rafTotalGapMs = 0;
+    let rafMaxGapMs = 0;
+    let rafLastFrameAt: number | null = null;
+    let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
+
+    const resetPointerLookState = () => {
+        pointerLookStats = emptyPointerLookStats();
+        pendingPointerLookDx = 0;
+        pendingPointerLookDy = 0;
+        pendingPointerLookSource = null;
+        pendingPointerLookOrigin = '*';
+        if (pendingPointerLookFrame !== null) {
+            window.cancelAnimationFrame(pendingPointerLookFrame);
+            pendingPointerLookFrame = null;
+        }
+    };
+
+    const tickRafPerf = () => {
+        const now = performance.now();
+        if (rafLastFrameAt !== null) {
+            const gapMs = now - rafLastFrameAt;
+            rafTotalGapMs += gapMs;
+            rafMaxGapMs = Math.max(rafMaxGapMs, gapMs);
+        }
+        rafLastFrameAt = now;
+        rafFrameCount += 1;
+        window.requestAnimationFrame(tickRafPerf);
+    };
+    window.requestAnimationFrame(tickRafPerf);
 
     const restoreGameModeTool = () => {
         const restoreTool = gameModePreviousTool;
@@ -687,6 +720,7 @@ const registerIframeApi = (events: Events) => {
 
     const resetGameModeState = () => {
         events.fire('walk.embeddedControls', false);
+        resetPointerLookState();
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
     };
@@ -756,8 +790,10 @@ const registerIframeApi = (events: Events) => {
             maxGapMs: Number(pointerLookStats.maxGapMs.toFixed(1)),
             avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
             maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
-            activeTool: events.invoke('tool.active') as string | null
+            activeTool: events.invoke('tool.active') as string | null,
+            idleResets: pointerLookIdleResetCount
         });
+        pointerLookIdleResetCount = 0;
         pointerLookStats = emptyPointerLookStats();
     };
 
@@ -769,6 +805,7 @@ const registerIframeApi = (events: Events) => {
             perfMaxGapMs = Math.max(perfMaxGapMs, gapMs);
         }
         perfLastFrameAt = now;
+        lastPostRenderAt = now;
         perfFrameCount += 1;
     });
 
@@ -779,10 +816,17 @@ const registerIframeApi = (events: Events) => {
 
         const frameCount = perfFrameCount;
         const avgFrameMs = frameCount > 1 ? perfTotalGapMs / (frameCount - 1) : 0;
+        const browserFrameCount = rafFrameCount;
+        const avgBrowserFrameMs = browserFrameCount > 1 ? rafTotalGapMs / (browserFrameCount - 1) : 0;
+        const sinceLastPostrenderMs = lastPostRenderAt === null ? null : performance.now() - lastPostRenderAt;
         const canvas = (window.scene as any)?.canvas as HTMLCanvasElement | undefined;
         const targetSize = (window.scene as any)?.camera?.targetSize as { width?: number, height?: number } | undefined;
 
         postDiagnostic(window.parent, '*', 'viewer-perf', {
+            metric: 'postrender',
+            idle: frameCount === 0,
+            rendered: frameCount > 0,
+            sinceLastPostrenderMs: sinceLastPostrenderMs === null ? null : Number(sinceLastPostrenderMs.toFixed(1)),
             frames: frameCount,
             approxFps: avgFrameMs > 0 ? Number((1000 / avgFrameMs).toFixed(1)) : 0,
             avgFrameMs: Number(avgFrameMs.toFixed(1)),
@@ -794,10 +838,23 @@ const registerIframeApi = (events: Events) => {
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
         });
 
+        postDiagnostic(window.parent, '*', 'viewer-raf-perf', {
+            metric: 'requestAnimationFrame',
+            frames: browserFrameCount,
+            approxFps: avgBrowserFrameMs > 0 ? Number((1000 / avgBrowserFrameMs).toFixed(1)) : 0,
+            avgFrameMs: Number(avgBrowserFrameMs.toFixed(1)),
+            maxFrameMs: Number(rafMaxGapMs.toFixed(1)),
+            activeTool: events.invoke('tool.active') as string | null
+        });
+
         perfFrameCount = 0;
         perfTotalGapMs = 0;
         perfMaxGapMs = 0;
         perfLastFrameAt = null;
+        rafFrameCount = 0;
+        rafTotalGapMs = 0;
+        rafMaxGapMs = 0;
+        rafLastFrameAt = null;
     }, 2000);
 
     events.on('semanticAnnotations.activate', (annotationId: string) => {
@@ -944,8 +1001,13 @@ const registerIframeApi = (events: Events) => {
             const receivedAt = performance.now();
             if (pointerLookStats.lastAt !== null) {
                 const gapMs = receivedAt - pointerLookStats.lastAt;
-                pointerLookStats.totalGapMs += gapMs;
-                pointerLookStats.maxGapMs = Math.max(pointerLookStats.maxGapMs, gapMs);
+                if (gapMs > POINTER_LOOK_IDLE_RESET_MS) {
+                    pointerLookStats = emptyPointerLookStats();
+                    pointerLookIdleResetCount += 1;
+                } else {
+                    pointerLookStats.totalGapMs += gapMs;
+                    pointerLookStats.maxGapMs = Math.max(pointerLookStats.maxGapMs, gapMs);
+                }
             }
             pointerLookStats.lastAt = receivedAt;
             pointerLookStats.count += 1;
@@ -967,8 +1029,13 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isCrosshairClickMessage(event.data)) {
+            const clickStartedAt = performance.now();
             const result = await events.invoke('semanticAnnotations.clickCenter', event.data.screenPoint);
-            postDiagnostic(source, event.origin, 'crosshair-click', result as Record<string, unknown>, event.data.requestId);
+            const handlerMs = performance.now() - clickStartedAt;
+            postDiagnostic(source, event.origin, 'crosshair-click', {
+                ...(result as Record<string, unknown>),
+                handlerMs: Number(handlerMs.toFixed(1))
+            }, event.data.requestId);
         }
 
         if (isSemanticLayerGetMessage(event.data)) {
@@ -1041,6 +1108,7 @@ const registerIframeApi = (events: Events) => {
                 if (document.pointerLockElement) {
                     document.exitPointerLock();
                 }
+                resetPointerLookState();
                 restoreGameModeTool();
             }
         }

@@ -30,8 +30,10 @@ const forwardVec = new Vec3();
 const rightVec = new Vec3();
 const moveVec = new Vec3();
 const screenPos = new Vec3();
-const COLLISION_SAMPLE_INTERVAL_MS = 300;
-const COLLISION_REPORT_INTERVAL_MS = 800;
+const COLLISION_SAMPLE_INTERVAL_MS = 500;
+const COLLISION_SLOW_SAMPLE_INTERVAL_MS = 900;
+const COLLISION_REPORT_INTERVAL_MS = 1200;
+const COLLISION_SLOW_SAMPLE_MS = 32;
 const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 
 class WalkTool {
@@ -376,7 +378,10 @@ class WalkTool {
             }
             return;
         }
-        if (this.collisionProxy.pending || now - this.collisionProxy.lastSampleAt < COLLISION_SAMPLE_INTERVAL_MS) {
+        const sampleInterval = (this.collisionProxy.sampleMs ?? 0) > COLLISION_SLOW_SAMPLE_MS ?
+            COLLISION_SLOW_SAMPLE_INTERVAL_MS :
+            COLLISION_SAMPLE_INTERVAL_MS;
+        if (this.collisionProxy.pending || now - this.collisionProxy.lastSampleAt < sampleInterval) {
             return;
         }
 
@@ -398,8 +403,8 @@ class WalkTool {
             this.collisionProxy.frontDistance = distance;
             this.collisionProxy.blocked = blocked;
             this.collisionProxy.sampleMs = sampleMs;
-            if (changed || sampleMs >= 40 || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
-                this.reportCollisionProxy(performance.now(), changed ? 'changed' : sampleMs >= 40 ? 'slow-sample' : 'sampled');
+            if (changed || sampleMs >= COLLISION_SLOW_SAMPLE_MS || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.reportCollisionProxy(performance.now(), changed ? 'changed' : sampleMs >= COLLISION_SLOW_SAMPLE_MS ? 'slow-sample' : 'sampled');
             }
         }).catch((error: unknown) => {
             this.collisionProxy.pending = false;
