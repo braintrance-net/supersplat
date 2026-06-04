@@ -15,11 +15,23 @@ type WalkInputState = {
     jump?: boolean;
 };
 
+type CollisionProxyState = {
+    pending: boolean;
+    frontDistance: number | null;
+    viewDistance: number;
+    blocked: boolean;
+    lastSampleAt: number;
+    lastReportAt: number;
+};
+
 const tmpVec = new Vec3();
 const forwardVec = new Vec3();
 const rightVec = new Vec3();
 const moveVec = new Vec3();
 const screenPos = new Vec3();
+const COLLISION_SAMPLE_INTERVAL_MS = 90;
+const COLLISION_REPORT_INTERVAL_MS = 800;
+const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 
 class WalkTool {
     private events: Events;
@@ -38,6 +50,14 @@ class WalkTool {
     private externalVerticalVelocity = 0;
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
+    private collisionProxy: CollisionProxyState = {
+        pending: false,
+        frontDistance: null,
+        viewDistance: 0,
+        blocked: false,
+        lastSampleAt: 0,
+        lastReportAt: 0
+    };
 
     constructor(events: Events, scene: Scene, container: HTMLElement) {
         this.events = events;
@@ -269,6 +289,8 @@ class WalkTool {
         const focalPoint = camera.focalPoint;
         let changed = false;
 
+        this.updateCollisionProxy(moving && forwardAmount > 0);
+
         if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
             this.externalGroundY = focalPoint.y;
         }
@@ -289,6 +311,9 @@ class WalkTool {
             moveVec.set(0, 0, 0);
             moveVec.add(forwardVec.clone().mulScalar(forwardAmount));
             moveVec.add(rightVec.clone().mulScalar(rightAmount));
+            if (forwardAmount > 0 && this.collisionProxy.blocked) {
+                moveVec.sub(tmpVec.copy(forwardVec).mulScalar(forwardAmount));
+            }
 
             const moveLength = Math.hypot(moveVec.x, moveVec.z);
             if (moveLength > 0) {
@@ -314,6 +339,60 @@ class WalkTool {
             camera.setFocalPoint(focalPoint, 0);
             this.scene.forceRender = true;
         }
+    }
+
+    private updateCollisionProxy(enabled: boolean) {
+        const now = performance.now();
+        if (!enabled) {
+            if (this.collisionProxy.blocked) {
+                this.collisionProxy.blocked = false;
+                this.reportCollisionProxy(now, 'released');
+            }
+            return;
+        }
+        if (this.collisionProxy.pending || now - this.collisionProxy.lastSampleAt < COLLISION_SAMPLE_INTERVAL_MS) {
+            return;
+        }
+
+        const camera = this.camera;
+        const viewDistance = Math.max(0.001, camera.distance * camera.sceneRadius / camera.fovFactor);
+        this.collisionProxy.pending = true;
+        this.collisionProxy.lastSampleAt = now;
+        this.collisionProxy.viewDistance = viewDistance;
+
+        camera.intersect(0.5, 0.5).then((hit) => {
+            const distance = typeof hit?.distance === 'number' && Number.isFinite(hit.distance) ? hit.distance : null;
+            const clearance = Math.max(0.12, Math.min(0.9, viewDistance * 0.18));
+            const canBlockFromView = Math.abs(camera.elevation) <= COLLISION_MAX_BLOCK_ELEVATION_DEG;
+            const blocked = canBlockFromView && distance !== null && distance < viewDistance - clearance;
+            const changed = blocked !== this.collisionProxy.blocked;
+            this.collisionProxy.pending = false;
+            this.collisionProxy.frontDistance = distance;
+            this.collisionProxy.blocked = blocked;
+            if (changed || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.reportCollisionProxy(performance.now(), changed ? 'changed' : 'sampled');
+            }
+        }).catch((error: unknown) => {
+            this.collisionProxy.pending = false;
+            this.collisionProxy.frontDistance = null;
+            this.collisionProxy.blocked = false;
+            this.events.fire('walk.collisionProxy', {
+                ok: false,
+                error: error instanceof Error ? error.message : 'collision proxy sample failed'
+            });
+        });
+    }
+
+    private reportCollisionProxy(now: number, reason: string) {
+        this.collisionProxy.lastReportAt = now;
+        this.events.fire('walk.collisionProxy', {
+            ok: true,
+            reason,
+            blocked: this.collisionProxy.blocked,
+            frontDistance: this.collisionProxy.frontDistance === null ? null : Number(this.collisionProxy.frontDistance.toFixed(3)),
+            viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3)),
+            elevation: Number(this.camera.elevation.toFixed(2))
+        });
     }
 
     private look(dx: number, dy: number) {

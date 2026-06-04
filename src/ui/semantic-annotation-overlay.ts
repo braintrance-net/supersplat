@@ -1,4 +1,4 @@
-import { Color, Mat4, Ray, Vec3 } from 'playcanvas';
+import { Color, Mat4, Vec3 } from 'playcanvas';
 
 import { ElementType } from '../element';
 import { Events } from '../events';
@@ -30,6 +30,14 @@ type MaskPixels = {
     height: number;
     data: Uint8Array;
     points: Array<{ x: number, y: number }>;
+};
+
+type MultiplayerOverlayPlayer = {
+    id: string;
+    label: string;
+    color?: string;
+    position: [number, number, number];
+    target?: [number, number, number];
 };
 
 const OCCLUSION_CELL_PX = 4;
@@ -229,10 +237,15 @@ class SemanticAnnotationOverlay {
     private readonly container: HTMLDivElement;
     private readonly markers = new Map<string, HTMLButtonElement>();
     private readonly screenPos = new Vec3();
-    private readonly clickRay = new Ray();
+    private readonly multiplayerWorld = new Vec3();
+    private readonly multiplayerDelta = new Vec3();
+    private readonly multiplayerTargetWorld = new Vec3();
+    private readonly multiplayerTargetScreenPos = new Vec3();
     private readonly captureViewMatrix = new Mat4();
     private readonly hitVolumes = new Map<string, MaskHitVolume>();
+    private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private annotations: SemanticAnnotation[] = [];
+    private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
     private interactionMode: 'edit' | 'game' = 'edit';
     private activeGameTargetIds = new Set<string>();
     private foundAnnotationIds = new Set<string>();
@@ -250,6 +263,7 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.gameTargets', this.setGameTargets, this);
         events.on('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
+        events.on('multiplayer.players', this.setMultiplayerPlayers, this);
         events.on('prerender', this.drawHitVolumes, this);
         events.on('postrender', this.update, this);
         events.function('semanticAnnotations.captureAnchor', this.captureAnchor.bind(this));
@@ -264,12 +278,14 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.gameTargets', this.setGameTargets, this);
         this.events.off('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
+        this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
         this.events.off('prerender', this.drawHitVolumes, this);
         this.events.off('postrender', this.update, this);
         this.container.parentElement?.removeEventListener('pointerdown', this.onPointerDown);
         this.container.parentElement?.removeEventListener('pointerup', this.onPointerUp);
         this.container.remove();
         this.markers.clear();
+        this.multiplayerMarkers.clear();
     }
 
     private setAnnotations(annotations: SemanticAnnotation[]) {
@@ -281,14 +297,50 @@ class SemanticAnnotationOverlay {
 
     private setInteractionMode(mode: 'edit' | 'game') {
         this.interactionMode = mode;
-        if (mode === 'game') {
-            this.hitVolumeGeneration += 1;
-        }
         this.container.classList.toggle('game-mode', mode === 'game');
         if (mode !== 'game') {
             this.setShowHitboxes(false);
         }
         this.syncMarkerClasses();
+    }
+
+    private setMultiplayerPlayers(players?: MultiplayerOverlayPlayer[]) {
+        this.multiplayerPlayers = Array.isArray(players) ? players : [];
+        const ids = new Set(this.multiplayerPlayers.map(player => player.id));
+
+        for (const [id, marker] of this.multiplayerMarkers) {
+            if (!ids.has(id)) {
+                marker.remove();
+                this.multiplayerMarkers.delete(id);
+            }
+        }
+
+        for (const player of this.multiplayerPlayers) {
+            let marker = this.multiplayerMarkers.get(player.id);
+            if (!marker) {
+                marker = document.createElement('div');
+                marker.className = 'multiplayer-avatar-marker';
+                marker.innerHTML = `
+                    <span class="multiplayer-avatar-shadow"></span>
+                    <span class="multiplayer-avatar-aim"></span>
+                    <span class="multiplayer-avatar-body">
+                        <span class="multiplayer-avatar-head"></span>
+                        <span class="multiplayer-avatar-chest"></span>
+                        <span class="multiplayer-avatar-arms"></span>
+                        <span class="multiplayer-avatar-legs"></span>
+                    </span>
+                    <span class="multiplayer-avatar-label"></span>
+                `;
+                this.container.appendChild(marker);
+                this.multiplayerMarkers.set(player.id, marker);
+            }
+
+            marker.style.setProperty('--multiplayer-avatar-color', player.color || '#53d6ff');
+            marker.querySelector('.multiplayer-avatar-label')!.textContent = player.label;
+        }
+
+        this.update();
+        this.scene.forceRender = true;
     }
 
     private setGameTargets(annotationIds?: string[]) {
@@ -403,42 +455,6 @@ class SemanticAnnotationOverlay {
         const dy = Math.max(volume.min.y - point.y, 0, point.y - volume.max.y);
         const dz = Math.max(volume.min.z - point.z, 0, point.z - volume.max.z);
         return Math.sqrt(dx * dx + dy * dy + dz * dz) <= margin;
-    }
-
-    private rayIntersectsVolume(ray: Ray, volume: MaskHitVolume) {
-        const margin = Math.max(0.04, volume.radius * 0.1);
-        let near = -Infinity;
-        let far = Infinity;
-
-        const updateAxis = (origin: number, direction: number, min: number, max: number) => {
-            const a = min - margin;
-            const b = max + margin;
-            if (Math.abs(direction) < 1e-6) {
-                return origin >= a && origin <= b;
-            }
-
-            const t1 = (a - origin) / direction;
-            const t2 = (b - origin) / direction;
-            near = Math.max(near, Math.min(t1, t2));
-            far = Math.min(far, Math.max(t1, t2));
-            return near <= far;
-        };
-
-        if (!updateAxis(ray.origin.x, ray.direction.x, volume.min.x, volume.max.x)) {
-            return null;
-        }
-        if (!updateAxis(ray.origin.y, ray.direction.y, volume.min.y, volume.max.y)) {
-            return null;
-        }
-        if (!updateAxis(ray.origin.z, ray.direction.z, volume.min.z, volume.max.z)) {
-            return null;
-        }
-
-        if (far < 0) {
-            return null;
-        }
-
-        return { near: Math.max(0, near), far };
     }
 
     private volumeFromWorldPoints(
@@ -562,17 +578,7 @@ class SemanticAnnotationOverlay {
         }
     }
 
-    private findCenterHit(surfacePoint?: Vec3 | null, surfaceDistance?: number | null) {
-        const targetSize = this.scene.camera.targetSize;
-        this.scene.camera.getRay(targetSize.width * 0.5, targetSize.height * 0.5, this.clickRay);
-        const maxRayDistance = typeof surfaceDistance === 'number' && Number.isFinite(surfaceDistance) ?
-            surfaceDistance + 0.08 :
-            Infinity;
-
-        if (!surfacePoint) {
-            surfaceDistance = null;
-        }
-
+    private findCenterHit(surfacePoint?: Vec3 | null) {
         let bestAnnotation: SemanticAnnotation | null = null;
         let bestDistance = Infinity;
 
@@ -590,14 +596,12 @@ class SemanticAnnotationOverlay {
             const radius = this.annotationHitRadius(annotation);
             const distance = surfacePoint ? new Vec3().sub2(world, surfacePoint).length() : Infinity;
 
-            const rayHit = volume ? this.rayIntersectsVolume(this.clickRay, volume) : null;
             const hit = volume ?
-                (surfacePoint ? this.pointInsideVolume(surfacePoint, volume) : false) ||
-                    (rayHit !== null && rayHit.near <= maxRayDistance) :
+                (surfacePoint ? this.pointInsideVolume(surfacePoint, volume) : false) :
                 distance <= radius;
             if (hit && distance < bestDistance) {
                 bestAnnotation = annotation;
-                bestDistance = Number.isFinite(distance) ? distance : rayHit?.near ?? Infinity;
+                bestDistance = distance;
             }
         }
 
@@ -638,7 +642,7 @@ class SemanticAnnotationOverlay {
     }
 
     private shouldAbortHitVolumeBuild(generation: number) {
-        return generation !== this.hitVolumeGeneration || this.interactionMode === 'game' || document.pointerLockElement !== null;
+        return generation !== this.hitVolumeGeneration;
     }
 
     private sourceViewMatrix(annotation: SemanticAnnotation) {
@@ -723,7 +727,7 @@ class SemanticAnnotationOverlay {
         }
 
         const hit = await this.scene.camera.intersect(0.5, 0.5);
-        const matched = this.findCenterHit(hit?.position ?? null, hit?.distance ?? null);
+        const matched = this.findCenterHit(hit?.position ?? null);
 
         if (matched) {
             this.events.fire('semanticAnnotations.activate', matched.id);
@@ -796,6 +800,50 @@ class SemanticAnnotationOverlay {
                 marker.classList.toggle('mask-volume-target', volume !== undefined && this.shouldShowVolume(annotation));
                 marker.classList.toggle('inactive-game-target', this.interactionMode === 'game' && !this.isActiveGameTarget(annotation));
                 marker.classList.toggle('found-game-target', this.foundAnnotationIds.has(annotation.id));
+            }
+        }
+
+        this.updateMultiplayerPlayers(clientWidth, clientHeight, cameraPosition);
+    }
+
+    private updateMultiplayerPlayers(clientWidth: number, clientHeight: number, cameraPosition: Vec3) {
+        for (const player of this.multiplayerPlayers) {
+            const marker = this.multiplayerMarkers.get(player.id);
+            if (!marker) {
+                continue;
+            }
+
+            this.multiplayerWorld.set(player.position[0], player.position[1], player.position[2]);
+            this.scene.camera.worldToScreen(this.multiplayerWorld, this.screenPos);
+
+            const visible =
+                this.screenPos.z >= 0 &&
+                this.screenPos.z <= 1 &&
+                this.screenPos.x >= -0.04 &&
+                this.screenPos.x <= 1.04 &&
+                this.screenPos.y >= -0.04 &&
+                this.screenPos.y <= 1.04;
+
+            marker.hidden = !visible;
+            if (!visible) {
+                continue;
+            }
+
+            const distance = Math.max(0.1, this.multiplayerDelta.sub2(this.multiplayerWorld, cameraPosition).length());
+            const scale = Math.max(0.52, Math.min(1.24, 1.75 / Math.sqrt(distance)));
+            marker.style.transform = `translate(${(this.screenPos.x * clientWidth).toFixed(1)}px, ${(this.screenPos.y * clientHeight).toFixed(1)}px) translate(-50%, -100%) scale(${scale.toFixed(3)})`;
+            marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
+
+            if (player.target) {
+                this.multiplayerTargetWorld.set(player.target[0], player.target[1], player.target[2]);
+                this.scene.camera.worldToScreen(this.multiplayerTargetWorld, this.multiplayerTargetScreenPos);
+                const dx = (this.multiplayerTargetScreenPos.x - this.screenPos.x) * clientWidth;
+                const dy = (this.multiplayerTargetScreenPos.y - this.screenPos.y) * clientHeight;
+                const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+                marker.style.setProperty('--multiplayer-avatar-aim-angle', `${angle.toFixed(1)}deg`);
+                marker.classList.toggle('has-target', Number.isFinite(angle) && Math.abs(dx) + Math.abs(dy) > 1);
+            } else {
+                marker.classList.remove('has-target');
             }
         }
     }

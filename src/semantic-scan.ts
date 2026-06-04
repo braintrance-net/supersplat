@@ -6,6 +6,7 @@ import { SemanticAnnotation } from './semantic-annotations';
 
 const MAX_CAPTURE_SIDE = 1024;
 const FALLBACK_MARKER_COLOR = '#58c7ff';
+const PRODUCTION_SEMANTIC_SCAN_BACKEND_URL = 'https://board-demo-web.vercel.app';
 
 type SemanticScanDetection = {
     point: [number, number];
@@ -53,6 +54,10 @@ const getSemanticScanBackendUrl = () => {
         } catch {
             // Fall through to current origin.
         }
+    }
+
+    if (/^board-demo-editor(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(window.location.hostname)) {
+        return PRODUCTION_SEMANTIC_SCAN_BACKEND_URL;
     }
 
     return window.location.origin;
