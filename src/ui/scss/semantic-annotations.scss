@@ -315,12 +315,12 @@
     }
 
     &::before {
-        left: 4px;
+        left: 9.5%;
         transform: rotate(13deg);
     }
 
     &::after {
-        right: 4px;
+        right: 9.5%;
         transform: rotate(-13deg);
     }
 }
@@ -343,12 +343,12 @@
     }
 
     &::before {
-        left: 3px;
+        left: 11%;
         transform: rotate(8deg);
     }
 
     &::after {
-        right: 3px;
+        right: 11%;
         transform: rotate(-8deg);
     }
 }
