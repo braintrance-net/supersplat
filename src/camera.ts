@@ -669,9 +669,12 @@ class Camera extends Element {
         // Convert normalized depth to linear depth
         const linearDepth = closestDepth * (this.far - this.near) + this.near;
 
-        // Convert normalized coordinates to screen pixels for getRay
-        const screenX = x * scene.canvas.clientWidth;
-        const screenY = y * scene.canvas.clientHeight;
+        // Convert normalized coordinates to active render-target pixels for getRay.
+        // This matters during offscreen captures, where the render target aspect can
+        // differ from the visible canvas CSS size.
+        const targetSize = this.targetSize;
+        const screenX = x * targetSize.width;
+        const screenY = y * targetSize.height;
 
         // Calculate world position from ray and depth
         this.getRay(screenX, screenY, ray);

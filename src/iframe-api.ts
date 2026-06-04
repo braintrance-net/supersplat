@@ -1,7 +1,7 @@
 import { Quat, Vec3 } from 'playcanvas';
 
 import { Events } from './events';
-import type { SemanticLayer } from './semantic-annotations';
+import type { SemanticAnnotation, SemanticLayer } from './semantic-annotations';
 
 const IS_SCENE_DIRTY = 'supersplat:is-scene-dirty';
 const LOAD_FILE = 'supersplat:load-file';
@@ -11,10 +11,14 @@ const GET_PRESET_STATE = 'supersplat:get-preset-state';
 const PRESET_STATE = 'supersplat:preset-state';
 const CAPTURE_THUMBNAIL = 'supersplat:capture-thumbnail';
 const THUMBNAIL = 'supersplat:thumbnail';
+const THUMBNAIL_ERROR = 'supersplat:thumbnail-error';
+const CAPABILITIES_GET = 'supersplat:capabilities-get';
+const CAPABILITIES = 'supersplat:capabilities';
 const SAM3D_CONFIG = 'supersplat:sam3d-config';
 const API_CONFIG = 'supersplat:api-config';
 const READY = 'supersplat:ready';
 const SCENE_LOADED = 'supersplat:scene-loaded';
+const DIAGNOSTIC = 'supersplat:diagnostic';
 const SEMANTIC_LAYER_GET = 'supersplat:semantic-layer-get';
 const SEMANTIC_LAYER = 'supersplat:semantic-layer';
 const SEMANTIC_LAYER_LOAD = 'supersplat:semantic-layer-load';
@@ -26,6 +30,14 @@ const SEMANTIC_PREPROCESS_SCAN = 'supersplat:semantic-preprocess-scan';
 const SEMANTIC_PREPROCESS_SCAN_RESULT = 'supersplat:semantic-preprocess-scan-result';
 const GAME_MODE = 'supersplat:game-mode';
 const TIME_TRIAL_HIT = 'supersplat:time-trial-hit';
+const TIME_TRIAL_MISS = 'supersplat:time-trial-miss';
+const TIME_TRIAL_FOUND = 'supersplat:time-trial-found';
+const ANNOTATION_FOCUS = 'supersplat:annotation-focus';
+const ANNOTATION_AUTHORING_CAPTURE = 'supersplat:annotation-authoring-capture';
+const ANNOTATION_ANCHOR_CAPTURED = 'supersplat:annotation-anchor-captured';
+const POINTER_LOOK = 'supersplat:pointer-look';
+const WALK_INPUT = 'supersplat:walk-input';
+const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -89,12 +101,25 @@ interface CaptureThumbnailQuery {
     height?: number;
     transparentBg?: boolean;
     showDebug?: boolean;
+    requestId?: RequestId;
 }
 
 interface ThumbnailResponse {
     type: typeof THUMBNAIL;
     filename: string;
     data: ArrayBuffer | Uint8Array;
+    requestId?: RequestId;
+}
+
+interface ThumbnailErrorResponse {
+    type: typeof THUMBNAIL_ERROR;
+    error: string;
+    requestId?: RequestId;
+}
+
+interface CapabilitiesGetMessage {
+    type: typeof CAPABILITIES_GET;
+    requestId?: RequestId;
 }
 
 interface Sam3dConfigMessage {
@@ -146,6 +171,49 @@ interface SemanticPreprocessScanMessage {
 interface GameModeMessage {
     type: typeof GAME_MODE;
     enabled: boolean;
+    objectiveIds?: string[];
+    showHitboxes?: boolean;
+}
+
+interface AnnotationAuthoringCaptureMessage {
+    type: typeof ANNOTATION_AUTHORING_CAPTURE;
+    requestId?: RequestId;
+}
+
+interface TimeTrialFoundMessage {
+    type: typeof TIME_TRIAL_FOUND;
+    annotationId?: string;
+    annotationIds?: string[];
+}
+
+interface AnnotationFocusMessage {
+    type: typeof ANNOTATION_FOCUS;
+    annotationId: string;
+    highlight?: boolean;
+}
+
+interface PointerLookMessage {
+    type: typeof POINTER_LOOK;
+    dx: number;
+    dy: number;
+}
+
+interface WalkInputMessage {
+    type: typeof WALK_INPUT;
+    keys: {
+        forward?: boolean;
+        backward?: boolean;
+        left?: boolean;
+        right?: boolean;
+        sprint?: boolean;
+        slide?: boolean;
+        jump?: boolean;
+    };
+}
+
+interface CrosshairClickMessage {
+    type: typeof CROSSHAIR_CLICK;
+    requestId?: RequestId;
 }
 
 const hasOptionalRequestId = (data: any) => (
@@ -194,8 +262,13 @@ const isCaptureThumbnailQuery = (data: any): data is CaptureThumbnailQuery => {
     return (
         data &&
         typeof data === 'object' &&
-        data.type === CAPTURE_THUMBNAIL
+        data.type === CAPTURE_THUMBNAIL &&
+        hasOptionalRequestId(data)
     );
+};
+
+const isCapabilitiesGetMessage = (data: any): data is CapabilitiesGetMessage => {
+    return data && typeof data === 'object' && data.type === CAPABILITIES_GET && hasOptionalRequestId(data);
 };
 
 const isSam3dConfigMessage = (data: any): data is Sam3dConfigMessage => {
@@ -267,8 +340,51 @@ const isGameModeMessage = (data: any): data is GameModeMessage => {
         data &&
         typeof data === 'object' &&
         data.type === GAME_MODE &&
-        typeof data.enabled === 'boolean'
+        typeof data.enabled === 'boolean' &&
+        (data.objectiveIds === undefined || Array.isArray(data.objectiveIds)) &&
+        (data.showHitboxes === undefined || typeof data.showHitboxes === 'boolean')
     );
+};
+
+const isAnnotationAuthoringCaptureMessage = (data: any): data is AnnotationAuthoringCaptureMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === ANNOTATION_AUTHORING_CAPTURE &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isTimeTrialFoundMessage = (data: any): data is TimeTrialFoundMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === TIME_TRIAL_FOUND &&
+        (data.annotationId === undefined || typeof data.annotationId === 'string') &&
+        (data.annotationIds === undefined || (Array.isArray(data.annotationIds) && data.annotationIds.every((id: unknown) => typeof id === 'string')))
+    );
+};
+
+const isAnnotationFocusMessage = (data: any): data is AnnotationFocusMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === ANNOTATION_FOCUS &&
+        typeof data.annotationId === 'string' &&
+        (data.highlight === undefined || typeof data.highlight === 'boolean')
+    );
+};
+
+const isPointerLookMessage = (data: any): data is PointerLookMessage => {
+    return data && typeof data === 'object' && data.type === POINTER_LOOK && typeof data.dx === 'number' && typeof data.dy === 'number';
+};
+
+const isWalkInputMessage = (data: any): data is WalkInputMessage => {
+    return data && typeof data === 'object' && data.type === WALK_INPUT && data.keys && typeof data.keys === 'object';
+};
+
+const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
+    return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data);
 };
 
 const normalizeOrigin = (value: string, base: string) => new URL(value, base).origin;
@@ -323,6 +439,21 @@ const applyCameraState = (events: Events, camera?: CameraState) => {
         events.fire('camera.setOrtho', camera.ortho);
     }
 };
+
+const cameraStateFromAnnotation = (annotation: SemanticAnnotation): CameraState => ({
+    position: {
+        x: annotation.source.camera.position[0],
+        y: annotation.source.camera.position[1],
+        z: annotation.source.camera.position[2]
+    },
+    target: {
+        x: annotation.source.camera.target[0],
+        y: annotation.source.camera.target[1],
+        z: annotation.source.camera.target[2]
+    },
+    fov: annotation.source.camera.fov,
+    ortho: annotation.source.camera.ortho
+});
 
 const applyTransformState = (events: Events, transform?: PresetTransform) => {
     if (!transform) {
@@ -397,10 +528,93 @@ const requestIdPayload = (requestId?: RequestId) => {
     return {};
 };
 
+const postDiagnostic = (
+    source: Window,
+    origin: string,
+    label: string,
+    details?: Record<string, unknown>,
+    requestId?: RequestId
+) => {
+    source.postMessage({
+        type: DIAGNOSTIC,
+        source: 'supersplat',
+        label,
+        details,
+        at: new Date().toISOString(),
+        ...requestIdPayload(requestId)
+    }, origin);
+};
+
+const messageFromError = (error: unknown, fallback = 'Unknown error') => {
+    return error instanceof Error ? error.message : fallback;
+};
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> => {
+    let timeoutId: number | null = null;
+    try {
+        return await Promise.race([
+            promise,
+            new Promise<T>((_, reject) => {
+                timeoutId = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+            })
+        ]);
+    } finally {
+        if (timeoutId !== null) {
+            window.clearTimeout(timeoutId);
+        }
+    }
+};
+
+const waitForPostRender = (events: Events, timeoutMs = 2000) => new Promise<boolean>((resolve) => {
+    let settled = false;
+    let handle: { off: () => void } | null = null;
+    const timeout = window.setTimeout(() => {
+        if (settled) {
+            return;
+        }
+        settled = true;
+        handle?.off();
+        resolve(false);
+    }, timeoutMs);
+
+    handle = events.on('postrender', () => {
+        if (settled) {
+            return;
+        }
+        settled = true;
+        window.clearTimeout(timeout);
+        handle?.off();
+        resolve(true);
+    }) as { off: () => void };
+
+    const scene = window.scene as any;
+    if (scene) {
+        scene.forceRender = true;
+    }
+});
+
+const emptyPointerLookStats = () => ({
+    count: 0,
+    forcedWalkCount: 0,
+    totalAbsDx: 0,
+    totalAbsDy: 0,
+    totalApplyMs: 0,
+    maxApplyMs: 0,
+    totalGapMs: 0,
+    maxGapMs: 0,
+    lastAt: null as number | null
+});
+
 const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
     let gameModePreviousTool: string | null = null;
     let gameModeActivatedWalk = false;
+    let lastPointerLookDiagnosticAt = 0;
+    let pointerLookStats = emptyPointerLookStats();
+    let perfFrameCount = 0;
+    let perfTotalGapMs = 0;
+    let perfMaxGapMs = 0;
+    let perfLastFrameAt: number | null = null;
 
     const restoreGameModeTool = () => {
         const restoreTool = gameModePreviousTool;
@@ -436,11 +650,71 @@ const registerIframeApi = (events: Events) => {
         }
     });
 
+    events.on('postrender', () => {
+        const now = performance.now();
+        if (perfLastFrameAt !== null) {
+            const gapMs = now - perfLastFrameAt;
+            perfTotalGapMs += gapMs;
+            perfMaxGapMs = Math.max(perfMaxGapMs, gapMs);
+        }
+        perfLastFrameAt = now;
+        perfFrameCount += 1;
+    });
+
+    window.setInterval(() => {
+        if (!window.parent || window.parent === window) {
+            return;
+        }
+
+        const frameCount = perfFrameCount;
+        const avgFrameMs = frameCount > 1 ? perfTotalGapMs / (frameCount - 1) : 0;
+        const canvas = (window.scene as any)?.canvas as HTMLCanvasElement | undefined;
+        const targetSize = (window.scene as any)?.camera?.targetSize as { width?: number, height?: number } | undefined;
+
+        postDiagnostic(window.parent, '*', 'viewer-perf', {
+            frames: frameCount,
+            approxFps: avgFrameMs > 0 ? Number((1000 / avgFrameMs).toFixed(1)) : 0,
+            avgFrameMs: Number(avgFrameMs.toFixed(1)),
+            maxFrameMs: Number(perfMaxGapMs.toFixed(1)),
+            canvas: canvas ? { width: canvas.clientWidth, height: canvas.clientHeight } : null,
+            targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null,
+            dpr: window.devicePixelRatio,
+            activeTool: events.invoke('tool.active') as string | null,
+            annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
+        });
+
+        perfFrameCount = 0;
+        perfTotalGapMs = 0;
+        perfMaxGapMs = 0;
+        perfLastFrameAt = null;
+    }, 2000);
+
     events.on('semanticAnnotations.activate', (annotationId: string) => {
         if (window.parent && window.parent !== window) {
             window.parent.postMessage({
                 type: TIME_TRIAL_HIT,
                 annotationId
+            }, '*');
+        }
+    });
+
+    events.on('semanticAnnotations.miss', (point?: [number, number, number] | null) => {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: TIME_TRIAL_MISS,
+                point: point ?? null
+            }, '*');
+        }
+    });
+
+    events.on('walk.pointerLock', (details: Record<string, unknown>) => {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: DIAGNOSTIC,
+                source: 'supersplat',
+                label: 'walk-pointer-lock',
+                details,
+                at: new Date().toISOString()
             }, '*');
         }
     });
@@ -483,26 +757,105 @@ const registerIframeApi = (events: Events) => {
             source.postMessage(response, event.origin);
         }
 
+        if (isCapabilitiesGetMessage(event.data)) {
+            source.postMessage({
+                type: CAPABILITIES,
+                result: {
+                    authorCapture: true,
+                    crosshairClick: true,
+                    pointerLook: true,
+                    walkInput: true,
+                    thumbnailError: true,
+                    version: 3
+                },
+                ...requestIdPayload(event.data.requestId)
+            }, event.origin);
+        }
+
         if (isCaptureThumbnailQuery(event.data)) {
             const width = event.data.width ?? 1200;
             const height = event.data.height ?? 1440;
             const transparentBg = event.data.transparentBg ?? false;
             const showDebug = event.data.showDebug ?? false;
-            const data = await events.invoke('render.pngBuffer', {
-                width,
-                height,
-                transparentBg,
-                showDebug
-            }) as ArrayBuffer | Uint8Array;
-            const splats = events.invoke('scene.splats') as Array<any>;
-            const baseName = removeExtension(splats?.[0]?.name ?? 'supersplat');
-            const { payload, transferables } = normalizeTransferableBuffer(data);
-            const response: ThumbnailResponse = {
-                type: THUMBNAIL,
-                filename: `${baseName}-thumbnail.png`,
-                data: payload
-            };
-            source.postMessage(response, event.origin, transferables);
+            try {
+                const data = await withTimeout(
+                    events.invoke('render.pngBuffer', {
+                        width,
+                        height,
+                        transparentBg,
+                        showDebug
+                    }) as Promise<ArrayBuffer | Uint8Array>,
+                    8000,
+                    'Thumbnail capture timed out'
+                );
+                const splats = events.invoke('scene.splats') as Array<any>;
+                const baseName = removeExtension(splats?.[0]?.name ?? 'supersplat');
+                const { payload, transferables } = normalizeTransferableBuffer(data);
+                const response: ThumbnailResponse = {
+                    type: THUMBNAIL,
+                    filename: `${baseName}-thumbnail.png`,
+                    data: payload,
+                    ...requestIdPayload(event.data.requestId)
+                };
+                postDiagnostic(source, event.origin, 'thumbnail-captured', { width, height }, event.data.requestId);
+                source.postMessage(response, event.origin, transferables);
+            } catch (error) {
+                const message = messageFromError(error, 'Thumbnail capture failed');
+                postDiagnostic(source, event.origin, 'thumbnail-error', { error: message, width, height }, event.data.requestId);
+                const response: ThumbnailErrorResponse = {
+                    type: THUMBNAIL_ERROR,
+                    error: message,
+                    ...requestIdPayload(event.data.requestId)
+                };
+                source.postMessage(response, event.origin);
+            }
+        }
+
+        if (isPointerLookMessage(event.data)) {
+            const receivedAt = performance.now();
+            if (pointerLookStats.lastAt !== null) {
+                const gapMs = receivedAt - pointerLookStats.lastAt;
+                pointerLookStats.totalGapMs += gapMs;
+                pointerLookStats.maxGapMs = Math.max(pointerLookStats.maxGapMs, gapMs);
+            }
+            pointerLookStats.lastAt = receivedAt;
+            pointerLookStats.count += 1;
+            pointerLookStats.totalAbsDx += Math.abs(event.data.dx);
+            pointerLookStats.totalAbsDy += Math.abs(event.data.dy);
+
+            const applyStart = performance.now();
+            events.fire('walk.pointerLook', event.data.dx, event.data.dy);
+            const applyMs = performance.now() - applyStart;
+            pointerLookStats.totalApplyMs += applyMs;
+            pointerLookStats.maxApplyMs = Math.max(pointerLookStats.maxApplyMs, applyMs);
+
+            if (receivedAt - lastPointerLookDiagnosticAt > 2000) {
+                lastPointerLookDiagnosticAt = receivedAt;
+                const gapCount = Math.max(0, pointerLookStats.count - 1);
+                postDiagnostic(source, event.origin, 'pointer-look-perf', {
+                    events: pointerLookStats.count,
+                    forcedWalks: pointerLookStats.forcedWalkCount,
+                    avgDx: Number((pointerLookStats.totalAbsDx / Math.max(1, pointerLookStats.count)).toFixed(2)),
+                    avgDy: Number((pointerLookStats.totalAbsDy / Math.max(1, pointerLookStats.count)).toFixed(2)),
+                    avgGapMs: Number((pointerLookStats.totalGapMs / Math.max(1, gapCount)).toFixed(1)),
+                    maxGapMs: Number(pointerLookStats.maxGapMs.toFixed(1)),
+                    avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
+                    maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
+                    activeTool: events.invoke('tool.active') as string | null
+                });
+                pointerLookStats = emptyPointerLookStats();
+            }
+            return;
+        }
+
+        if (isWalkInputMessage(event.data)) {
+            events.fire('walk.input', event.data.keys);
+            return;
+        }
+
+        if (isCrosshairClickMessage(event.data)) {
+            const result = await events.invoke('semanticAnnotations.clickCenter');
+            postDiagnostic(source, event.origin, 'crosshair-click', result as Record<string, unknown>, event.data.requestId);
         }
 
         if (isSemanticLayerGetMessage(event.data)) {
@@ -551,6 +904,13 @@ const registerIframeApi = (events: Events) => {
 
         if (isGameModeMessage(event.data)) {
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
+            events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
+            events.fire('semanticAnnotations.showHitboxes', event.data.enabled && event.data.showHitboxes === true);
+            postDiagnostic(source, event.origin, 'game-mode', {
+                enabled: event.data.enabled,
+                objectiveCount: event.data.objectiveIds?.length ?? 0,
+                showHitboxes: event.data.showHitboxes === true
+            });
             if (event.data.enabled) {
                 const activeTool = events.invoke('tool.active') as string | null;
                 const startingGameMode = !gameModeActive;
@@ -567,9 +927,44 @@ const registerIframeApi = (events: Events) => {
             }
         }
 
+        if (isTimeTrialFoundMessage(event.data)) {
+            const annotationIds = event.data.annotationIds ?? (event.data.annotationId ? [event.data.annotationId] : []);
+            events.fire('semanticAnnotations.foundTargets', annotationIds);
+            postDiagnostic(source, event.origin, 'found-targets', { count: annotationIds.length });
+        }
+
+        if (isAnnotationFocusMessage(event.data)) {
+            const annotations = events.invoke('semanticAnnotations.list') as SemanticAnnotation[] | undefined;
+            const annotation = annotations?.find(item => item.id === event.data.annotationId);
+            if (annotation) {
+                applyCameraState(events, cameraStateFromAnnotation(annotation));
+                if (event.data.highlight ?? true) {
+                    events.fire('semanticAnnotations.foundTargets', [annotation.id]);
+                }
+                postDiagnostic(source, event.origin, 'annotation-focus', { annotationId: annotation.id });
+            } else {
+                postDiagnostic(source, event.origin, 'annotation-focus-miss', { annotationId: event.data.annotationId });
+            }
+        }
+
+        if (isAnnotationAuthoringCaptureMessage(event.data)) {
+            const result = await events.invoke('semanticAnnotations.captureAnchor');
+            postDiagnostic(source, event.origin, 'authoring-capture', { ok: Boolean(result?.ok) }, event.data.requestId);
+            source.postMessage({
+                type: ANNOTATION_ANCHOR_CAPTURED,
+                result,
+                ...requestIdPayload(event.data.requestId)
+            }, event.origin);
+        }
+
         if (isLoadFileMessage(event.data)) {
             let error: string | undefined;
+            let rendered = false;
             resetGameModeState();
+            postDiagnostic(source, event.origin, 'load-file-start', {
+                filename: event.data.filename,
+                byteLength: event.data.data?.byteLength ?? 0
+            }, event.data.requestId);
             try {
                 if (event.data.data) {
                     events.fire('scene.clear');
@@ -578,21 +973,28 @@ const registerIframeApi = (events: Events) => {
                         filename: file.name,
                         contents: file
                     }]);
+                    postDiagnostic(source, event.origin, 'load-file-imported', {
+                        filename: event.data.filename,
+                        empty: events.invoke('scene.empty') as boolean
+                    }, event.data.requestId);
                 }
 
                 applyTransformState(events, event.data.transform);
                 applyCameraState(events, event.data.camera);
+                rendered = await waitForPostRender(events);
+                postDiagnostic(source, event.origin, 'load-file-postrender', { rendered }, event.data.requestId);
             } catch (err) {
                 error = err instanceof Error ? err.message : 'Import failed';
                 console.error('[iframe-api] load-file failed:', err);
                 events.fire('toast', error, 'error');
+                postDiagnostic(source, event.origin, 'load-file-error', { error }, event.data.requestId);
             }
             source.postMessage({
                 type: SCENE_LOADED,
                 result: {
                     empty: events.invoke('scene.empty') as boolean,
                     semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer,
-                    error
+                    error: error ?? (rendered ? undefined : 'Scene imported, but render confirmation timed out')
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -601,6 +1003,7 @@ const registerIframeApi = (events: Events) => {
 
     if (window.parent && window.parent !== window) {
         window.parent.postMessage({ type: READY }, '*');
+        postDiagnostic(window.parent, '*', 'ready');
     }
 };
 

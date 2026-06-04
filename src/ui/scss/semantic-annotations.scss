@@ -29,17 +29,119 @@
     }
 }
 
+.semantic-annotation-marker.found-game-target {
+    .semantic-annotation-hitbox {
+        border-color: rgba(168, 255, 121, 0.95);
+        background: rgba(37, 255, 121, 0.16);
+        box-shadow:
+            0 0 0 1px rgba(0, 0, 0, 0.42),
+            0 0 34px rgba(168, 255, 121, 0.72);
+    }
+
+    .semantic-annotation-pin {
+        background: #a8ff79;
+        box-shadow:
+            0 0 0 2px rgba(168, 255, 121, 0.38),
+            0 0 20px rgba(168, 255, 121, 0.72);
+    }
+
+    .semantic-annotation-body {
+        border-color: rgba(168, 255, 121, 0.52);
+        border-left-color: #a8ff79;
+    }
+}
+
+.semantic-annotation-marker.mask-volume-target {
+    .semantic-annotation-hitbox {
+        display: none !important;
+    }
+
+    .semantic-annotation-pin {
+        background: #a8ff79;
+        box-shadow:
+            0 0 0 2px rgba(168, 255, 121, 0.38),
+            0 0 16px rgba(168, 255, 121, 0.72);
+    }
+
+    .semantic-annotation-body {
+        border-color: rgba(168, 255, 121, 0.52);
+        border-left-color: #a8ff79;
+    }
+}
+
 #semantic-annotation-overlay.game-mode {
     .semantic-annotation-marker {
         cursor: crosshair;
+        opacity: 0;
+        pointer-events: none;
 
-        .semantic-annotation-description {
+        .semantic-annotation-hitbox,
+        .semantic-annotation-body {
             display: none;
+        }
+    }
+
+    .semantic-annotation-marker.inactive-game-target {
+        opacity: 0;
+    }
+
+    .semantic-annotation-marker.found-game-target {
+        opacity: 1;
+
+        .semantic-annotation-hitbox {
+            display: block;
+        }
+    }
+
+    &.show-hitboxes {
+        .semantic-annotation-marker.visible-test-target {
+            opacity: 1;
+
+            .semantic-annotation-hitbox {
+                display: block;
+                border-color: rgba(83, 214, 255, 0.92);
+                background:
+                    repeating-linear-gradient(
+                        45deg,
+                        rgba(83, 214, 255, 0.16),
+                        rgba(83, 214, 255, 0.16) 5px,
+                        rgba(168, 255, 121, 0.12) 5px,
+                        rgba(168, 255, 121, 0.12) 10px
+                    );
+                box-shadow:
+                    0 0 0 1px rgba(0, 0, 0, 0.46),
+                    0 0 34px rgba(83, 214, 255, 0.62);
+            }
+
+            &.mask-volume-target .semantic-annotation-hitbox {
+                display: none !important;
+            }
         }
     }
 }
 
+#semantic-annotation-overlay .semantic-annotation-marker.mask-volume-target .semantic-annotation-hitbox {
+    display: none !important;
+}
+
+.semantic-annotation-hitbox {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: var(--semantic-hitbox-size, 48px);
+    height: var(--semantic-hitbox-size, 48px);
+    border: 1px solid color-mix(in srgb, var(--semantic-marker-color), transparent 18%);
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--semantic-marker-color), transparent 86%);
+    box-shadow:
+        0 0 0 1px rgba(0, 0, 0, 0.34),
+        0 0 28px color-mix(in srgb, var(--semantic-marker-color), transparent 44%);
+    pointer-events: none;
+    transform: translate(-50%, -50%);
+}
+
 .semantic-annotation-pin {
+    position: relative;
     width: 10px;
     height: 10px;
     margin-top: 8px;
@@ -50,6 +152,7 @@
 }
 
 .semantic-annotation-body {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
