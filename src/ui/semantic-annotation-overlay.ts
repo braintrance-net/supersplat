@@ -941,7 +941,8 @@ class SemanticAnnotationOverlay {
             const projectedHeight = Math.abs(feetY - headY);
             const distance = Math.max(0.1, this.multiplayerDelta.sub2(this.multiplayerWorld, cameraPosition).length());
             const fallbackHeight = Math.max(82, Math.min(178, 220 / Math.sqrt(distance)));
-            const avatarHeight = Number.isFinite(projectedHeight) && projectedHeight >= 36 ? Math.max(82, Math.min(220, projectedHeight)) : fallbackHeight;
+            const avatarSpan = Number.isFinite(projectedHeight) && projectedHeight >= 36 ? Math.max(82, Math.min(220, projectedHeight)) : fallbackHeight;
+            const avatarHeight = avatarSpan / 0.86;
 
             marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
             marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
