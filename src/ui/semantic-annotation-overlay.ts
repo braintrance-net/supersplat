@@ -51,6 +51,7 @@ type MultiplayerAvatarAnimation = 'idle' | 'run';
 type MultiplayerAvatarInstance = {
     entity: Entity;
     rig: MultiplayerAvatarRig | null;
+    usesProceduralRig: boolean;
     state: MultiplayerAvatarAnimation;
     phase: number;
     lastPosition: Vec3;
@@ -90,6 +91,14 @@ type MultiplayerAnimComponent = {
     playable: boolean;
     playing: boolean;
     rebind: () => void;
+};
+
+type MultiplayerAvatarAnimationSetup = {
+    animationNames: string[];
+    rootBoneName?: string;
+    nativeAnimation: boolean;
+    animPlayable?: boolean;
+    fallbackReason?: string;
 };
 
 const OCCLUSION_CELL_PX = 4;
@@ -502,7 +511,7 @@ class SemanticAnnotationOverlay {
 
         const rigDeltaTime = Math.min(Math.max(deltaTime, 1 / 120), 1 / 15);
         for (const avatar of this.multiplayerAvatarInstances.values()) {
-            if (avatar.entity.enabled) {
+            if (avatar.entity.enabled && avatar.usesProceduralRig) {
                 this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
             }
         }
@@ -557,19 +566,29 @@ class SemanticAnnotationOverlay {
         }
     }
 
-    private setupMultiplayerAvatarAnimation(entity: Entity, resource: MultiplayerAvatarContainer) {
+    private setupMultiplayerAvatarAnimation(entity: Entity, resource: MultiplayerAvatarContainer): MultiplayerAvatarAnimationSetup {
         const animations = resource.animations ?? [];
+        const animationNames = animations.map(animation => animation.name);
         const idle = animations.find(animation => /idle/i.test(animation.name))?.resource;
         const run = animations.find(animation => /run/i.test(animation.name))?.resource;
         if (!idle || !run) {
-            return;
+            return {
+                animationNames,
+                nativeAnimation: false,
+                fallbackReason: 'missing-idle-or-run-clip'
+            };
         }
 
         const animationRoot = (entity.findByName('RootNode') ?? entity.findByName('Root') ?? entity) as Entity;
         entity.addComponent('anim', { activate: true, rootBone: animationRoot });
         const anim = (entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
         if (!anim) {
-            return;
+            return {
+                animationNames,
+                rootBoneName: animationRoot.name,
+                nativeAnimation: false,
+                fallbackReason: 'anim-component-missing'
+            };
         }
         anim.rootBone = animationRoot;
 
@@ -592,13 +611,29 @@ class SemanticAnnotationOverlay {
         anim.assignAnimation('Idle', idle, undefined, 1, true);
         anim.assignAnimation('Run', run, undefined, 1, true);
         anim.rebind();
-        anim.playing = false;
         if (!anim.playable) {
+            anim.playing = false;
             this.emitDiagnostic('multiplayer-avatar-animation-unplayable', {
                 rootBone: animationRoot.name,
-                animations: animations.map(animation => animation.name)
+                animations: animationNames
             });
+            return {
+                animationNames,
+                rootBoneName: animationRoot.name,
+                nativeAnimation: false,
+                animPlayable: false,
+                fallbackReason: 'anim-component-unplayable'
+            };
         }
+
+        anim.playing = true;
+        anim.baseLayer?.play('Idle');
+        return {
+            animationNames,
+            rootBoneName: animationRoot.name,
+            nativeAnimation: true,
+            animPlayable: true
+        };
     }
 
     private multiplayerRigBone(entity: Entity, name: string): MultiplayerAvatarRigBone | undefined {
@@ -621,6 +656,21 @@ class SemanticAnnotationOverlay {
             rightLeg: this.multiplayerRigBone(entity, 'RightUpLeg'),
             spine: this.multiplayerRigBone(entity, 'Spine'),
             head: this.multiplayerRigBone(entity, 'Head')
+        };
+    }
+
+    private multiplayerRigDiagnostics(rig: MultiplayerAvatarRig | null) {
+        if (!rig) {
+            return {};
+        }
+
+        return {
+            leftArm: rig.leftArm?.entity.name ?? null,
+            rightArm: rig.rightArm?.entity.name ?? null,
+            leftLeg: rig.leftLeg?.entity.name ?? null,
+            rightLeg: rig.rightLeg?.entity.name ?? null,
+            spine: rig.spine?.entity.name ?? null,
+            head: rig.head?.entity.name ?? null
         };
     }
 
@@ -686,18 +736,30 @@ class SemanticAnnotationOverlay {
         entity.name = `multiplayer-avatar-${player.id}`;
         entity.enabled = false;
         this.setMultiplayerAvatarLayers(entity);
-        this.setupMultiplayerAvatarAnimation(entity, resource);
+        const animationSetup = this.setupMultiplayerAvatarAnimation(entity, resource);
         this.scene.contentRoot.addChild(entity);
 
+        const rig = this.createMultiplayerAvatarRig(entity);
         const instance = {
             entity,
-            rig: this.createMultiplayerAvatarRig(entity),
+            rig,
+            usesProceduralRig: !animationSetup.nativeAnimation,
             state: 'idle',
             phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
             lastUpdateMs: performance.now()
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
+        this.emitDiagnostic('multiplayer-avatar-rig-ready', {
+            playerId: player.id,
+            nativeAnimation: animationSetup.nativeAnimation,
+            animPlayable: animationSetup.animPlayable ?? null,
+            fallbackReason: animationSetup.fallbackReason ?? null,
+            rootBone: animationSetup.rootBoneName ?? null,
+            animations: animationSetup.animationNames,
+            rigBones: this.multiplayerRigDiagnostics(rig),
+            renderComponents: entity.findComponents('render').length
+        });
         return instance;
     }
 
@@ -707,8 +769,10 @@ class SemanticAnnotationOverlay {
         }
 
         instance.state = state;
-        const anim = (instance.entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
-        anim?.baseLayer?.transition(state === 'run' ? 'Run' : 'Idle', MULTIPLAYER_AVATAR_TRANSITION_SECONDS);
+        if (!instance.usesProceduralRig) {
+            const anim = (instance.entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
+            anim?.baseLayer?.transition(state === 'run' ? 'Run' : 'Idle', MULTIPLAYER_AVATAR_TRANSITION_SECONDS);
+        }
     }
 
     private updateMultiplayerAvatar(
