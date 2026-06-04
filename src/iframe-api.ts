@@ -686,6 +686,7 @@ const registerIframeApi = (events: Events) => {
     };
 
     const resetGameModeState = () => {
+        events.fire('walk.embeddedControls', false);
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
     };
@@ -1016,6 +1017,7 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isGameModeMessage(event.data)) {
+            events.fire('walk.embeddedControls', event.data.enabled);
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
             events.fire('semanticAnnotations.showHitboxes', event.data.enabled && event.data.showHitboxes === true);
