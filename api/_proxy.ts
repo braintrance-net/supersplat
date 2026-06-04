@@ -22,6 +22,22 @@ export const handleOptions = (req: any, res: any) => {
     res.end();
 };
 
+export const isAllowedProxyRequest = (req: any) => {
+    const origin = typeof req.headers?.origin === 'string' ? req.headers.origin : '';
+    const referer = typeof req.headers?.referer === 'string' ? req.headers.referer : '';
+    const refererOrigin = referer ? getUrlOrigin(referer) : '';
+    return [origin, refererOrigin].some(value => value && EDITOR_ORIGIN_PATTERNS.some(pattern => pattern.test(value)));
+};
+
+export const requireAllowedProxyRequest = (req: any, res: any) => {
+    if (isAllowedProxyRequest(req)) {
+        return true;
+    }
+
+    sendJson(req, res, 403, { error: 'Proxy requests must come from an allowed editor or board origin.' });
+    return false;
+};
+
 export const getEnv = (key: string) => {
     const runtime = globalThis as unknown as { process?: { env?: Record<string, string | undefined> } };
     return runtime.process?.env?.[key];
@@ -80,3 +96,11 @@ export const sendUpstream = async (req: any, res: any, upstream: Response) => {
 };
 
 export const getRequestUrl = (req: any) => new URL(req.url || '/', 'https://board-demo-editor.vercel.app');
+
+const getUrlOrigin = (value: string) => {
+    try {
+        return new URL(value).origin;
+    } catch {
+        return '';
+    }
+};

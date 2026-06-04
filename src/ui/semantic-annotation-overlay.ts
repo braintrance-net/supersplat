@@ -238,6 +238,8 @@ class SemanticAnnotationOverlay {
     private readonly markers = new Map<string, HTMLButtonElement>();
     private readonly screenPos = new Vec3();
     private readonly multiplayerWorld = new Vec3();
+    private readonly multiplayerFeetWorld = new Vec3();
+    private readonly multiplayerFeetScreenPos = new Vec3();
     private readonly multiplayerDelta = new Vec3();
     private readonly multiplayerTargetWorld = new Vec3();
     private readonly multiplayerTargetScreenPos = new Vec3();
@@ -346,6 +348,7 @@ class SemanticAnnotationOverlay {
     private setGameTargets(annotationIds?: string[]) {
         this.activeGameTargetIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
         this.syncMarkerClasses();
+        this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
     }
 
     private setFoundTargets(annotationIds?: string[]) {
@@ -357,6 +360,7 @@ class SemanticAnnotationOverlay {
         this.showHitboxes = showHitboxes === true;
         this.container.classList.toggle('show-hitboxes', this.showHitboxes);
         this.syncMarkerClasses();
+        this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
     }
 
     private syncMarkerClasses() {
@@ -369,12 +373,46 @@ class SemanticAnnotationOverlay {
             const hasUsableVolume = !this.requiresMaskVolume(annotation) || this.hitVolumes.has(annotation.id);
             marker.classList.toggle('inactive-game-target', this.interactionMode === 'game' && !this.isActiveGameTarget(annotation));
             marker.classList.toggle('found-game-target', this.foundAnnotationIds.has(annotation.id));
+            marker.classList.toggle('missing-hit-volume', this.interactionMode === 'game' && this.requiresMaskVolume(annotation) && !hasUsableVolume);
             marker.classList.toggle(
                 'visible-test-target',
-                this.interactionMode === 'game' && this.showHitboxes && this.isActiveGameTarget(annotation) && hasUsableVolume
+                this.interactionMode === 'game' && this.showHitboxes && this.isActiveGameTarget(annotation)
             );
         }
         this.scene.forceRender = true;
+    }
+
+    private hitboxDiagnosticDetails() {
+        const allTargetsMode = this.activeGameTargetIds.size === 0;
+        const activeAnnotations = this.annotations.filter(annotation => this.isActiveGameTarget(annotation));
+        const activeIds = activeAnnotations.map(annotation => annotation.id);
+        const missingVolumeIds = activeAnnotations
+        .filter(annotation => this.requiresMaskVolume(annotation) && !this.hitVolumes.has(annotation.id))
+        .map(annotation => annotation.id);
+
+        return {
+            mode: this.interactionMode,
+            showHitboxes: this.showHitboxes,
+            allTargetsMode,
+            annotations: this.annotations.length,
+            activeTargets: activeIds.length,
+            hitVolumes: this.hitVolumes.size,
+            missingVolumeIds
+        };
+    }
+
+    private emitDiagnostic(label: string, details?: Record<string, unknown>) {
+        if (!window.parent || window.parent === window) {
+            return;
+        }
+
+        window.parent.postMessage({
+            type: 'supersplat:diagnostic',
+            source: 'supersplat',
+            label,
+            details,
+            at: new Date().toISOString()
+        }, '*');
     }
 
     private syncMarkers() {
@@ -623,6 +661,10 @@ class SemanticAnnotationOverlay {
             }
 
             const volume = this.hitVolumes.get(annotation.id);
+            if (this.requiresMaskVolume(annotation) && !volume) {
+                continue;
+            }
+
             const world = this.annotationCenter(annotation);
             const radius = this.annotationHitRadius(annotation);
             const distance = surfacePoint ? new Vec3().sub2(world, surfacePoint).length() : Infinity;
@@ -688,6 +730,7 @@ class SemanticAnnotationOverlay {
         }
         this.syncMarkerClasses();
         this.update();
+        this.emitDiagnostic('semantic-hitboxes-built', this.hitboxDiagnosticDetails());
     }
 
     private shouldAbortHitVolumeBuild(generation: number) {
@@ -783,12 +826,12 @@ class SemanticAnnotationOverlay {
 
         if (matched) {
             this.events.fire('semanticAnnotations.activate', matched.id);
-            return { ok: true, annotationId: matched.id };
+            return { ok: true, annotationId: matched.id, ...this.hitboxDiagnosticDetails() };
         }
 
         const point = hit?.position ? [hit.position.x, hit.position.y, hit.position.z] : null;
         this.events.fire('semanticAnnotations.miss', point);
-        return { ok: false, point };
+        return { ok: false, point, ...this.hitboxDiagnosticDetails() };
     }
 
     private async captureAnchor() {
@@ -881,9 +924,28 @@ class SemanticAnnotationOverlay {
                 continue;
             }
 
+            let avatarWorldHeight = 1.65;
+            if (player.target) {
+                const headToTargetY = player.position[1] - player.target[1];
+                if (Number.isFinite(headToTargetY) && headToTargetY >= 0.85 && headToTargetY <= 2.35) {
+                    avatarWorldHeight = headToTargetY;
+                }
+            }
+
+            this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
+            this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
+
+            const headX = this.screenPos.x * clientWidth;
+            const headY = this.screenPos.y * clientHeight;
+            const feetY = this.multiplayerFeetScreenPos.y * clientHeight;
+            const projectedHeight = Math.abs(feetY - headY);
             const distance = Math.max(0.1, this.multiplayerDelta.sub2(this.multiplayerWorld, cameraPosition).length());
-            const scale = Math.max(0.52, Math.min(1.24, 1.75 / Math.sqrt(distance)));
-            marker.style.transform = `translate(${(this.screenPos.x * clientWidth).toFixed(1)}px, ${(this.screenPos.y * clientHeight).toFixed(1)}px) translate(-50%, -100%) scale(${scale.toFixed(3)})`;
+            const fallbackHeight = Math.max(82, Math.min(178, 220 / Math.sqrt(distance)));
+            const avatarHeight = Number.isFinite(projectedHeight) && projectedHeight >= 36 ? Math.max(82, Math.min(220, projectedHeight)) : fallbackHeight;
+
+            marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
+            marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
+            marker.style.transform = `translate(${headX.toFixed(1)}px, ${headY.toFixed(1)}px) translate(-50%, -14%)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
 
             if (player.target) {

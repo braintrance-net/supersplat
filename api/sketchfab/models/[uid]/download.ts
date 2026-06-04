@@ -1,4 +1,4 @@
-import { getEnv, getRequestUrl, handleOptions, sendJson, sendUpstream } from '../../../_proxy';
+import { getEnv, getRequestUrl, handleOptions, requireAllowedProxyRequest, sendJson, sendUpstream } from '../../../_proxy';
 
 const getUid = (req: any) => {
     const queryUid = req.query?.uid;
@@ -20,6 +20,9 @@ export default async function handler(req: any, res: any) {
     }
     if (req.method !== 'GET') {
         return sendJson(req, res, 405, { error: 'Method not allowed' });
+    }
+    if (!requireAllowedProxyRequest(req, res)) {
+        return;
     }
 
     const token = getEnv('SKETCHFAB_API_TOKEN')?.trim();
