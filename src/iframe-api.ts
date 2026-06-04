@@ -965,8 +965,8 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isSemanticLayerLoadMessage(event.data)) {
-            events.invoke('semanticAnnotations.loadLayer', event.data.layer);
             lastAutoSemanticLayerSignature = semanticLayerSignature(event.data.layer);
+            events.invoke('semanticAnnotations.loadLayer', event.data.layer);
             postSemanticLayer(source, event.origin, event.data.requestId);
         }
 
