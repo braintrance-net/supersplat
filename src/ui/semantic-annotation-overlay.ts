@@ -254,6 +254,7 @@ class SemanticAnnotationOverlay {
     private showHitboxes = false;
     private pointerDownPos: { x: number, y: number } | null = null;
     private hitVolumeGeneration = 0;
+    private lastClickCandidates: Array<Record<string, unknown>> = [];
 
     constructor(private readonly events: Events, private readonly scene: Scene, parent: HTMLElement) {
         this.container = document.createElement('div');
@@ -487,12 +488,15 @@ class SemanticAnnotationOverlay {
         return this.hitVolumes.get(annotation.id)?.radius ?? this.annotationRadius(annotation);
     }
 
-    private pointInsideVolume(point: Vec3, volume: MaskHitVolume) {
-        const margin = Math.max(0.04, volume.radius * 0.1);
+    private pointVolumeDistance(point: Vec3, volume: MaskHitVolume) {
         const dx = Math.max(volume.min.x - point.x, 0, point.x - volume.max.x);
         const dy = Math.max(volume.min.y - point.y, 0, point.y - volume.max.y);
         const dz = Math.max(volume.min.z - point.z, 0, point.z - volume.max.z);
-        return Math.sqrt(dx * dx + dy * dy + dz * dz) <= margin;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+    }
+
+    private pointInsideVolume(point: Vec3, volume: MaskHitVolume) {
+        return this.pointVolumeDistance(point, volume) <= Math.max(0.04, volume.radius * 0.12);
     }
 
     private rayVolumeDistance(ray: Ray, volume: MaskHitVolume) {
@@ -654,6 +658,7 @@ class SemanticAnnotationOverlay {
     private findCenterHit(surfacePoint?: Vec3 | null, centerRay?: Ray | null) {
         let bestAnnotation: SemanticAnnotation | null = null;
         let bestDistance = Infinity;
+        const candidates: Array<Record<string, unknown>> = [];
 
         for (const annotation of this.annotations) {
             if (!this.isActiveGameTarget(annotation)) {
@@ -671,24 +676,49 @@ class SemanticAnnotationOverlay {
 
             let hit = distance <= radius;
             let rank = distance;
+            let details: Record<string, unknown> = {
+                id: annotation.id,
+                label: annotation.label,
+                radius: Number(radius.toFixed(3)),
+                anchorDistance: Number(distance.toFixed(3))
+            };
             if (volume) {
                 const surfaceInside = surfacePoint ? this.pointInsideVolume(surfacePoint, volume) : false;
+                const surfaceVolumeDistance = surfacePoint ? this.pointVolumeDistance(surfacePoint, volume) : Infinity;
+                const surfaceNearMargin = Math.max(0.12, Math.min(0.55, volume.radius * 0.28));
+                const surfaceNearVolume = surfaceVolumeDistance <= surfaceNearMargin;
                 const rayDistance = centerRay ? this.rayVolumeDistance(centerRay, volume) : null;
                 const surfaceDistance = surfacePoint && centerRay ?
                     new Vec3().sub2(surfacePoint, centerRay.origin).length() :
                     Infinity;
-                const occlusionMargin = Math.max(0.08, volume.radius * 0.15);
+                const occlusionMargin = Math.max(0.14, Math.min(0.65, volume.radius * 0.28));
                 const blockedByCloserSurface = Boolean(
                     centerRay &&
                     surfacePoint &&
                     rayDistance !== null &&
                     !surfaceInside &&
+                    !surfaceNearVolume &&
                     surfaceDistance < rayDistance - occlusionMargin
                 );
 
-                hit = surfaceInside || (rayDistance !== null && !blockedByCloserSurface);
+                hit = surfaceInside || surfaceNearVolume || (rayDistance !== null && !blockedByCloserSurface);
                 rank = surfaceInside ? distance : rayDistance ?? distance;
+                details = {
+                    ...details,
+                    source: volume.source,
+                    samples: volume.sampleCount,
+                    surfaceInside,
+                    surfaceNearVolume,
+                    surfaceVolumeDistance: Number(surfaceVolumeDistance.toFixed(3)),
+                    surfaceNearMargin: Number(surfaceNearMargin.toFixed(3)),
+                    rayDistance: rayDistance === null ? null : Number(rayDistance.toFixed(3)),
+                    surfaceDistance: Number(surfaceDistance.toFixed(3)),
+                    occlusionMargin: Number(occlusionMargin.toFixed(3)),
+                    blockedByCloserSurface,
+                    hit
+                };
             }
+            candidates.push(details);
 
             if (hit && rank < bestDistance) {
                 bestAnnotation = annotation;
@@ -696,6 +726,9 @@ class SemanticAnnotationOverlay {
             }
         }
 
+        this.lastClickCandidates = candidates
+        .sort((a, b) => Number(a.rayDistance ?? a.surfaceVolumeDistance ?? a.anchorDistance ?? Infinity) - Number(b.rayDistance ?? b.surfaceVolumeDistance ?? b.anchorDistance ?? Infinity))
+        .slice(0, 5);
         return bestAnnotation;
     }
 
@@ -813,25 +846,28 @@ class SemanticAnnotationOverlay {
         await this.clickCenter();
     };
 
-    private async clickCenter() {
+    private async clickCenter(screenPoint?: [number, number]) {
         if (this.interactionMode !== 'game') {
             return { ok: false, reason: 'inactive' };
         }
 
+        const normalizedScreenPoint = screenPoint ?? [0.5, 0.5];
+        const x = Math.max(0, Math.min(1, normalizedScreenPoint[0]));
+        const y = Math.max(0, Math.min(1, normalizedScreenPoint[1]));
         const centerRay = new Ray();
         const { width, height } = this.scene.camera.targetSize;
-        this.scene.camera.getRay(width * 0.5, height * 0.5, centerRay);
-        const hit = await this.scene.camera.intersect(0.5, 0.5);
+        this.scene.camera.getRay(width * x, height * y, centerRay);
+        const hit = await this.scene.camera.intersect(x, y);
         const matched = this.findCenterHit(hit?.position ?? null, centerRay);
 
         if (matched) {
             this.events.fire('semanticAnnotations.activate', matched.id);
-            return { ok: true, annotationId: matched.id, ...this.hitboxDiagnosticDetails() };
+            return { ok: true, annotationId: matched.id, candidates: this.lastClickCandidates, ...this.hitboxDiagnosticDetails() };
         }
 
         const point = hit?.position ? [hit.position.x, hit.position.y, hit.position.z] : null;
         this.events.fire('semanticAnnotations.miss', point);
-        return { ok: false, point, ...this.hitboxDiagnosticDetails() };
+        return { ok: false, point, candidates: this.lastClickCandidates, ...this.hitboxDiagnosticDetails() };
     }
 
     private async captureAnchor() {

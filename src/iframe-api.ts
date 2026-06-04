@@ -223,6 +223,7 @@ interface WalkInputMessage {
 
 interface CrosshairClickMessage {
     type: typeof CROSSHAIR_CLICK;
+    screenPoint?: [number, number];
     requestId?: RequestId;
 }
 
@@ -236,6 +237,15 @@ const hasOptionalRequestId = (data: any) => (
     data.requestId === null ||
     typeof data.requestId === 'number' ||
     typeof data.requestId === 'string'
+);
+
+const hasOptionalScreenPoint = (data: any) => (
+    data.screenPoint === undefined ||
+    (
+        Array.isArray(data.screenPoint) &&
+        data.screenPoint.length === 2 &&
+        data.screenPoint.every((value: unknown) => typeof value === 'number' && Number.isFinite(value))
+    )
 );
 
 const isVec3Tuple = (value: unknown): value is Vec3Tuple => (
@@ -405,7 +415,7 @@ const isWalkInputMessage = (data: any): data is WalkInputMessage => {
 };
 
 const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
-    return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data);
+    return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data) && hasOptionalScreenPoint(data);
 };
 
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
@@ -956,7 +966,7 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isCrosshairClickMessage(event.data)) {
-            const result = await events.invoke('semanticAnnotations.clickCenter');
+            const result = await events.invoke('semanticAnnotations.clickCenter', event.data.screenPoint);
             postDiagnostic(source, event.origin, 'crosshair-click', result as Record<string, unknown>, event.data.requestId);
         }
 
@@ -1026,6 +1036,9 @@ const registerIframeApi = (events: Events) => {
                     events.fire('tool.walk');
                 }
             } else {
+                if (document.pointerLockElement) {
+                    document.exitPointerLock();
+                }
                 restoreGameModeTool();
             }
         }
