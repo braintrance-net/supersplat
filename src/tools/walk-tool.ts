@@ -29,7 +29,7 @@ const forwardVec = new Vec3();
 const rightVec = new Vec3();
 const moveVec = new Vec3();
 const screenPos = new Vec3();
-const COLLISION_SAMPLE_INTERVAL_MS = 90;
+const COLLISION_SAMPLE_INTERVAL_MS = 300;
 const COLLISION_REPORT_INTERVAL_MS = 800;
 const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 
@@ -50,6 +50,7 @@ class WalkTool {
     private externalVerticalVelocity = 0;
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
+    private lastArrowPositionAt = 0;
     private collisionProxy: CollisionProxyState = {
         pending: false,
         frontDistance: null,
@@ -420,7 +421,9 @@ class WalkTool {
             return;
         }
 
-        if (this.active) {
+        const now = performance.now();
+        if (this.active && now - this.lastArrowPositionAt >= 120) {
+            this.lastArrowPositionAt = now;
             this.positionArrows();
         }
         this.applyExternalWalkInput();
@@ -446,25 +449,26 @@ class WalkTool {
             west: new Vec3(groundCenter.x - arrowDist, floorY, groundCenter.z)
         };
 
-        const containerRect = this.container.getBoundingClientRect();
+        const width = this.container.clientWidth;
+        const height = this.container.clientHeight;
 
         // Project center to screen for computing arrow rotation angles
         const centerScreen = new Vec3();
         camera.worldToScreen(groundCenter, centerScreen);
-        const cx = centerScreen.x * containerRect.width;
-        const cy = centerScreen.y * containerRect.height;
+        const cx = centerScreen.x * width;
+        const cy = centerScreen.y * height;
 
         for (const [dir, el] of this.arrows) {
             const worldPos = positions[dir];
             camera.worldToScreen(worldPos, screenPos);
 
-            const px = screenPos.x * containerRect.width;
-            const py = screenPos.y * containerRect.height;
+            const px = screenPos.x * width;
+            const py = screenPos.y * height;
 
             // Hide if behind camera or outside viewport
             if (screenPos.z < 0 || screenPos.z > 1 ||
-                px < -24 || px > containerRect.width + 24 ||
-                py < -24 || py > containerRect.height + 24) {
+                px < -24 || px > width + 24 ||
+                py < -24 || py > height + 24) {
                 el.style.display = 'none';
                 continue;
             }

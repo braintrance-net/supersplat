@@ -17,6 +17,7 @@ class VoiceController {
     private events: Events;
     private commands: VoiceCommands;
     private apiKey: string;
+    private proxyBaseUrl: string;
 
     // Recording state
     private stream: MediaStream | null = null;
@@ -40,7 +41,8 @@ class VoiceController {
         this.events = events;
         const config = (window as any).supersplatConfig ?? {};
         this.apiKey = config.openaiApiKey || '';
-        this.commands = new VoiceCommands(events, this.apiKey);
+        this.proxyBaseUrl = this.resolveProxyBaseUrl(config.openAiProxyBaseUrl);
+        this.commands = new VoiceCommands(events, this.apiKey, this.proxyBaseUrl);
 
         events.on('voice.toggle', () => this.toggle());
         events.on('voice.toggleWakeWord', () => this.toggleWakeWord());
@@ -198,7 +200,7 @@ class VoiceController {
             console.log('[VoiceController] start() ignored — already recording');
             return;
         }
-        if (!this.apiKey) {
+        if (!this.hasOpenAiAccess()) {
             console.error('[VoiceController] No OpenAI API key configured');
             return;
         }
@@ -362,11 +364,9 @@ class VoiceController {
             formData.append('model', 'gpt-4o-mini-transcribe');
             formData.append('response_format', 'text');
 
-            let response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+            let response = await fetch(this.openAiTranscriptionsUrl(), {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiKey}`
-                },
+                headers: this.openAiFormHeaders(),
                 body: formData
             });
 
@@ -379,11 +379,9 @@ class VoiceController {
                 fallbackForm.append('model', 'whisper-1');
                 fallbackForm.append('response_format', 'text');
 
-                response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+                response = await fetch(this.openAiTranscriptionsUrl(), {
                     method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${this.apiKey}`
-                    },
+                    headers: this.openAiFormHeaders(),
                     body: fallbackForm
                 });
             }
@@ -417,6 +415,30 @@ class VoiceController {
             this.stream = null;
         }
         this.recorder = null;
+    }
+
+    private hasOpenAiAccess() {
+        return !!this.apiKey || !!this.proxyBaseUrl;
+    }
+
+    private resolveProxyBaseUrl(configured?: string) {
+        if (configured) {
+            return configured.replace(/\/$/, '');
+        }
+        if (/^board-demo-editor(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(window.location.hostname)) {
+            return window.location.origin;
+        }
+        return '';
+    }
+
+    private openAiTranscriptionsUrl() {
+        return this.proxyBaseUrl ?
+            `${this.proxyBaseUrl}/api/openai/audio/transcriptions` :
+            'https://api.openai.com/v1/audio/transcriptions';
+    }
+
+    private openAiFormHeaders() {
+        return this.proxyBaseUrl ? {} : { Authorization: `Bearer ${this.apiKey}` };
     }
 }
 

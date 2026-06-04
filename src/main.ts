@@ -73,6 +73,8 @@ declare global {
             boxerBackendUrl?: string;
             sam3BackendUrl?: string;
             semanticScanBackendUrl?: string;
+            sketchfabProxyBaseUrl?: string;
+            openAiProxyBaseUrl?: string;
             enableDevTools?: boolean;
             sketchfabApiToken?: string;
             openaiApiKey?: string;

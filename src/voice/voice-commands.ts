@@ -217,10 +217,12 @@ const ACTION_MAP: Record<string, string> = {
 class VoiceCommands {
     private events: Events;
     private apiKey: string;
+    private proxyBaseUrl: string;
 
-    constructor(events: Events, apiKey: string) {
+    constructor(events: Events, apiKey: string, proxyBaseUrl = '') {
         this.events = events;
         this.apiKey = apiKey;
+        this.proxyBaseUrl = proxyBaseUrl.replace(/\/$/, '');
     }
 
     async processTranscript(transcript: string): Promise<void> {
@@ -244,7 +246,7 @@ class VoiceCommands {
         }
 
         // Fall back to AI tool calling
-        if (!this.apiKey) {
+        if (!this.hasOpenAiAccess()) {
             console.warn('[VoiceCommands] No API key for AI commands');
             return;
         }
@@ -285,12 +287,9 @@ Rules:
         // "select X, rotate, translate, scale, clear, select Y, delete"
         // can hit 8+ calls if the model doesn't batch
         for (let round = 0; round < 12; round++) {
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            const response = await fetch(this.openAiChatUrl(), {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json'
-                },
+                headers: this.openAiJsonHeaders(),
                 body: JSON.stringify({
                     model: 'gpt-4o-mini',
                     messages,
@@ -668,6 +667,24 @@ Rules:
         pivot.end();
 
         return `Scaled by factor ${factor}`;
+    }
+
+    private hasOpenAiAccess() {
+        return !!this.apiKey || !!this.proxyBaseUrl;
+    }
+
+    private openAiChatUrl() {
+        return this.proxyBaseUrl ?
+            `${this.proxyBaseUrl}/api/openai/chat/completions` :
+            'https://api.openai.com/v1/chat/completions';
+    }
+
+    private openAiJsonHeaders() {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (!this.proxyBaseUrl) {
+            headers.Authorization = `Bearer ${this.apiKey}`;
+        }
+        return headers;
     }
 }
 
