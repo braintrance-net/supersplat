@@ -38,6 +38,7 @@ const ANNOTATION_ANCHOR_CAPTURED = 'supersplat:annotation-anchor-captured';
 const POINTER_LOOK = 'supersplat:pointer-look';
 const WALK_INPUT = 'supersplat:walk-input';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
+const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -58,6 +59,15 @@ type PresetState = {
 };
 
 type RequestId = number | string | null;
+type Vec3Tuple = [number, number, number];
+
+type MultiplayerPlayer = {
+    id: string;
+    label: string;
+    color?: string;
+    position: Vec3Tuple;
+    target?: Vec3Tuple;
+};
 
 interface IsSceneDirtyQuery {
     type: typeof IS_SCENE_DIRTY;
@@ -216,11 +226,22 @@ interface CrosshairClickMessage {
     requestId?: RequestId;
 }
 
+interface MultiplayerPlayersMessage {
+    type: typeof MULTIPLAYER_PLAYERS;
+    players: MultiplayerPlayer[];
+}
+
 const hasOptionalRequestId = (data: any) => (
     data.requestId === undefined ||
     data.requestId === null ||
     typeof data.requestId === 'number' ||
     typeof data.requestId === 'string'
+);
+
+const isVec3Tuple = (value: unknown): value is Vec3Tuple => (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every(item => typeof item === 'number' && Number.isFinite(item))
 );
 
 const isSceneDirtyQuery = (data: any): data is IsSceneDirtyQuery => {
@@ -385,6 +406,24 @@ const isWalkInputMessage = (data: any): data is WalkInputMessage => {
 
 const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
     return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data);
+};
+
+const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === MULTIPLAYER_PLAYERS &&
+        Array.isArray(data.players) &&
+        data.players.every((player: any) => (
+            player &&
+            typeof player === 'object' &&
+            typeof player.id === 'string' &&
+            typeof player.label === 'string' &&
+            (player.color === undefined || typeof player.color === 'string') &&
+            isVec3Tuple(player.position) &&
+            (player.target === undefined || isVec3Tuple(player.target))
+        ))
+    );
 };
 
 const normalizeOrigin = (value: string, base: string) => new URL(value, base).origin;
@@ -719,6 +758,18 @@ const registerIframeApi = (events: Events) => {
         }
     });
 
+    events.on('walk.collisionProxy', (details: Record<string, unknown>) => {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: DIAGNOSTIC,
+                source: 'supersplat',
+                label: 'walk-collision-proxy',
+                details,
+                at: new Date().toISOString()
+            }, '*');
+        }
+    });
+
     window.addEventListener('message', async (event: MessageEvent) => {
         const source = event.source as Window | null;
         if (!source) {
@@ -766,10 +817,16 @@ const registerIframeApi = (events: Events) => {
                     pointerLook: true,
                     walkInput: true,
                     thumbnailError: true,
-                    version: 3
+                    multiplayerPlayers: true,
+                    version: 4
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
+        }
+
+        if (isMultiplayerPlayersMessage(event.data)) {
+            events.fire('multiplayer.players', event.data.players);
+            return;
         }
 
         if (isCaptureThumbnailQuery(event.data)) {
@@ -961,6 +1018,7 @@ const registerIframeApi = (events: Events) => {
             let error: string | undefined;
             let rendered = false;
             resetGameModeState();
+            events.fire('multiplayer.players', []);
             postDiagnostic(source, event.origin, 'load-file-start', {
                 filename: event.data.filename,
                 byteLength: event.data.data?.byteLength ?? 0

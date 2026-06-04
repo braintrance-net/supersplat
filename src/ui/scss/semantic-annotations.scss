@@ -188,3 +188,170 @@
     font-size: 10px;
     line-height: 12px;
 }
+
+.multiplayer-avatar-marker {
+    --multiplayer-avatar-color: #53d6ff;
+    --multiplayer-avatar-aim-angle: 0deg;
+
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 58px;
+    height: 112px;
+    pointer-events: none;
+    transform-origin: 50% 100%;
+    will-change: transform;
+    filter: drop-shadow(0 14px 20px rgba(0, 0, 0, 0.5));
+}
+
+.multiplayer-avatar-shadow {
+    position: absolute;
+    left: 50%;
+    bottom: 2px;
+    width: 46px;
+    height: 13px;
+    border: 1px solid color-mix(in srgb, var(--multiplayer-avatar-color), transparent 45%);
+    border-radius: 50%;
+    background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0));
+    transform: translateX(-50%);
+}
+
+.multiplayer-avatar-aim {
+    position: absolute;
+    left: 50%;
+    top: 50px;
+    width: 38px;
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, var(--multiplayer-avatar-color), transparent);
+    opacity: 0;
+    transform: rotate(var(--multiplayer-avatar-aim-angle));
+    transform-origin: 0 50%;
+}
+
+.multiplayer-avatar-marker.has-target .multiplayer-avatar-aim {
+    opacity: 0.72;
+}
+
+.multiplayer-avatar-body {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 44px;
+    height: 94px;
+    transform: translateX(-50%);
+}
+
+.multiplayer-avatar-head,
+.multiplayer-avatar-chest,
+.multiplayer-avatar-arms,
+.multiplayer-avatar-legs {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+
+.multiplayer-avatar-head {
+    top: 4px;
+    width: 21px;
+    height: 24px;
+    border: 2px solid color-mix(in srgb, var(--multiplayer-avatar-color), white 24%);
+    border-radius: 999px 999px 65% 65%;
+    background:
+        linear-gradient(155deg, rgba(255, 255, 255, 0.52), transparent 36%),
+        linear-gradient(180deg, color-mix(in srgb, var(--multiplayer-avatar-color), white 16%), color-mix(in srgb, var(--multiplayer-avatar-color), black 24%));
+    box-shadow:
+        inset 0 -5px 0 rgba(0, 0, 0, 0.22),
+        0 0 18px color-mix(in srgb, var(--multiplayer-avatar-color), transparent 38%);
+}
+
+.multiplayer-avatar-chest {
+    top: 30px;
+    width: 28px;
+    height: 38px;
+    border: 2px solid color-mix(in srgb, var(--multiplayer-avatar-color), white 8%);
+    border-radius: 10px 10px 7px 7px;
+    background:
+        linear-gradient(145deg, rgba(255, 255, 255, 0.28), transparent 42%),
+        linear-gradient(180deg, color-mix(in srgb, var(--multiplayer-avatar-color), #f5f7ff 10%), color-mix(in srgb, var(--multiplayer-avatar-color), #05060a 38%));
+}
+
+.multiplayer-avatar-arms {
+    top: 36px;
+    width: 42px;
+    height: 25px;
+
+    &::before,
+    &::after {
+        position: absolute;
+        top: 0;
+        width: 8px;
+        height: 26px;
+        border: 1px solid color-mix(in srgb, var(--multiplayer-avatar-color), white 12%);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--multiplayer-avatar-color), #05060a 28%);
+        content: '';
+    }
+
+    &::before {
+        left: 4px;
+        transform: rotate(13deg);
+    }
+
+    &::after {
+        right: 4px;
+        transform: rotate(-13deg);
+    }
+}
+
+.multiplayer-avatar-legs {
+    top: 65px;
+    width: 27px;
+    height: 27px;
+
+    &::before,
+    &::after {
+        position: absolute;
+        top: 0;
+        width: 9px;
+        height: 29px;
+        border: 1px solid color-mix(in srgb, var(--multiplayer-avatar-color), white 10%);
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--multiplayer-avatar-color), #05060a 42%);
+        content: '';
+    }
+
+    &::before {
+        left: 3px;
+        transform: rotate(8deg);
+    }
+
+    &::after {
+        right: 3px;
+        transform: rotate(-8deg);
+    }
+}
+
+.multiplayer-avatar-label {
+    position: absolute;
+    left: 50%;
+    bottom: -4px;
+    display: grid;
+    min-width: 24px;
+    max-width: 54px;
+    height: 18px;
+    place-items: center;
+    overflow: hidden;
+    padding: 0 5px;
+    border: 1px solid color-mix(in srgb, var(--multiplayer-avatar-color), transparent 20%);
+    border-radius: 999px;
+    background: rgba(9, 10, 13, 0.84);
+    color: color-mix(in srgb, var(--multiplayer-avatar-color), white 24%);
+    font-family: monospace;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 18px;
+    text-overflow: ellipsis;
+    transform: translateX(-50%);
+    white-space: nowrap;
+}

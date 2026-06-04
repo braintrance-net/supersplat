@@ -15,11 +15,22 @@ type WalkInputState = {
     jump?: boolean;
 };
 
+type CollisionProxyState = {
+    pending: boolean;
+    frontDistance: number | null;
+    viewDistance: number;
+    blocked: boolean;
+    lastSampleAt: number;
+    lastReportAt: number;
+};
+
 const tmpVec = new Vec3();
 const forwardVec = new Vec3();
 const rightVec = new Vec3();
 const moveVec = new Vec3();
 const screenPos = new Vec3();
+const COLLISION_SAMPLE_INTERVAL_MS = 90;
+const COLLISION_REPORT_INTERVAL_MS = 800;
 
 class WalkTool {
     private events: Events;
@@ -38,6 +49,14 @@ class WalkTool {
     private externalVerticalVelocity = 0;
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
+    private collisionProxy: CollisionProxyState = {
+        pending: false,
+        frontDistance: null,
+        viewDistance: 0,
+        blocked: false,
+        lastSampleAt: 0,
+        lastReportAt: 0
+    };
 
     constructor(events: Events, scene: Scene, container: HTMLElement) {
         this.events = events;
@@ -269,6 +288,8 @@ class WalkTool {
         const focalPoint = camera.focalPoint;
         let changed = false;
 
+        this.updateCollisionProxy(moving && forwardAmount > 0);
+
         if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
             this.externalGroundY = focalPoint.y;
         }
@@ -289,6 +310,9 @@ class WalkTool {
             moveVec.set(0, 0, 0);
             moveVec.add(forwardVec.clone().mulScalar(forwardAmount));
             moveVec.add(rightVec.clone().mulScalar(rightAmount));
+            if (forwardAmount > 0 && this.collisionProxy.blocked) {
+                moveVec.sub(tmpVec.copy(forwardVec).mulScalar(forwardAmount));
+            }
 
             const moveLength = Math.hypot(moveVec.x, moveVec.z);
             if (moveLength > 0) {
@@ -296,6 +320,7 @@ class WalkTool {
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
                 focalPoint.add(moveVec);
+                this.clampToSceneBounds(focalPoint);
                 changed = true;
             }
         }
@@ -313,6 +338,73 @@ class WalkTool {
         if (changed) {
             camera.setFocalPoint(focalPoint, 0);
             this.scene.forceRender = true;
+        }
+    }
+
+    private updateCollisionProxy(enabled: boolean) {
+        const now = performance.now();
+        if (!enabled) {
+            if (this.collisionProxy.blocked) {
+                this.collisionProxy.blocked = false;
+                this.reportCollisionProxy(now, 'released');
+            }
+            return;
+        }
+        if (this.collisionProxy.pending || now - this.collisionProxy.lastSampleAt < COLLISION_SAMPLE_INTERVAL_MS) {
+            return;
+        }
+
+        const camera = this.camera;
+        const viewDistance = Math.max(0.001, camera.distance * camera.sceneRadius / camera.fovFactor);
+        this.collisionProxy.pending = true;
+        this.collisionProxy.lastSampleAt = now;
+        this.collisionProxy.viewDistance = viewDistance;
+
+        camera.intersect(0.5, 0.5).then((hit) => {
+            const distance = typeof hit?.distance === 'number' && Number.isFinite(hit.distance) ? hit.distance : null;
+            const clearance = Math.max(0.12, Math.min(0.9, viewDistance * 0.18));
+            const blocked = distance !== null && distance < viewDistance - clearance;
+            const changed = blocked !== this.collisionProxy.blocked;
+            this.collisionProxy.pending = false;
+            this.collisionProxy.frontDistance = distance;
+            this.collisionProxy.blocked = blocked;
+            if (changed || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.reportCollisionProxy(performance.now(), changed ? 'changed' : 'sampled');
+            }
+        }).catch((error: unknown) => {
+            this.collisionProxy.pending = false;
+            this.collisionProxy.frontDistance = null;
+            this.collisionProxy.blocked = false;
+            this.events.fire('walk.collisionProxy', {
+                ok: false,
+                error: error instanceof Error ? error.message : 'collision proxy sample failed'
+            });
+        });
+    }
+
+    private reportCollisionProxy(now: number, reason: string) {
+        this.collisionProxy.lastReportAt = now;
+        this.events.fire('walk.collisionProxy', {
+            ok: true,
+            reason,
+            blocked: this.collisionProxy.blocked,
+            frontDistance: this.collisionProxy.frontDistance === null ? null : Number(this.collisionProxy.frontDistance.toFixed(3)),
+            viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3))
+        });
+    }
+
+    private clampToSceneBounds(position: Vec3) {
+        const bound = this.scene.bound;
+        const margin = Math.max(0.05, Math.min(0.5, this.camera.sceneRadius * 0.02));
+        const minX = bound.center.x - bound.halfExtents.x + margin;
+        const maxX = bound.center.x + bound.halfExtents.x - margin;
+        const minZ = bound.center.z - bound.halfExtents.z + margin;
+        const maxZ = bound.center.z + bound.halfExtents.z - margin;
+        if (Number.isFinite(minX) && Number.isFinite(maxX) && minX < maxX) {
+            position.x = Math.max(minX, Math.min(maxX, position.x));
+        }
+        if (Number.isFinite(minZ) && Number.isFinite(maxZ) && minZ < maxZ) {
+            position.z = Math.max(minZ, Math.min(maxZ, position.z));
         }
     }
 
