@@ -452,7 +452,7 @@ class WalkTool {
         }
 
         const now = performance.now();
-        if (this.active && now - this.lastArrowPositionAt >= 120) {
+        if (this.active && !this.embeddedControls && this.overlay && now - this.lastArrowPositionAt >= 120) {
             this.lastArrowPositionAt = now;
             this.positionArrows();
         }
