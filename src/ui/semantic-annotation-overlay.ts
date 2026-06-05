@@ -347,10 +347,6 @@ class SemanticAnnotationOverlay {
     private pointerDownPos: { x: number, y: number } | null = null;
     private hitVolumeGeneration = 0;
     private lastClickCandidates: Array<Record<string, unknown>> = [];
-    private clickPrewarmTimer: number | null = null;
-    private clickPrewarmInFlight: Promise<void> | null = null;
-    private clickPrewarmGeneration = 0;
-    private lastClickPrewarmAt = 0;
     private sceneGeometryRevision = 0;
     private hitVolumeRebuildTimer: number | null = null;
 
@@ -398,7 +394,6 @@ class SemanticAnnotationOverlay {
         this.events.off('update', this.onSceneUpdate, this);
         this.events.off('prerender', this.drawHitVolumes, this);
         this.events.off('postrender', this.update, this);
-        this.cancelClickPrewarm();
         if (this.hitVolumeRebuildTimer !== null) {
             window.clearTimeout(this.hitVolumeRebuildTimer);
             this.hitVolumeRebuildTimer = null;
@@ -449,10 +444,8 @@ class SemanticAnnotationOverlay {
         this.container.classList.toggle('game-mode', mode === 'game');
         if (mode !== 'game') {
             this.setShowHitboxes(false);
-            this.cancelClickPrewarm();
         } else {
             this.preloadMultiplayerAvatarAsset({ reason: 'game-mode' });
-            this.scheduleClickPrewarm('game-mode');
         }
         this.syncMarkerClasses();
     }
@@ -517,7 +510,6 @@ class SemanticAnnotationOverlay {
         this.activeGameTargetIds = nextTargetIds;
         this.syncMarkerClasses();
         this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
-        this.scheduleClickPrewarm('game-targets');
     }
 
     private setFoundTargets(annotationIds?: string[]) {
@@ -606,73 +598,6 @@ class SemanticAnnotationOverlay {
             details,
             at: new Date().toISOString()
         }, '*');
-    }
-
-    private cancelClickPrewarm() {
-        this.clickPrewarmGeneration += 1;
-        if (this.clickPrewarmTimer !== null) {
-            window.clearTimeout(this.clickPrewarmTimer);
-            this.clickPrewarmTimer = null;
-        }
-    }
-
-    private async settleClickPrewarmBeforeClick() {
-        if (this.clickPrewarmTimer !== null) {
-            window.clearTimeout(this.clickPrewarmTimer);
-            this.clickPrewarmTimer = null;
-            this.clickPrewarmGeneration += 1;
-        }
-
-        const inFlight = this.clickPrewarmInFlight;
-        if (inFlight) {
-            await inFlight.catch((_error: unknown): undefined => undefined);
-        }
-    }
-
-    private scheduleClickPrewarm(reason: string) {
-        if (this.interactionMode !== 'game') {
-            return;
-        }
-
-        this.cancelClickPrewarm();
-        const generation = this.clickPrewarmGeneration;
-        this.clickPrewarmTimer = window.setTimeout(() => {
-            this.clickPrewarmTimer = null;
-            if (generation !== this.clickPrewarmGeneration || this.interactionMode !== 'game') {
-                return;
-            }
-
-            const startedAt = performance.now();
-            const prewarmTask = this.scene.camera.intersect(0.5, 0.5).then((hit) => {
-                if (generation !== this.clickPrewarmGeneration || this.interactionMode !== 'game') {
-                    return;
-                }
-
-                const prewarmMs = performance.now() - startedAt;
-                this.lastClickPrewarmAt = performance.now();
-                this.emitDiagnostic('crosshair-intersect-prewarm', {
-                    reason,
-                    ok: Boolean(hit?.position),
-                    prewarmMs: Number(prewarmMs.toFixed(1)),
-                    ...this.hitboxDiagnosticDetails()
-                });
-            }).catch((error: unknown) => {
-                if (generation !== this.clickPrewarmGeneration || this.interactionMode !== 'game') {
-                    return;
-                }
-                this.emitDiagnostic('crosshair-intersect-prewarm', {
-                    reason,
-                    ok: false,
-                    error: error instanceof Error ? error.message : 'prewarm failed',
-                    ...this.hitboxDiagnosticDetails()
-                });
-            }).finally(() => {
-                if (this.clickPrewarmInFlight === prewarmTask) {
-                    this.clickPrewarmInFlight = null;
-                }
-            });
-            this.clickPrewarmInFlight = prewarmTask;
-        }, 120);
     }
 
     private onSceneUpdate(deltaTime = 1 / 60) {
@@ -1547,7 +1472,6 @@ class SemanticAnnotationOverlay {
             built,
             buildMs: Number((performance.now() - startedAt).toFixed(1))
         });
-        this.scheduleClickPrewarm('hitboxes-built');
     }
 
     private shouldAbortHitVolumeBuild(generation: number) {
@@ -1660,7 +1584,6 @@ class SemanticAnnotationOverlay {
         const centerRay = new Ray();
         const { width, height } = this.scene.camera.targetSize;
         this.scene.camera.getRay(width * x, height * y, centerRay);
-        await this.settleClickPrewarmBeforeClick();
         const intersectStartedAt = performance.now();
         const hit = await this.scene.camera.intersect(x, y);
         const intersectMs = performance.now() - intersectStartedAt;
@@ -1673,8 +1596,7 @@ class SemanticAnnotationOverlay {
             hasSurfaceHit: Boolean(hit?.position),
             intersectMs: Number(intersectMs.toFixed(1)),
             matchMs: Number(matchMs.toFixed(1)),
-            clickEvalMs: Number(clickEvalMs.toFixed(1)),
-            prewarmAgeMs: this.lastClickPrewarmAt > 0 ? Number((performance.now() - this.lastClickPrewarmAt).toFixed(1)) : null
+            clickEvalMs: Number(clickEvalMs.toFixed(1))
         };
 
         if (matched) {
