@@ -572,8 +572,8 @@ class SemanticAnnotationOverlay {
     private setupMultiplayerAvatarAnimation(entity: Entity, resource: MultiplayerAvatarContainer): MultiplayerAvatarAnimationSetup {
         const animations = resource.animations ?? [];
         const animationNames = animations.map(animation => animation.name);
-        const idle = animations.find(animation => /idle/i.test(animation.name))?.resource;
-        const run = animations.find(animation => /run/i.test(animation.name))?.resource;
+        const idle = animations.find(animation => /idle/i.test(animation.name))?.resource ?? animations[0]?.resource;
+        const run = animations.find(animation => /run/i.test(animation.name))?.resource ?? animations[1]?.resource;
         if (!idle || !run) {
             return {
                 animationNames,
