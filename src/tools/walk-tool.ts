@@ -506,6 +506,7 @@ class WalkTool {
         this.events.on('walk.input', this.onExternalWalkInput, this);
         this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
         this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
+        this.events.on('walk.collisionMeshClear', this.clearCollisionMesh, this);
     }
 
     activate() {
@@ -969,6 +970,21 @@ class WalkTool {
                 error: error instanceof Error ? error.message : 'collision mesh load failed'
             });
         }
+    }
+
+    private clearCollisionMesh(details: Record<string, unknown> = {}) {
+        this.collisionMeshAbort?.abort();
+        this.collisionMeshAbort = null;
+        this.collisionMesh = null;
+        this.collisionMeshUrl = null;
+        this.collisionMeshKey = null;
+        this.collisionMeshBuffer = null;
+        this.collisionMeshBufferUrl = null;
+        this.events.fire('walk.collisionMesh', {
+            ok: true,
+            reason: 'cleared',
+            ...details
+        });
     }
 
     private reportCollisionMesh(now: number, reason: string, details: Record<string, unknown>) {
