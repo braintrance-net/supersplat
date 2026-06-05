@@ -62,6 +62,7 @@ const COLLISION_MESH_STEP_HEIGHT = 0.32;
 const COLLISION_MESH_HEAD_CLEARANCE = 0.18;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
 const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
+const COLLISION_MESH_SWEEP_STEP = 0.05;
 
 type CollisionTriangle = {
     ax: number;
@@ -1096,6 +1097,8 @@ class WalkTool {
             blocked: true,
             triangle: hit?.triangle ?? null,
             anchor: hit?.anchor ?? null,
+            sweepStep: hit?.step ?? null,
+            sweepSteps: hit?.steps ?? null,
             headX: Number(blockedHead.x.toFixed(3)),
             headY: Number(blockedHead.y.toFixed(3)),
             headZ: Number(blockedHead.z.toFixed(3)),
@@ -1106,15 +1109,21 @@ class WalkTool {
     }
 
     private firstCollisionMeshHit(mesh: WalkCollisionMesh, anchors: Vec3[], move: Vec3) {
-        for (let i = 0; i < anchors.length; i += 1) {
-            const head = anchors[i].clone().add(move);
-            const hit = mesh.intersectsPlayerCapsule(head);
-            if (hit.blocked) {
-                return {
-                    anchor: `player-${i}`,
-                    head,
-                    triangle: hit.triangle
-                };
+        const stepCount = Math.max(1, Math.ceil(Math.hypot(move.x, move.z) / COLLISION_MESH_SWEEP_STEP));
+        for (let step = 1; step <= stepCount; step += 1) {
+            const scale = step / stepCount;
+            for (let i = 0; i < anchors.length; i += 1) {
+                const head = anchors[i].clone().add(tmpVec.copy(move).mulScalar(scale));
+                const hit = mesh.intersectsPlayerCapsule(head);
+                if (hit.blocked) {
+                    return {
+                        anchor: `player-${i}`,
+                        head,
+                        step,
+                        steps: stepCount,
+                        triangle: hit.triangle
+                    };
+                }
             }
         }
         return null;
