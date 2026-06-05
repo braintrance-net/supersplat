@@ -1087,36 +1087,28 @@ class WalkTool {
 
         const now = performance.now();
         const fullMove = desiredMove.clone();
-        const candidates = [
-            { reason: 'clear', move: fullMove },
-            { reason: 'slide-x', move: new Vec3(fullMove.x, 0, 0) },
-            { reason: 'slide-z', move: new Vec3(0, 0, fullMove.z) }
-        ];
 
-        for (const candidate of candidates) {
-            if (Math.hypot(candidate.move.x, candidate.move.z) <= 0.00001) {
-                continue;
-            }
-
-            const hit = this.firstCollisionMeshHit(mesh, bodies, candidate.move);
-            if (!hit) {
-                this.reportCollisionMesh(now, candidate.reason, {
-                    blocked: false,
-                    body: bodies.length,
-                    headX: Number(bodies[0].head.x.toFixed(3)),
-                    headY: Number(bodies[0].head.y.toFixed(3)),
-                    headZ: Number(bodies[0].head.z.toFixed(3)),
-                    feetY: Number((bodies[0].head.y - bodies[0].height).toFixed(3)),
-                    radius: Number(bodies[0].radius.toFixed(3)),
-                    playerHeight: Number(bodies[0].height.toFixed(3)),
-                    moveX: Number(candidate.move.x.toFixed(3)),
-                    moveZ: Number(candidate.move.z.toFixed(3))
-                });
-                return candidate.move;
-            }
+        if (Math.hypot(fullMove.x, fullMove.z) <= 0.00001) {
+            return fullMove;
         }
 
         const hit = this.firstCollisionMeshHit(mesh, bodies, fullMove);
+        if (!hit) {
+            this.reportCollisionMesh(now, 'clear', {
+                blocked: false,
+                body: bodies.length,
+                headX: Number(bodies[0].head.x.toFixed(3)),
+                headY: Number(bodies[0].head.y.toFixed(3)),
+                headZ: Number(bodies[0].head.z.toFixed(3)),
+                feetY: Number((bodies[0].head.y - bodies[0].height).toFixed(3)),
+                radius: Number(bodies[0].radius.toFixed(3)),
+                playerHeight: Number(bodies[0].height.toFixed(3)),
+                moveX: Number(fullMove.x.toFixed(3)),
+                moveZ: Number(fullMove.z.toFixed(3))
+            });
+            return fullMove;
+        }
+
         const blockedBody = hit?.body ?? {
             ...bodies[0],
             head: bodies[0].head.clone().add(fullMove)
