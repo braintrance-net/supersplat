@@ -81,8 +81,17 @@ class WalkCollisionGrid {
 
     private readonly buildStartedAt: number;
 
+    private static transformSignature(splat: Splat) {
+        const data = splat.entity.getWorldTransform().data;
+        let signature = '';
+        for (let i = 0; i < data.length; i += 1) {
+            signature += `${data[i].toFixed(4)},`;
+        }
+        return signature;
+    }
+
     static signatureForSplats(splats: Splat[]) {
-        return splats.map(splat => `${splat.uid}:${splat.numSplats}:${splat.changedCounter}`).join('|');
+        return splats.map(splat => `${splat.uid}:${splat.numSplats}:${splat.changedCounter}:${WalkCollisionGrid.transformSignature(splat)}`).join('|');
     }
 
     static build(scene: Scene) {

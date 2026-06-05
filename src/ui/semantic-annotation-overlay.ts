@@ -653,6 +653,8 @@ class SemanticAnnotationOverlay {
                 for (const marker of this.multiplayerMarkers.values()) {
                     this.updateMultiplayerMarkerAvatarState(marker);
                 }
+                this.update();
+                this.scene.forceRender = true;
                 return;
             }
 
