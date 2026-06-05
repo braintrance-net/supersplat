@@ -351,6 +351,8 @@ class SemanticAnnotationOverlay {
     private clickPrewarmInFlight: Promise<void> | null = null;
     private clickPrewarmGeneration = 0;
     private lastClickPrewarmAt = 0;
+    private sceneGeometryRevision = 0;
+    private hitVolumeRebuildTimer: number | null = null;
 
     constructor(private readonly events: Events, private readonly scene: Scene, parent: HTMLElement) {
         this.container = document.createElement('div');
@@ -364,6 +366,10 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
         events.on('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
+        events.on('scene.elementAdded', this.onSceneGeometryChanged, this);
+        events.on('scene.elementRemoved', this.onSceneGeometryChanged, this);
+        events.on('splat.positionsChanged', this.onSceneGeometryChanged, this);
+        events.on('splat.stateChanged', this.onSceneGeometryChanged, this);
         events.on('update', this.onSceneUpdate, this);
         events.on('prerender', this.drawHitVolumes, this);
         events.on('postrender', this.update, this);
@@ -381,10 +387,18 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
         this.events.off('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
+        this.events.off('scene.elementAdded', this.onSceneGeometryChanged, this);
+        this.events.off('scene.elementRemoved', this.onSceneGeometryChanged, this);
+        this.events.off('splat.positionsChanged', this.onSceneGeometryChanged, this);
+        this.events.off('splat.stateChanged', this.onSceneGeometryChanged, this);
         this.events.off('update', this.onSceneUpdate, this);
         this.events.off('prerender', this.drawHitVolumes, this);
         this.events.off('postrender', this.update, this);
         this.cancelClickPrewarm();
+        if (this.hitVolumeRebuildTimer !== null) {
+            window.clearTimeout(this.hitVolumeRebuildTimer);
+            this.hitVolumeRebuildTimer = null;
+        }
         this.container.parentElement?.removeEventListener('pointerdown', this.onPointerDown);
         this.container.parentElement?.removeEventListener('pointerup', this.onPointerUp);
         this.container.remove();
@@ -401,6 +415,25 @@ class SemanticAnnotationOverlay {
         this.annotations = annotations;
         this.syncMarkers();
         this.rebuildHitVolumes(annotations).catch((_error: unknown): undefined => undefined);
+        this.scene.forceRender = true;
+    }
+
+    private onSceneGeometryChanged() {
+        this.sceneGeometryRevision += 1;
+        this.hitVolumeGeneration += 1;
+        this.hitVolumes.clear();
+        this.hitVolumeSourceSignatures.clear();
+        if (this.hitVolumeRebuildTimer !== null) {
+            window.clearTimeout(this.hitVolumeRebuildTimer);
+        }
+        this.hitVolumeRebuildTimer = window.setTimeout(() => {
+            this.hitVolumeRebuildTimer = null;
+            if (this.annotations.length === 0) {
+                return;
+            }
+            this.rebuildHitVolumes(this.annotations).catch((_error: unknown): undefined => undefined);
+        }, 0);
+        this.syncMarkerClasses();
         this.scene.forceRender = true;
     }
 
@@ -1461,6 +1494,7 @@ class SemanticAnnotationOverlay {
         const generation = ++this.hitVolumeGeneration;
         const startedAt = performance.now();
         const nextHitVolumes = new Map<string, MaskHitVolume>();
+        const nextHitVolumeSourceSignatures = new Map<string, string>();
         let attempted = 0;
         let built = 0;
 
@@ -1486,7 +1520,7 @@ class SemanticAnnotationOverlay {
             if (volume) {
                 built += 1;
                 nextHitVolumes.set(annotation.id, volume);
-                this.hitVolumeSourceSignatures.set(annotation.id, signature);
+                nextHitVolumeSourceSignatures.set(annotation.id, signature);
             }
         }
 
@@ -1497,10 +1531,9 @@ class SemanticAnnotationOverlay {
         for (const [id, volume] of nextHitVolumes) {
             this.hitVolumes.set(id, volume);
         }
-        for (const id of Array.from(this.hitVolumeSourceSignatures.keys())) {
-            if (!this.hitVolumes.has(id)) {
-                this.hitVolumeSourceSignatures.delete(id);
-            }
+        this.hitVolumeSourceSignatures.clear();
+        for (const [id, signature] of nextHitVolumeSourceSignatures) {
+            this.hitVolumeSourceSignatures.set(id, signature);
         }
         this.syncMarkerClasses();
         this.update();
@@ -1523,6 +1556,7 @@ class SemanticAnnotationOverlay {
             maskSrc,
             position: annotation.position,
             radius: annotation.radius,
+            sceneGeometryRevision: this.sceneGeometryRevision,
             sourceCamera: annotation.source?.camera,
             targetImage: {
                 width: annotation.targetImage?.width,
