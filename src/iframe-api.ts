@@ -802,6 +802,7 @@ const registerIframeApi = (events: Events) => {
     };
 
     const resetGameModeState = () => {
+        lastGameModeSignature = '';
         events.fire('walk.embeddedControls', false);
         resetPointerLookState();
         restoreGameModeTool();
