@@ -92,6 +92,15 @@ type MultiplayerAnimComponent = {
     rebind: () => void;
 };
 
+type MarkerRenderState = {
+    hidden: boolean;
+    transform: string;
+    hitboxSize: string;
+    maskVolumeTarget: boolean;
+    inactiveGameTarget: boolean;
+    foundGameTarget: boolean;
+};
+
 const OCCLUSION_CELL_PX = 4;
 const OCCLUSION_FRAC_OF_DEPTH = 0.015;
 const OCCLUSION_MIN_M = 0.015;
@@ -299,6 +308,7 @@ class SemanticAnnotationOverlay {
     private readonly container: HTMLDivElement;
     private readonly markers = new Map<string, HTMLButtonElement>();
     private readonly screenPos = new Vec3();
+    private readonly markerDistanceDelta = new Vec3();
     private readonly multiplayerWorld = new Vec3();
     private readonly multiplayerFeetWorld = new Vec3();
     private readonly multiplayerFeetScreenPos = new Vec3();
@@ -307,6 +317,7 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerTargetScreenPos = new Vec3();
     private readonly captureViewMatrix = new Mat4();
     private readonly hitVolumes = new Map<string, MaskHitVolume>();
+    private readonly markerRenderStates = new Map<string, MarkerRenderState>();
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
     private readonly multiplayerAvatarInstances = new Map<string, MultiplayerAvatarInstance>();
@@ -362,6 +373,7 @@ class SemanticAnnotationOverlay {
         this.container.parentElement?.removeEventListener('pointerup', this.onPointerUp);
         this.container.remove();
         this.markers.clear();
+        this.markerRenderStates.clear();
         this.multiplayerMarkers.clear();
         for (const avatar of this.multiplayerAvatarInstances.values()) {
             avatar.entity.destroy();
@@ -453,6 +465,7 @@ class SemanticAnnotationOverlay {
     }
 
     private syncMarkerClasses() {
+        let changed = false;
         for (const annotation of this.annotations) {
             const marker = this.markers.get(annotation.id);
             if (!marker) {
@@ -460,15 +473,18 @@ class SemanticAnnotationOverlay {
             }
 
             const hasUsableVolume = !this.requiresMaskVolume(annotation) || this.hitVolumes.has(annotation.id);
-            marker.classList.toggle('inactive-game-target', this.interactionMode === 'game' && !this.isActiveGameTarget(annotation));
-            marker.classList.toggle('found-game-target', this.foundAnnotationIds.has(annotation.id));
-            marker.classList.toggle('missing-hit-volume', this.interactionMode === 'game' && this.requiresMaskVolume(annotation) && !hasUsableVolume);
-            marker.classList.toggle(
+            changed = this.setMarkerClass(marker, 'inactive-game-target', this.interactionMode === 'game' && !this.isActiveGameTarget(annotation)) || changed;
+            changed = this.setMarkerClass(marker, 'found-game-target', this.foundAnnotationIds.has(annotation.id)) || changed;
+            changed = this.setMarkerClass(marker, 'missing-hit-volume', this.interactionMode === 'game' && this.requiresMaskVolume(annotation) && !hasUsableVolume) || changed;
+            changed = this.setMarkerClass(
+                marker,
                 'visible-test-target',
                 this.interactionMode === 'game' && this.showHitboxes && this.isActiveGameTarget(annotation)
-            );
+            ) || changed;
         }
-        this.scene.forceRender = true;
+        if (changed) {
+            this.scene.forceRender = true;
+        }
     }
 
     private hitboxDiagnosticDetails() {
@@ -828,6 +844,7 @@ class SemanticAnnotationOverlay {
             if (!ids.has(id)) {
                 marker.remove();
                 this.markers.delete(id);
+                this.markerRenderStates.delete(id);
             }
         }
 
@@ -874,6 +891,59 @@ class SemanticAnnotationOverlay {
         return this.interactionMode !== 'game' ||
             this.foundAnnotationIds.has(annotation.id) ||
             (this.showHitboxes && this.isActiveGameTarget(annotation));
+    }
+
+    private shouldUpdateAnnotationMarker(annotation: SemanticAnnotation) {
+        return this.interactionMode !== 'game' || (this.showHitboxes && this.isActiveGameTarget(annotation));
+    }
+
+    private setMarkerClass(marker: HTMLElement, className: string, enabled: boolean) {
+        if (marker.classList.contains(className) === enabled) {
+            return false;
+        }
+        marker.classList.toggle(className, enabled);
+        return true;
+    }
+
+    private setMarkerHidden(id: string, marker: HTMLElement, hidden: boolean) {
+        const previous = this.markerRenderStates.get(id);
+        if (previous?.hidden === hidden) {
+            return;
+        }
+        marker.hidden = hidden;
+        this.markerRenderStates.set(id, {
+            hidden,
+            transform: previous?.transform ?? '',
+            hitboxSize: previous?.hitboxSize ?? '',
+            maskVolumeTarget: previous?.maskVolumeTarget ?? false,
+            inactiveGameTarget: previous?.inactiveGameTarget ?? false,
+            foundGameTarget: previous?.foundGameTarget ?? false
+        });
+    }
+
+    private updateMarkerRenderState(id: string, marker: HTMLElement, state: Omit<MarkerRenderState, 'hidden'>) {
+        const previous = this.markerRenderStates.get(id);
+        if (previous?.transform !== state.transform) {
+            marker.style.transform = state.transform;
+        }
+        if (previous?.hitboxSize !== state.hitboxSize) {
+            marker.style.setProperty('--semantic-hitbox-size', state.hitboxSize);
+        }
+        if (previous?.maskVolumeTarget !== state.maskVolumeTarget) {
+            marker.classList.toggle('mask-volume-target', state.maskVolumeTarget);
+        }
+        if (previous?.inactiveGameTarget !== state.inactiveGameTarget) {
+            marker.classList.toggle('inactive-game-target', state.inactiveGameTarget);
+        }
+        if (previous?.foundGameTarget !== state.foundGameTarget) {
+            marker.classList.toggle('found-game-target', state.foundGameTarget);
+        }
+        marker.style.removeProperty('--semantic-hitbox-width');
+        marker.style.removeProperty('--semantic-hitbox-height');
+        this.markerRenderStates.set(id, {
+            hidden: false,
+            ...state
+        });
     }
 
     private requiresMaskVolume(annotation: SemanticAnnotation) {
@@ -1439,7 +1509,7 @@ class SemanticAnnotationOverlay {
             const world = this.annotationCenter(annotation);
             this.scene.camera.worldToScreen(world, this.screenPos);
 
-            const visible =
+            const visible = this.shouldUpdateAnnotationMarker(annotation) &&
                 this.screenPos.z >= 0 &&
                 this.screenPos.z <= 1 &&
                 this.screenPos.x >= -0.05 &&
@@ -1447,20 +1517,23 @@ class SemanticAnnotationOverlay {
                 this.screenPos.y >= -0.05 &&
                 this.screenPos.y <= 1.05;
 
-            marker.hidden = !visible;
-            if (visible) {
-                const volume = this.hitVolumes.get(annotation.id);
-                marker.style.transform = `translate(${(this.screenPos.x * clientWidth).toFixed(1)}px, ${(this.screenPos.y * clientHeight).toFixed(1)}px)`;
-                const radius = this.annotationHitRadius(annotation);
-                const distance = Math.max(0.1, new Vec3().sub2(world, cameraPosition).length());
-                const radiusPx = Math.max(18, Math.min(190, radius / distance * clientHeight * 0.55));
-                marker.style.setProperty('--semantic-hitbox-size', `${radiusPx.toFixed(1)}px`);
-                marker.style.removeProperty('--semantic-hitbox-width');
-                marker.style.removeProperty('--semantic-hitbox-height');
-                marker.classList.toggle('mask-volume-target', volume !== undefined && this.shouldShowVolume(annotation));
-                marker.classList.toggle('inactive-game-target', this.interactionMode === 'game' && !this.isActiveGameTarget(annotation));
-                marker.classList.toggle('found-game-target', this.foundAnnotationIds.has(annotation.id));
+            this.setMarkerHidden(annotation.id, marker, !visible);
+            if (!visible) {
+                continue;
             }
+
+            const volume = this.hitVolumes.get(annotation.id);
+            const transform = `translate(${(this.screenPos.x * clientWidth).toFixed(1)}px, ${(this.screenPos.y * clientHeight).toFixed(1)}px)`;
+            const radius = this.annotationHitRadius(annotation);
+            const distance = Math.max(0.1, this.markerDistanceDelta.sub2(world, cameraPosition).length());
+            const radiusPx = Math.max(18, Math.min(190, radius / distance * clientHeight * 0.55));
+            this.updateMarkerRenderState(annotation.id, marker, {
+                transform,
+                hitboxSize: `${radiusPx.toFixed(1)}px`,
+                maskVolumeTarget: volume !== undefined && this.shouldShowVolume(annotation),
+                inactiveGameTarget: this.interactionMode === 'game' && !this.isActiveGameTarget(annotation),
+                foundGameTarget: this.foundAnnotationIds.has(annotation.id)
+            });
         }
 
         this.updateMultiplayerPlayers(clientWidth, clientHeight, cameraPosition);
