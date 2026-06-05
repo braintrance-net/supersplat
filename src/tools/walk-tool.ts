@@ -1001,6 +1001,18 @@ class WalkTool {
             if (meshKey !== this.collisionMeshKey) {
                 return;
             }
+            if (mesh.blockingTriangleCount === 0) {
+                this.collisionMesh = null;
+                this.events.fire('walk.collisionMesh', {
+                    ok: false,
+                    reason: 'empty',
+                    url: details.url,
+                    requestId: details.requestId ?? null,
+                    byteLength: buffer.byteLength,
+                    parseMs
+                });
+                return;
+            }
             this.collisionMesh = mesh;
             this.events.fire('walk.collisionMesh', {
                 ok: true,
@@ -1130,11 +1142,9 @@ class WalkTool {
     }
 
     private playerCollisionAnchors(camera = this.camera) {
-        const target = camera.focalPoint;
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        const eyeY = target.y + forwardVec.y * distance;
-        return [new Vec3(target.x, eyeY, target.z)];
+        return [camera.focalPoint.add(forwardVec.clone().mulScalar(distance))];
     }
 
     private updateCollisionProxy(enabled: boolean) {
