@@ -229,8 +229,7 @@ body.time-trial-game-mode {
     }
 
     #semantic-annotation-overlay:not(.show-hitboxes) {
-        .semantic-annotation-marker,
-        .semantic-annotation-hitbox,
+        .semantic-annotation-marker:not(.found-game-target),
         .semantic-annotation-pin,
         .semantic-annotation-body {
             display: none !important;

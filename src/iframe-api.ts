@@ -788,6 +788,7 @@ const registerIframeApi = (events: Events) => {
         resetPointerLookState();
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
+        document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
     };
 
     const semanticLayerSignature = (layer: Pick<SemanticLayer, 'annotations'> | Partial<SemanticLayer>) => JSON.stringify((layer.annotations ?? []).map(annotation => ({
