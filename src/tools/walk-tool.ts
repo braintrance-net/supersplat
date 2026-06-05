@@ -657,7 +657,10 @@ class WalkTool {
     }
 
     private onEmbeddedKey(event: KeyboardEvent, pressed: boolean) {
-        if (!this.embeddedControls || !this.active || this.isTypingTarget(event.target)) {
+        if (!this.embeddedControls || !this.active) {
+            return;
+        }
+        if (pressed && this.isTypingTarget(event.target)) {
             return;
         }
 
