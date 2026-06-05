@@ -51,7 +51,10 @@ class WalkTool {
     private onPointerDownBound: ((e: PointerEvent) => void) | null = null;
     private onPointerLockMouseMoveBound: ((e: MouseEvent) => void) | null = null;
     private onPointerLockChangeBound: (() => void) | null = null;
+    private onEmbeddedKeyDownBound: ((e: KeyboardEvent) => void) | null = null;
+    private onEmbeddedKeyUpBound: ((e: KeyboardEvent) => void) | null = null;
     private externalWalkInput: WalkInputState = {};
+    private embeddedKeyboardInput: WalkInputState = {};
     private lastExternalMoveAt = performance.now();
     private lastLookAt = 0;
     private externalVerticalVelocity = 0;
@@ -82,6 +85,8 @@ class WalkTool {
         this.active = true;
         if (!this.embeddedControls) {
             this.createOverlay();
+        } else {
+            this.createEmbeddedKeyboardControls();
         }
         this.ensureUpdateLoop();
     }
@@ -89,6 +94,7 @@ class WalkTool {
     deactivate() {
         this.active = false;
         this.destroyOverlay();
+        this.destroyEmbeddedKeyboardControls();
         if (!this.hasExternalWalkInput() && this.animFrame !== null) {
             cancelAnimationFrame(this.animFrame);
             this.animFrame = null;
@@ -141,12 +147,88 @@ class WalkTool {
                 document.exitPointerLock();
             }
             this.destroyOverlay();
+            this.createEmbeddedKeyboardControls();
             return;
         }
 
+        this.destroyEmbeddedKeyboardControls();
         if (this.active) {
             this.createOverlay();
         }
+    }
+
+    private createEmbeddedKeyboardControls() {
+        if (this.onEmbeddedKeyDownBound || this.onEmbeddedKeyUpBound) {
+            return;
+        }
+
+        this.onEmbeddedKeyDownBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, true);
+        this.onEmbeddedKeyUpBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, false);
+        window.addEventListener('keydown', this.onEmbeddedKeyDownBound, { capture: true });
+        window.addEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
+    }
+
+    private destroyEmbeddedKeyboardControls() {
+        if (this.onEmbeddedKeyDownBound) {
+            window.removeEventListener('keydown', this.onEmbeddedKeyDownBound, { capture: true });
+            this.onEmbeddedKeyDownBound = null;
+        }
+        if (this.onEmbeddedKeyUpBound) {
+            window.removeEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
+            this.onEmbeddedKeyUpBound = null;
+        }
+        this.embeddedKeyboardInput = {};
+    }
+
+    private isTypingTarget(target: EventTarget | null) {
+        const element = target instanceof HTMLElement ? target : null;
+        if (!element) {
+            return false;
+        }
+        return Boolean(element.closest('input, textarea, select, [contenteditable="true"]'));
+    }
+
+    private onEmbeddedKey(event: KeyboardEvent, pressed: boolean) {
+        if (!this.embeddedControls || !this.active || this.isTypingTarget(event.target)) {
+            return;
+        }
+
+        let handled = true;
+        switch (event.code) {
+            case 'KeyW':
+            case 'ArrowUp':
+                this.embeddedKeyboardInput.forward = pressed;
+                break;
+            case 'KeyS':
+            case 'ArrowDown':
+                this.embeddedKeyboardInput.backward = pressed;
+                break;
+            case 'KeyA':
+            case 'ArrowLeft':
+                this.embeddedKeyboardInput.left = pressed;
+                break;
+            case 'KeyD':
+            case 'ArrowRight':
+                this.embeddedKeyboardInput.right = pressed;
+                break;
+            case 'ShiftLeft':
+            case 'ShiftRight':
+                this.embeddedKeyboardInput.sprint = pressed;
+                break;
+            case 'Space':
+                this.embeddedKeyboardInput.jump = pressed;
+                break;
+            default:
+                handled = false;
+                break;
+        }
+
+        if (!handled) {
+            return;
+        }
+
+        event.preventDefault();
+        this.ensureUpdateLoop();
     }
 
     private createArrow(direction: ArrowDirection): HTMLElement {
@@ -289,7 +371,7 @@ class WalkTool {
     }
 
     private hasExternalWalkInput() {
-        const input = this.externalWalkInput;
+        const input = this.walkInputState;
         return Boolean(
             input.forward ||
             input.backward ||
@@ -302,6 +384,18 @@ class WalkTool {
         );
     }
 
+    private get walkInputState(): WalkInputState {
+        return {
+            forward: Boolean(this.externalWalkInput.forward || this.embeddedKeyboardInput.forward),
+            backward: Boolean(this.externalWalkInput.backward || this.embeddedKeyboardInput.backward),
+            left: Boolean(this.externalWalkInput.left || this.embeddedKeyboardInput.left),
+            right: Boolean(this.externalWalkInput.right || this.embeddedKeyboardInput.right),
+            sprint: Boolean(this.externalWalkInput.sprint || this.embeddedKeyboardInput.sprint),
+            slide: Boolean(this.externalWalkInput.slide || this.embeddedKeyboardInput.slide),
+            jump: Boolean(this.externalWalkInput.jump || this.embeddedKeyboardInput.jump)
+        };
+    }
+
     private ensureUpdateLoop() {
         if (this.animFrame === null) {
             this.lastExternalMoveAt = performance.now();
@@ -310,7 +404,7 @@ class WalkTool {
     }
 
     private applyExternalWalkInput() {
-        const input = this.externalWalkInput;
+        const input = this.walkInputState;
         const forwardAmount = (input.forward ? 1 : 0) - (input.backward ? 1 : 0);
         const rightAmount = (input.right ? 1 : 0) - (input.left ? 1 : 0);
         const moving = forwardAmount !== 0 || rightAmount !== 0;
