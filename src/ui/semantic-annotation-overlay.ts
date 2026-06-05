@@ -117,7 +117,7 @@ const MULTIPLAYER_AVATAR_URL = '/static/dev-assets/kenney/kenney-avatar-animated
 const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
-const MULTIPLAYER_AVATAR_SPEED_SMOOTHING = 0.32;
+const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 
@@ -792,7 +792,8 @@ class SemanticAnnotationOverlay {
         const dz = feetZ - instance.lastPosition.z;
         const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
         const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
-        instance.smoothedPlanarSpeed += (planarSpeed - instance.smoothedPlanarSpeed) * MULTIPLAYER_AVATAR_SPEED_SMOOTHING;
+        const speedBlend = 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS);
+        instance.smoothedPlanarSpeed += (planarSpeed - instance.smoothedPlanarSpeed) * speedBlend;
         const nextState = instance.state === 'run' ?
             (instance.smoothedPlanarSpeed < MULTIPLAYER_AVATAR_RUN_STOP_SPEED ? 'idle' : 'run') :
             (instance.smoothedPlanarSpeed > MULTIPLAYER_AVATAR_RUN_START_SPEED ? 'run' : 'idle');
