@@ -498,6 +498,7 @@ class WalkTool {
     private onEmbeddedKeyDownBound: ((e: KeyboardEvent) => void) | null = null;
     private onEmbeddedKeyUpBound: ((e: KeyboardEvent) => void) | null = null;
     private onEmbeddedFocusLossBound: (() => void) | null = null;
+    private onEmbeddedVisibilityChangeBound: (() => void) | null = null;
     private externalWalkInput: WalkInputState = {};
     private embeddedKeyboardInput: WalkInputState = {};
     private lastExternalMoveAt = performance.now();
@@ -619,15 +620,21 @@ class WalkTool {
 
         this.onEmbeddedKeyDownBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, true);
         this.onEmbeddedKeyUpBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, false);
-        this.onEmbeddedFocusLossBound = () => {
+        const clearEmbeddedInput = () => {
             this.embeddedKeyboardInput = {};
             this.externalJumpWasPressed = false;
+        };
+        this.onEmbeddedFocusLossBound = clearEmbeddedInput;
+        this.onEmbeddedVisibilityChangeBound = () => {
+            if (document.visibilityState === 'hidden') {
+                clearEmbeddedInput();
+            }
         };
         window.addEventListener('keydown', this.onEmbeddedKeyDownBound, { capture: true });
         window.addEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
         window.addEventListener('blur', this.onEmbeddedFocusLossBound);
         window.addEventListener('pagehide', this.onEmbeddedFocusLossBound);
-        document.addEventListener('visibilitychange', this.onEmbeddedFocusLossBound);
+        document.addEventListener('visibilitychange', this.onEmbeddedVisibilityChangeBound);
     }
 
     private destroyEmbeddedKeyboardControls() {
@@ -642,8 +649,11 @@ class WalkTool {
         if (this.onEmbeddedFocusLossBound) {
             window.removeEventListener('blur', this.onEmbeddedFocusLossBound);
             window.removeEventListener('pagehide', this.onEmbeddedFocusLossBound);
-            document.removeEventListener('visibilitychange', this.onEmbeddedFocusLossBound);
             this.onEmbeddedFocusLossBound = null;
+        }
+        if (this.onEmbeddedVisibilityChangeBound) {
+            document.removeEventListener('visibilitychange', this.onEmbeddedVisibilityChangeBound);
+            this.onEmbeddedVisibilityChangeBound = null;
         }
         this.embeddedKeyboardInput = {};
     }
@@ -892,8 +902,9 @@ class WalkTool {
         const camera = this.camera;
         const focalPoint = camera.focalPoint;
         let changed = false;
+        const useCollisionProxy = !this.collisionMesh;
 
-        this.updateCollisionProxy(moving && forwardAmount > 0);
+        this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
 
         if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
             this.externalGroundY = focalPoint.y;
@@ -915,7 +926,7 @@ class WalkTool {
             moveVec.set(0, 0, 0);
             moveVec.add(forwardVec.clone().mulScalar(forwardAmount));
             moveVec.add(rightVec.clone().mulScalar(rightAmount));
-            if (forwardAmount > 0 && this.collisionProxy.blocked) {
+            if (useCollisionProxy && forwardAmount > 0 && this.collisionProxy.blocked) {
                 moveVec.sub(tmpVec.copy(forwardVec).mulScalar(forwardAmount));
             }
 
