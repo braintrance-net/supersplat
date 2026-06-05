@@ -183,6 +183,7 @@ interface GameModeMessage {
     enabled: boolean;
     objectiveIds?: string[];
     showHitboxes?: boolean;
+    hideChrome?: boolean;
 }
 
 interface AnnotationAuthoringCaptureMessage {
@@ -373,7 +374,8 @@ const isGameModeMessage = (data: any): data is GameModeMessage => {
         data.type === GAME_MODE &&
         typeof data.enabled === 'boolean' &&
         (data.objectiveIds === undefined || Array.isArray(data.objectiveIds)) &&
-        (data.showHitboxes === undefined || typeof data.showHitboxes === 'boolean')
+        (data.showHitboxes === undefined || typeof data.showHitboxes === 'boolean') &&
+        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean')
     );
 };
 
@@ -577,6 +579,11 @@ const requestIdPayload = (requestId?: RequestId) => {
     return {};
 };
 
+const shouldHideTimeTrialChromeFromUrl = () => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('hideEditorChrome') === '1' || params.has('timeTrialPlayer');
+};
+
 const postDiagnostic = (
     source: Window,
     origin: string,
@@ -664,6 +671,8 @@ const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
 
 const registerIframeApi = (events: Events) => {
+    document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
+
     let gameModeActive = false;
     let gameModePreviousTool: string | null = null;
     let gameModeActivatedWalk = false;
@@ -779,6 +788,7 @@ const registerIframeApi = (events: Events) => {
         resetPointerLookState();
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
+        document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
     };
 
     const semanticLayerSignature = (layer: Pick<SemanticLayer, 'annotations'> | Partial<SemanticLayer>) => JSON.stringify((layer.annotations ?? []).map(annotation => ({
@@ -1196,10 +1206,12 @@ const registerIframeApi = (events: Events) => {
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
             events.fire('semanticAnnotations.showHitboxes', event.data.enabled && event.data.showHitboxes === true);
+            document.body.classList.toggle('time-trial-game-mode', event.data.enabled && event.data.hideChrome !== false);
             postDiagnostic(source, event.origin, 'game-mode', {
                 enabled: event.data.enabled,
                 objectiveCount: event.data.objectiveIds?.length ?? 0,
-                showHitboxes: event.data.showHitboxes === true
+                showHitboxes: event.data.showHitboxes === true,
+                hideChrome: event.data.hideChrome !== false
             });
             if (event.data.enabled) {
                 const activeTool = events.invoke('tool.active') as string | null;
@@ -1213,6 +1225,7 @@ const registerIframeApi = (events: Events) => {
                     events.fire('tool.walk');
                 }
             } else {
+                document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
                 if (document.pointerLockElement) {
                     document.exitPointerLock();
                 }
