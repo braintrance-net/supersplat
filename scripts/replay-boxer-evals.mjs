@@ -646,7 +646,8 @@ const runFusion = async ({ chromium, url, evalCases, args }) => {
         url,
         firstCase: evalCases[0],
         headless: args.headless,
-        loadTimeoutMs: args.loadTimeoutMs
+        loadTimeoutMs: args.loadTimeoutMs,
+        args
     });
     try {
         const options = {
