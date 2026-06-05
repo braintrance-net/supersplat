@@ -775,7 +775,7 @@ class WalkTool {
 
         tmpVec.mulScalar(this.stepSize);
 
-        const resolvedMove = this.resolveCollisionMeshMove(camera.focalPoint, tmpVec);
+        const resolvedMove = this.resolveCollisionMeshMove(this.cameraPosition(camera), tmpVec);
         if (!resolvedMove) {
             return;
         }
@@ -935,7 +935,7 @@ class WalkTool {
                 moveVec.mulScalar(1 / moveLength);
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
-                const resolvedMove = this.resolveCollisionMeshMove(focalPoint, moveVec);
+                const resolvedMove = this.resolveCollisionMeshMove(this.cameraPosition(camera), moveVec);
                 if (resolvedMove) {
                     focalPoint.add(resolvedMove);
                     changed = true;
@@ -1103,6 +1103,12 @@ class WalkTool {
             moveZ: Number(fullMove.z.toFixed(3))
         });
         return null;
+    }
+
+    private cameraPosition(camera = this.camera) {
+        const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
+        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
+        return camera.focalPoint.add(forwardVec.clone().mulScalar(distance));
     }
 
     private updateCollisionProxy(enabled: boolean) {
