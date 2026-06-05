@@ -236,7 +236,7 @@ class WalkCollisionMesh {
             } else if (chunkType === 0x004e4942) {
                 bin = chunk;
             }
-            offset += chunkLength;
+            offset += (chunkLength + 3) & ~3;
         }
 
         if (!json || !bin) {
@@ -483,6 +483,9 @@ class WalkTool {
     private lastArrowPositionAt = 0;
     private collisionMesh: WalkCollisionMesh | null = null;
     private collisionMeshUrl: string | null = null;
+    private collisionMeshKey: string | null = null;
+    private collisionMeshBuffer: ArrayBuffer | null = null;
+    private collisionMeshBufferUrl: string | null = null;
     private collisionMeshAbort: AbortController | null = null;
     private lastCollisionMeshReportAt = 0;
     private collisionProxy: CollisionProxyState = {
@@ -897,14 +900,18 @@ class WalkTool {
     }
 
     private async loadCollisionMesh(details: CollisionMeshLoadDetails) {
-        if (!details.url || details.url === this.collisionMeshUrl && this.collisionMesh) {
+        const transformKey = JSON.stringify(details.transform ?? null);
+        const meshKey = `${details.url}|${transformKey}`;
+        if (!details.url || meshKey === this.collisionMeshKey && this.collisionMesh) {
             return;
         }
 
         this.collisionMeshAbort?.abort();
-        this.collisionMeshAbort = new AbortController();
+        const abortController = new AbortController();
+        this.collisionMeshAbort = abortController;
         this.collisionMesh = null;
         this.collisionMeshUrl = details.url;
+        this.collisionMeshKey = meshKey;
         const startedAt = performance.now();
         this.events.fire('walk.collisionMesh', {
             ok: true,
@@ -914,14 +921,23 @@ class WalkTool {
         });
 
         try {
-            const response = await fetch(details.url, { signal: this.collisionMeshAbort.signal, cache: 'force-cache' });
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+            let buffer = details.url === this.collisionMeshBufferUrl ? this.collisionMeshBuffer : null;
+            if (!buffer) {
+                const response = await fetch(details.url, { signal: abortController.signal, cache: 'force-cache' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                buffer = await response.arrayBuffer();
+                if (details.url !== this.collisionMeshUrl) {
+                    return;
+                }
+                this.collisionMeshBuffer = buffer;
+                this.collisionMeshBufferUrl = details.url;
             }
 
-            const buffer = await response.arrayBuffer();
             const { mesh, parseMs } = WalkCollisionMesh.fromGlb(buffer, details.transform);
-            if (details.url !== this.collisionMeshUrl) {
+            if (meshKey !== this.collisionMeshKey) {
                 return;
             }
             this.collisionMesh = mesh;
@@ -941,7 +957,7 @@ class WalkTool {
                 playerHeight: COLLISION_MESH_PLAYER_HEIGHT
             });
         } catch (error) {
-            if (this.collisionMeshAbort.signal.aborted) {
+            if (abortController.signal.aborted || meshKey !== this.collisionMeshKey) {
                 return;
             }
             this.collisionMesh = null;
