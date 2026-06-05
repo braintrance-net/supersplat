@@ -472,6 +472,7 @@ class WalkTool {
     private onPointerLockChangeBound: (() => void) | null = null;
     private onEmbeddedKeyDownBound: ((e: KeyboardEvent) => void) | null = null;
     private onEmbeddedKeyUpBound: ((e: KeyboardEvent) => void) | null = null;
+    private onEmbeddedFocusLossBound: (() => void) | null = null;
     private externalWalkInput: WalkInputState = {};
     private embeddedKeyboardInput: WalkInputState = {};
     private lastExternalMoveAt = performance.now();
@@ -592,8 +593,15 @@ class WalkTool {
 
         this.onEmbeddedKeyDownBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, true);
         this.onEmbeddedKeyUpBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, false);
+        this.onEmbeddedFocusLossBound = () => {
+            this.embeddedKeyboardInput = {};
+            this.externalJumpWasPressed = false;
+        };
         window.addEventListener('keydown', this.onEmbeddedKeyDownBound, { capture: true });
         window.addEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
+        window.addEventListener('blur', this.onEmbeddedFocusLossBound);
+        window.addEventListener('pagehide', this.onEmbeddedFocusLossBound);
+        document.addEventListener('visibilitychange', this.onEmbeddedFocusLossBound);
     }
 
     private destroyEmbeddedKeyboardControls() {
@@ -604,6 +612,12 @@ class WalkTool {
         if (this.onEmbeddedKeyUpBound) {
             window.removeEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
             this.onEmbeddedKeyUpBound = null;
+        }
+        if (this.onEmbeddedFocusLossBound) {
+            window.removeEventListener('blur', this.onEmbeddedFocusLossBound);
+            window.removeEventListener('pagehide', this.onEmbeddedFocusLossBound);
+            document.removeEventListener('visibilitychange', this.onEmbeddedFocusLossBound);
+            this.onEmbeddedFocusLossBound = null;
         }
         this.embeddedKeyboardInput = {};
     }
@@ -722,7 +736,12 @@ class WalkTool {
 
         tmpVec.mulScalar(this.stepSize);
 
-        const newFocal = camera.focalPoint.add(tmpVec);
+        const resolvedMove = this.resolveCollisionMeshMove(camera.focalPoint, tmpVec);
+        if (!resolvedMove) {
+            return;
+        }
+
+        const newFocal = camera.focalPoint.add(resolvedMove);
         camera.setFocalPoint(newFocal);
         this.scene.forceRender = true;
     }
