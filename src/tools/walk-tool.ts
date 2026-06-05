@@ -1121,9 +1121,11 @@ class WalkTool {
     }
 
     private playerCollisionAnchors(camera = this.camera) {
-        const targetHead = camera.focalPoint;
-        targetHead.y += COLLISION_MESH_PLAYER_HEIGHT;
-        return [targetHead];
+        const target = camera.focalPoint;
+        const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
+        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
+        const eyeY = target.y + forwardVec.y * distance;
+        return [new Vec3(target.x, eyeY, target.z)];
     }
 
     private updateCollisionProxy(enabled: boolean) {
