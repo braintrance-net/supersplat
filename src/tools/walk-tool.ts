@@ -775,7 +775,7 @@ class WalkTool {
 
         tmpVec.mulScalar(this.stepSize);
 
-        const resolvedMove = this.resolveCollisionMeshMove(this.collisionAnchors(camera), tmpVec);
+        const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionAnchors(camera), tmpVec);
         if (!resolvedMove) {
             return;
         }
@@ -935,7 +935,7 @@ class WalkTool {
                 moveVec.mulScalar(1 / moveLength);
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
-                const resolvedMove = this.resolveCollisionMeshMove(this.collisionAnchors(camera), moveVec);
+                const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionAnchors(camera), moveVec);
                 if (resolvedMove) {
                     focalPoint.add(resolvedMove);
                     changed = true;
@@ -1111,7 +1111,7 @@ class WalkTool {
             const hit = mesh.intersectsPlayerCapsule(head);
             if (hit.blocked) {
                 return {
-                    anchor: i === 0 ? 'camera' : 'target',
+                    anchor: `player-${i}`,
                     head,
                     triangle: hit.triangle
                 };
@@ -1120,19 +1120,10 @@ class WalkTool {
         return null;
     }
 
-    private collisionAnchors(camera = this.camera) {
+    private playerCollisionAnchors(camera = this.camera) {
         const targetHead = camera.focalPoint;
         targetHead.y += COLLISION_MESH_PLAYER_HEIGHT;
-        return [
-            this.cameraPosition(camera),
-            targetHead
-        ];
-    }
-
-    private cameraPosition(camera = this.camera) {
-        const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
-        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        return camera.focalPoint.add(forwardVec.clone().mulScalar(distance));
+        return [targetHead];
     }
 
     private updateCollisionProxy(enabled: boolean) {
