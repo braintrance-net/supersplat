@@ -143,10 +143,10 @@ class WalkCollisionMesh {
         const { json, bin } = WalkCollisionMesh.parseGlb(buffer);
         const worldTransform = WalkCollisionMesh.transformFromPreset(transform);
         const triangles: CollisionTriangle[] = [];
-        const sceneIndex = json.scene ?? 0;
-        const rootNodes = json.scenes?.[sceneIndex]?.nodes ?? json.nodes?.map((_, index) => index) ?? [];
+        const rootNodes = WalkCollisionMesh.rootNodeIndices(json);
+        const visitedNodes = new Set<number>();
         for (const nodeIndex of rootNodes) {
-            WalkCollisionMesh.collectNodeTriangles(json, bin, nodeIndex, worldTransform.clone(), triangles);
+            WalkCollisionMesh.collectNodeTriangles(json, bin, nodeIndex, worldTransform.clone(), triangles, visitedNodes);
         }
 
         const mesh = new WalkCollisionMesh(triangles);
@@ -260,6 +260,26 @@ class WalkCollisionMesh {
         return matrix;
     }
 
+    private static rootNodeIndices(json: GltfDocument) {
+        const nodes = json.nodes ?? [];
+        const sceneIndex = json.scene ?? 0;
+        const sceneNodes = json.scenes?.[sceneIndex]?.nodes?.filter(index => nodes[index]);
+        if (sceneNodes?.length) {
+            return Array.from(new Set(sceneNodes));
+        }
+
+        const childNodes = new Set<number>();
+        for (const node of nodes) {
+            for (const childIndex of node.children ?? []) {
+                childNodes.add(childIndex);
+            }
+        }
+
+        const allNodeIndices = nodes.map((_, index) => index);
+        const rootNodes = allNodeIndices.filter(index => !childNodes.has(index));
+        return rootNodes.length ? rootNodes : allNodeIndices;
+    }
+
     private static nodeMatrix(node: GltfNode) {
         const matrix = new Mat4();
         if (node.matrix?.length === 16) {
@@ -278,7 +298,12 @@ class WalkCollisionMesh {
         return matrix;
     }
 
-    private static collectNodeTriangles(json: GltfDocument, bin: ArrayBuffer, nodeIndex: number, parentTransform: Mat4, triangles: CollisionTriangle[]) {
+    private static collectNodeTriangles(json: GltfDocument, bin: ArrayBuffer, nodeIndex: number, parentTransform: Mat4, triangles: CollisionTriangle[], visitedNodes: Set<number>) {
+        if (visitedNodes.has(nodeIndex)) {
+            return;
+        }
+        visitedNodes.add(nodeIndex);
+
         const node = json.nodes?.[nodeIndex];
         if (!node) {
             return;
@@ -290,7 +315,7 @@ class WalkCollisionMesh {
         }
 
         for (const childIndex of node.children ?? []) {
-            WalkCollisionMesh.collectNodeTriangles(json, bin, childIndex, worldTransform, triangles);
+            WalkCollisionMesh.collectNodeTriangles(json, bin, childIndex, worldTransform, triangles, visitedNodes);
         }
     }
 
