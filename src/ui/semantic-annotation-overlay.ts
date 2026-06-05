@@ -365,7 +365,6 @@ class SemanticAnnotationOverlay {
         events.on('scene.elementAdded', this.onSceneGeometryChanged, this);
         events.on('scene.elementRemoved', this.onSceneGeometryChanged, this);
         events.on('splat.positionsChanged', this.onSceneGeometryChanged, this);
-        events.on('splat.stateChanged', this.onSceneGeometryChanged, this);
         events.on('splat.moved', this.onSceneGeometryChanged, this);
         events.on('splat.visibility', this.onSceneGeometryChanged, this);
         events.on('update', this.onSceneUpdate, this);
@@ -388,7 +387,6 @@ class SemanticAnnotationOverlay {
         this.events.off('scene.elementAdded', this.onSceneGeometryChanged, this);
         this.events.off('scene.elementRemoved', this.onSceneGeometryChanged, this);
         this.events.off('splat.positionsChanged', this.onSceneGeometryChanged, this);
-        this.events.off('splat.stateChanged', this.onSceneGeometryChanged, this);
         this.events.off('splat.moved', this.onSceneGeometryChanged, this);
         this.events.off('splat.visibility', this.onSceneGeometryChanged, this);
         this.events.off('update', this.onSceneUpdate, this);
