@@ -84,6 +84,7 @@ interface LoadFileMessage {
     data?: ArrayBuffer;
     camera?: CameraState;
     transform?: PresetTransform;
+    collisionMeshSrc?: string | null;
     requestId?: RequestId;
 }
 
@@ -535,6 +536,15 @@ const applyTransformState = (events: Events, transform?: PresetTransform) => {
     if (scene) {
         scene.forceRender = true;
     }
+};
+
+const collisionMeshSrcForFilename = (filename: string, explicitSrc?: string | null) => {
+    if (explicitSrc !== undefined) {
+        return explicitSrc;
+    }
+
+    const basename = filename.split('/').pop()?.replace(/\.(ply|sog|spz|splat|ksplat|compressed\.ply)$/i, '');
+    return basename ? `/static/dev-assets/collision/${basename}.collision.glb` : null;
 };
 
 const removeExtension = (filename: string) => {
@@ -1003,12 +1013,12 @@ const registerIframeApi = (events: Events) => {
         }
     });
 
-    events.on('walk.collisionGrid', (details: Record<string, unknown>) => {
+    events.on('walk.collisionMesh', (details: Record<string, unknown>) => {
         if (window.parent && window.parent !== window) {
             window.parent.postMessage({
                 type: DIAGNOSTIC,
                 source: 'supersplat',
-                label: 'walk-collision-grid',
+                label: 'walk-collision-mesh',
                 details,
                 at: new Date().toISOString()
             }, '*');
@@ -1287,6 +1297,14 @@ const registerIframeApi = (events: Events) => {
                 }
 
                 applyTransformState(events, event.data.transform);
+                const collisionMeshSrc = collisionMeshSrcForFilename(event.data.filename, event.data.collisionMeshSrc);
+                if (collisionMeshSrc) {
+                    events.fire('walk.collisionMeshLoad', {
+                        url: collisionMeshSrc,
+                        requestId: event.data.requestId ?? null,
+                        transform: event.data.transform
+                    });
+                }
                 applyCameraState(events, event.data.camera);
                 rendered = await waitForPostRender(events);
                 postDiagnostic(source, event.origin, 'load-file-postrender', { rendered }, event.data.requestId);

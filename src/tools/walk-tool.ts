@@ -1,11 +1,8 @@
-import { Vec3 } from 'playcanvas';
+import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Camera } from '../camera';
-import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
-import { Splat } from '../splat';
-import { State } from '../splat-state';
 
 type ArrowDirection = 'north' | 'south' | 'east' | 'west';
 type WalkInputState = {
@@ -28,20 +25,21 @@ type CollisionProxyState = {
     sampleMs: number | null;
 };
 
-type CollisionGridBuildStats = {
-    signature: string;
-    totalCenters: number;
-    sampledCenters: number;
-    stride: number;
-    cells: number;
-    buildMs: number;
+type PresetTransform = {
+    position: { x: number; y: number; z: number };
+    rotationEuler: { x: number; y: number; z: number };
+    scale: { x: number; y: number; z: number };
 };
 
-type CollisionGridHit = {
+type CollisionMeshLoadDetails = {
+    url: string;
+    requestId?: number | string | null;
+    transform?: PresetTransform;
+};
+
+type CollisionMeshHit = {
     blocked: boolean;
-    cellX?: number;
-    cellZ?: number;
-    bin?: number;
+    triangle?: number;
 };
 
 const tmpVec = new Vec3();
@@ -57,134 +55,406 @@ const COLLISION_SLOW_SAMPLE_MS = 28;
 const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 const COLLISION_POINTER_LOOK_DEFER_MS = 160;
 const COLLISION_POINTER_LOOK_MAX_DEFER_MS = 900;
-const COLLISION_GRID_CELL_SIZE = 0.16;
-const COLLISION_GRID_Y_BIN_SIZE = 0.18;
-const COLLISION_GRID_MAX_SAMPLES = 500_000;
-const COLLISION_GRID_PLAYER_HEIGHT = 1.65;
-const COLLISION_GRID_CAPSULE_RADIUS = 0.22;
-const COLLISION_GRID_STEP_HEIGHT = 0.32;
-const COLLISION_GRID_HEAD_CLEARANCE = 0.18;
-const COLLISION_GRID_REPORT_INTERVAL_MS = 900;
+const COLLISION_MESH_CELL_SIZE = 0.5;
+const COLLISION_MESH_PLAYER_HEIGHT = 1.6;
+const COLLISION_MESH_CAPSULE_RADIUS = 0.22;
+const COLLISION_MESH_STEP_HEIGHT = 0.32;
+const COLLISION_MESH_HEAD_CLEARANCE = 0.18;
+const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
+const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
 
-class WalkCollisionGrid {
-    readonly stats: CollisionGridBuildStats;
-    private readonly cells = new Map<string, Set<number>>();
+type CollisionTriangle = {
+    ax: number;
+    ay: number;
+    az: number;
+    bx: number;
+    by: number;
+    bz: number;
+    cx: number;
+    cy: number;
+    cz: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    minZ: number;
+    maxZ: number;
+};
 
-    private constructor(stats: Omit<CollisionGridBuildStats, 'cells' | 'buildMs'>, buildStartedAt: number) {
-        this.stats = {
-            ...stats,
-            cells: 0,
-            buildMs: 0
+type GltfAccessor = {
+    bufferView?: number;
+    byteOffset?: number;
+    componentType: number;
+    count: number;
+    type: string;
+};
+
+type GltfBufferView = {
+    buffer?: number;
+    byteOffset?: number;
+    byteLength: number;
+    byteStride?: number;
+};
+
+type GltfPrimitive = {
+    attributes?: { POSITION?: number };
+    indices?: number;
+};
+
+type GltfMesh = {
+    primitives?: GltfPrimitive[];
+};
+
+type GltfNode = {
+    mesh?: number;
+    children?: number[];
+    matrix?: number[];
+    translation?: number[];
+    rotation?: number[];
+    scale?: number[];
+};
+
+type GltfDocument = {
+    accessors?: GltfAccessor[];
+    bufferViews?: GltfBufferView[];
+    meshes?: GltfMesh[];
+    nodes?: GltfNode[];
+    scenes?: Array<{ nodes?: number[] }>;
+    scene?: number;
+};
+
+class WalkCollisionMesh {
+    readonly triangleCount: number;
+    readonly blockingTriangleCount: number;
+    readonly cellCount: number;
+    private readonly triangles: CollisionTriangle[];
+    private readonly cells = new Map<string, number[]>();
+
+    private constructor(triangles: CollisionTriangle[]) {
+        this.triangles = triangles;
+        this.triangleCount = triangles.length;
+        this.blockingTriangleCount = triangles.length;
+        this.indexTriangles();
+        this.cellCount = this.cells.size;
+    }
+
+    static fromGlb(buffer: ArrayBuffer, transform?: PresetTransform) {
+        const startedAt = performance.now();
+        const { json, bin } = WalkCollisionMesh.parseGlb(buffer);
+        const worldTransform = WalkCollisionMesh.transformFromPreset(transform);
+        const triangles: CollisionTriangle[] = [];
+        const sceneIndex = json.scene ?? 0;
+        const rootNodes = json.scenes?.[sceneIndex]?.nodes ?? json.nodes?.map((_, index) => index) ?? [];
+        for (const nodeIndex of rootNodes) {
+            WalkCollisionMesh.collectNodeTriangles(json, bin, nodeIndex, worldTransform.clone(), triangles);
+        }
+
+        const mesh = new WalkCollisionMesh(triangles);
+        return {
+            mesh,
+            parseMs: Number((performance.now() - startedAt).toFixed(1))
         };
-        this.buildStartedAt = buildStartedAt;
     }
 
-    private readonly buildStartedAt: number;
+    intersectsPlayerCapsule(head: Vec3): CollisionMeshHit {
+        const radius = COLLISION_MESH_CAPSULE_RADIUS;
+        const minY = head.y - COLLISION_MESH_PLAYER_HEIGHT + COLLISION_MESH_STEP_HEIGHT;
+        const maxY = head.y - COLLISION_MESH_HEAD_CLEARANCE;
+        const minCellX = Math.floor((head.x - radius) / COLLISION_MESH_CELL_SIZE);
+        const maxCellX = Math.floor((head.x + radius) / COLLISION_MESH_CELL_SIZE);
+        const minCellZ = Math.floor((head.z - radius) / COLLISION_MESH_CELL_SIZE);
+        const maxCellZ = Math.floor((head.z + radius) / COLLISION_MESH_CELL_SIZE);
+        const checked = new Set<number>();
 
-    private static transformSignature(splat: Splat) {
-        const data = splat.entity.getWorldTransform().data;
-        let signature = '';
-        for (let i = 0; i < data.length; i += 1) {
-            signature += `${data[i].toFixed(4)},`;
-        }
-        return signature;
-    }
-
-    static signatureForSplats(splats: Splat[]) {
-        return splats.map(splat => `${splat.uid}:${splat.numSplats}:${splat.changedCounter}:${WalkCollisionGrid.transformSignature(splat)}`).join('|');
-    }
-
-    static build(scene: Scene) {
-        const buildStartedAt = performance.now();
-        const splats = (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
-        const signature = WalkCollisionGrid.signatureForSplats(splats);
-        const totalCenters = splats.reduce((total, splat) => {
-            const centers: Float32Array | undefined = splat.entity.gsplat?.instance?.sorter?.centers;
-            return total + (centers ? centers.length / 3 : 0);
-        }, 0);
-        const stride = Math.max(1, Math.ceil(totalCenters / COLLISION_GRID_MAX_SAMPLES));
-        const grid = new WalkCollisionGrid({ signature, totalCenters, sampledCenters: 0, stride }, buildStartedAt);
-
-        for (const splat of splats) {
-            const centers: Float32Array | undefined = splat.entity.gsplat?.instance?.sorter?.centers;
-            if (!centers) {
-                continue;
-            }
-
-            const state = splat.splatData.getProp('state') as Uint8Array | undefined;
-            const worldTransform = splat.entity.getWorldTransform().data as Float32Array;
-            const count = centers.length / 3;
-            for (let i = 0; i < count; i += stride) {
-                if (state && ((state[i] ?? 0) & State.deleted) !== 0) {
+        for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+            for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+                const indices = this.cells.get(`${cellX},${cellZ}`);
+                if (!indices) {
                     continue;
                 }
 
-                const localX = centers[i * 3];
-                const localY = centers[i * 3 + 1];
-                const localZ = centers[i * 3 + 2];
-                const worldX = worldTransform[0] * localX + worldTransform[4] * localY + worldTransform[8] * localZ + worldTransform[12];
-                const worldY = worldTransform[1] * localX + worldTransform[5] * localY + worldTransform[9] * localZ + worldTransform[13];
-                const worldZ = worldTransform[2] * localX + worldTransform[6] * localY + worldTransform[10] * localZ + worldTransform[14];
-
-                grid.addPoint(worldX, worldY, worldZ);
-            }
-        }
-
-        grid.stats.cells = grid.cells.size;
-        grid.stats.buildMs = Number((performance.now() - grid.buildStartedAt).toFixed(1));
-        return grid;
-    }
-
-    private addPoint(x: number, y: number, z: number) {
-        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-            return;
-        }
-
-        const cellX = Math.floor(x / COLLISION_GRID_CELL_SIZE);
-        const cellZ = Math.floor(z / COLLISION_GRID_CELL_SIZE);
-        const bin = Math.floor(y / COLLISION_GRID_Y_BIN_SIZE);
-        const key = `${cellX},${cellZ}`;
-        let bins = this.cells.get(key);
-        if (!bins) {
-            bins = new Set<number>();
-            this.cells.set(key, bins);
-        }
-        bins.add(bin);
-        this.stats.sampledCenters += 1;
-    }
-
-    intersectsPlayerCapsule(head: Vec3): CollisionGridHit {
-        const radius = COLLISION_GRID_CAPSULE_RADIUS;
-        const cellRadius = Math.ceil(radius / COLLISION_GRID_CELL_SIZE);
-        const centerCellX = Math.floor(head.x / COLLISION_GRID_CELL_SIZE);
-        const centerCellZ = Math.floor(head.z / COLLISION_GRID_CELL_SIZE);
-        const minBin = Math.floor((head.y - COLLISION_GRID_PLAYER_HEIGHT + COLLISION_GRID_STEP_HEIGHT) / COLLISION_GRID_Y_BIN_SIZE);
-        const maxBin = Math.floor((head.y - COLLISION_GRID_HEAD_CLEARANCE) / COLLISION_GRID_Y_BIN_SIZE);
-
-        for (let dx = -cellRadius; dx <= cellRadius; dx += 1) {
-            for (let dz = -cellRadius; dz <= cellRadius; dz += 1) {
-                const cellX = centerCellX + dx;
-                const cellZ = centerCellZ + dz;
-                const cellCenterX = (cellX + 0.5) * COLLISION_GRID_CELL_SIZE;
-                const cellCenterZ = (cellZ + 0.5) * COLLISION_GRID_CELL_SIZE;
-                if (Math.hypot(cellCenterX - head.x, cellCenterZ - head.z) > radius + COLLISION_GRID_CELL_SIZE * 0.75) {
-                    continue;
-                }
-
-                const bins = this.cells.get(`${cellX},${cellZ}`);
-                if (!bins) {
-                    continue;
-                }
-
-                for (let bin = minBin; bin <= maxBin; bin += 1) {
-                    if (bins.has(bin)) {
-                        return { blocked: true, cellX, cellZ, bin };
+                for (const index of indices) {
+                    if (checked.has(index)) {
+                        continue;
+                    }
+                    checked.add(index);
+                    const triangle = this.triangles[index];
+                    if (triangle.maxY < minY || triangle.minY > maxY) {
+                        continue;
+                    }
+                    if (triangle.maxX < head.x - radius || triangle.minX > head.x + radius ||
+                        triangle.maxZ < head.z - radius || triangle.minZ > head.z + radius) {
+                        continue;
+                    }
+                    if (WalkCollisionMesh.pointNearTriangleXZ(head.x, head.z, triangle, radius)) {
+                        return { blocked: true, triangle: index };
                     }
                 }
             }
         }
 
         return { blocked: false };
+    }
+
+    private indexTriangles() {
+        for (let i = 0; i < this.triangles.length; i += 1) {
+            const triangle = this.triangles[i];
+            const minCellX = Math.floor(triangle.minX / COLLISION_MESH_CELL_SIZE);
+            const maxCellX = Math.floor(triangle.maxX / COLLISION_MESH_CELL_SIZE);
+            const minCellZ = Math.floor(triangle.minZ / COLLISION_MESH_CELL_SIZE);
+            const maxCellZ = Math.floor(triangle.maxZ / COLLISION_MESH_CELL_SIZE);
+            for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+                for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+                    const key = `${cellX},${cellZ}`;
+                    let list = this.cells.get(key);
+                    if (!list) {
+                        list = [];
+                        this.cells.set(key, list);
+                    }
+                    list.push(i);
+                }
+            }
+        }
+    }
+
+    private static parseGlb(buffer: ArrayBuffer) {
+        const view = new DataView(buffer);
+        if (view.getUint32(0, true) !== 0x46546c67) {
+            throw new Error('Collision mesh is not a GLB file.');
+        }
+
+        let offset = 12;
+        let json: GltfDocument | null = null;
+        let bin: ArrayBuffer | null = null;
+        while (offset < buffer.byteLength) {
+            const chunkLength = view.getUint32(offset, true);
+            const chunkType = view.getUint32(offset + 4, true);
+            offset += 8;
+            const chunk = buffer.slice(offset, offset + chunkLength);
+            if (chunkType === 0x4e4f534a) {
+                json = JSON.parse(new TextDecoder().decode(chunk)) as GltfDocument;
+            } else if (chunkType === 0x004e4942) {
+                bin = chunk;
+            }
+            offset += chunkLength;
+        }
+
+        if (!json || !bin) {
+            throw new Error('Collision GLB is missing JSON or BIN chunks.');
+        }
+
+        return { json, bin };
+    }
+
+    private static transformFromPreset(transform?: PresetTransform) {
+        const matrix = new Mat4();
+        if (!transform) {
+            return matrix;
+        }
+
+        matrix.setTRS(
+            new Vec3(transform.position.x, transform.position.y, transform.position.z),
+            new Quat().setFromEulerAngles(transform.rotationEuler.x, transform.rotationEuler.y, transform.rotationEuler.z),
+            new Vec3(transform.scale.x, transform.scale.y, transform.scale.z)
+        );
+        return matrix;
+    }
+
+    private static nodeMatrix(node: GltfNode) {
+        const matrix = new Mat4();
+        if (node.matrix?.length === 16) {
+            matrix.data.set(node.matrix);
+            return matrix;
+        }
+
+        const translation = node.translation ?? [0, 0, 0];
+        const rotation = node.rotation ?? [0, 0, 0, 1];
+        const scale = node.scale ?? [1, 1, 1];
+        matrix.setTRS(
+            new Vec3(translation[0], translation[1], translation[2]),
+            new Quat(rotation[0], rotation[1], rotation[2], rotation[3]),
+            new Vec3(scale[0], scale[1], scale[2])
+        );
+        return matrix;
+    }
+
+    private static collectNodeTriangles(json: GltfDocument, bin: ArrayBuffer, nodeIndex: number, parentTransform: Mat4, triangles: CollisionTriangle[]) {
+        const node = json.nodes?.[nodeIndex];
+        if (!node) {
+            return;
+        }
+
+        const worldTransform = parentTransform.clone().mul(WalkCollisionMesh.nodeMatrix(node));
+        if (node.mesh !== undefined) {
+            WalkCollisionMesh.collectMeshTriangles(json, bin, node.mesh, worldTransform, triangles);
+        }
+
+        for (const childIndex of node.children ?? []) {
+            WalkCollisionMesh.collectNodeTriangles(json, bin, childIndex, worldTransform, triangles);
+        }
+    }
+
+    private static collectMeshTriangles(json: GltfDocument, bin: ArrayBuffer, meshIndex: number, transform: Mat4, triangles: CollisionTriangle[]) {
+        const mesh = json.meshes?.[meshIndex];
+        if (!mesh) {
+            return;
+        }
+
+        for (const primitive of mesh.primitives ?? []) {
+            const positionAccessorIndex = primitive.attributes?.POSITION;
+            if (positionAccessorIndex === undefined) {
+                continue;
+            }
+            const positions = WalkCollisionMesh.readVec3Accessor(json, bin, positionAccessorIndex, transform);
+            const indices = primitive.indices === undefined ?
+                positions.map((_, index) => index) :
+                WalkCollisionMesh.readIndexAccessor(json, bin, primitive.indices);
+            for (let i = 0; i + 2 < indices.length; i += 3) {
+                const triangle = WalkCollisionMesh.makeTriangle(
+                    positions[indices[i]],
+                    positions[indices[i + 1]],
+                    positions[indices[i + 2]]
+                );
+                if (triangle) {
+                    triangles.push(triangle);
+                }
+            }
+        }
+    }
+
+    private static readVec3Accessor(json: GltfDocument, bin: ArrayBuffer, accessorIndex: number, transform: Mat4) {
+        const accessor = json.accessors?.[accessorIndex];
+        const bufferView = accessor?.bufferView === undefined ? undefined : json.bufferViews?.[accessor.bufferView];
+        if (!accessor || !bufferView || accessor.componentType !== 5126 || accessor.type !== 'VEC3') {
+            throw new Error('Collision GLB position accessor must be FLOAT VEC3.');
+        }
+
+        const byteOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
+        const stride = bufferView.byteStride ?? 12;
+        const view = new DataView(bin, byteOffset, bufferView.byteLength - (accessor.byteOffset ?? 0));
+        const result: Vec3[] = [];
+        for (let i = 0; i < accessor.count; i += 1) {
+            const offset = i * stride;
+            const point = new Vec3(
+                view.getFloat32(offset, true),
+                view.getFloat32(offset + 4, true),
+                view.getFloat32(offset + 8, true)
+            );
+            transform.transformPoint(point, point);
+            result.push(point);
+        }
+        return result;
+    }
+
+    private static readIndexAccessor(json: GltfDocument, bin: ArrayBuffer, accessorIndex: number) {
+        const accessor = json.accessors?.[accessorIndex];
+        const bufferView = accessor?.bufferView === undefined ? undefined : json.bufferViews?.[accessor.bufferView];
+        if (!accessor || !bufferView) {
+            throw new Error('Collision GLB is missing an index accessor.');
+        }
+
+        const componentSize = WalkCollisionMesh.componentSize(accessor.componentType);
+        const byteOffset = (bufferView.byteOffset ?? 0) + (accessor.byteOffset ?? 0);
+        const stride = bufferView.byteStride ?? componentSize;
+        const view = new DataView(bin, byteOffset, bufferView.byteLength - (accessor.byteOffset ?? 0));
+        const result: number[] = [];
+        for (let i = 0; i < accessor.count; i += 1) {
+            const offset = i * stride;
+            if (accessor.componentType === 5125) {
+                result.push(view.getUint32(offset, true));
+            } else if (accessor.componentType === 5123) {
+                result.push(view.getUint16(offset, true));
+            } else if (accessor.componentType === 5121) {
+                result.push(view.getUint8(offset));
+            } else {
+                throw new Error(`Unsupported collision index component type ${accessor.componentType}.`);
+            }
+        }
+        return result;
+    }
+
+    private static componentSize(componentType: number) {
+        if (componentType === 5125 || componentType === 5126) {
+            return 4;
+        }
+        if (componentType === 5123) {
+            return 2;
+        }
+        if (componentType === 5121) {
+            return 1;
+        }
+        throw new Error(`Unsupported collision component type ${componentType}.`);
+    }
+
+    private static makeTriangle(a: Vec3, b: Vec3, c: Vec3): CollisionTriangle | null {
+        const ux = b.x - a.x;
+        const uy = b.y - a.y;
+        const uz = b.z - a.z;
+        const vx = c.x - a.x;
+        const vy = c.y - a.y;
+        const vz = c.z - a.z;
+        const nx = uy * vz - uz * vy;
+        const ny = uz * vx - ux * vz;
+        const nz = ux * vy - uy * vx;
+        const len = Math.hypot(nx, ny, nz);
+        if (len <= 0.000001 || Math.abs(ny / len) > COLLISION_MESH_MAX_FLOOR_NORMAL_Y) {
+            return null;
+        }
+
+        return {
+            ax: a.x,
+            ay: a.y,
+            az: a.z,
+            bx: b.x,
+            by: b.y,
+            bz: b.z,
+            cx: c.x,
+            cy: c.y,
+            cz: c.z,
+            minX: Math.min(a.x, b.x, c.x) - COLLISION_MESH_CAPSULE_RADIUS,
+            maxX: Math.max(a.x, b.x, c.x) + COLLISION_MESH_CAPSULE_RADIUS,
+            minY: Math.min(a.y, b.y, c.y),
+            maxY: Math.max(a.y, b.y, c.y),
+            minZ: Math.min(a.z, b.z, c.z) - COLLISION_MESH_CAPSULE_RADIUS,
+            maxZ: Math.max(a.z, b.z, c.z) + COLLISION_MESH_CAPSULE_RADIUS
+        };
+    }
+
+    private static pointNearTriangleXZ(x: number, z: number, triangle: CollisionTriangle, radius: number) {
+        if (WalkCollisionMesh.pointInTriangleXZ(x, z, triangle)) {
+            return true;
+        }
+
+        const radiusSq = radius * radius;
+        return WalkCollisionMesh.distancePointSegmentSq(x, z, triangle.ax, triangle.az, triangle.bx, triangle.bz) <= radiusSq ||
+            WalkCollisionMesh.distancePointSegmentSq(x, z, triangle.bx, triangle.bz, triangle.cx, triangle.cz) <= radiusSq ||
+            WalkCollisionMesh.distancePointSegmentSq(x, z, triangle.cx, triangle.cz, triangle.ax, triangle.az) <= radiusSq;
+    }
+
+    private static pointInTriangleXZ(x: number, z: number, triangle: CollisionTriangle) {
+        const d1 = WalkCollisionMesh.sign2d(x, z, triangle.ax, triangle.az, triangle.bx, triangle.bz);
+        const d2 = WalkCollisionMesh.sign2d(x, z, triangle.bx, triangle.bz, triangle.cx, triangle.cz);
+        const d3 = WalkCollisionMesh.sign2d(x, z, triangle.cx, triangle.cz, triangle.ax, triangle.az);
+        const hasNeg = d1 < 0 || d2 < 0 || d3 < 0;
+        const hasPos = d1 > 0 || d2 > 0 || d3 > 0;
+        return !(hasNeg && hasPos);
+    }
+
+    private static sign2d(px: number, pz: number, ax: number, az: number, bx: number, bz: number) {
+        return (px - bx) * (az - bz) - (ax - bx) * (pz - bz);
+    }
+
+    private static distancePointSegmentSq(px: number, pz: number, ax: number, az: number, bx: number, bz: number) {
+        const dx = bx - ax;
+        const dz = bz - az;
+        const lenSq = dx * dx + dz * dz;
+        if (lenSq <= 0.000001) {
+            return (px - ax) * (px - ax) + (pz - az) * (pz - az);
+        }
+        const t = Math.max(0, Math.min(1, ((px - ax) * dx + (pz - az) * dz) / lenSq));
+        const closestX = ax + t * dx;
+        const closestZ = az + t * dz;
+        return (px - closestX) * (px - closestX) + (pz - closestZ) * (pz - closestZ);
     }
 }
 
@@ -211,8 +481,10 @@ class WalkTool {
     private externalJumpWasPressed = false;
     private embeddedControls = false;
     private lastArrowPositionAt = 0;
-    private collisionGrid: WalkCollisionGrid | null = null;
-    private lastCollisionGridReportAt = 0;
+    private collisionMesh: WalkCollisionMesh | null = null;
+    private collisionMeshUrl: string | null = null;
+    private collisionMeshAbort: AbortController | null = null;
+    private lastCollisionMeshReportAt = 0;
     private collisionProxy: CollisionProxyState = {
         pending: false,
         frontDistance: null,
@@ -230,6 +502,7 @@ class WalkTool {
         this.events.on('walk.pointerLook', this.onExternalPointerLook, this);
         this.events.on('walk.input', this.onExternalWalkInput, this);
         this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
+        this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
     }
 
     activate() {
@@ -599,7 +872,7 @@ class WalkTool {
                 moveVec.mulScalar(1 / moveLength);
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
-                const resolvedMove = this.resolveCollisionGridMove(focalPoint, moveVec);
+                const resolvedMove = this.resolveCollisionMeshMove(focalPoint, moveVec);
                 if (resolvedMove) {
                     focalPoint.add(resolvedMove);
                     changed = true;
@@ -623,37 +896,72 @@ class WalkTool {
         }
     }
 
-    private ensureCollisionGrid() {
-        const splats = (this.scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
-        const signature = WalkCollisionGrid.signatureForSplats(splats);
-        if (this.collisionGrid?.stats.signature === signature) {
-            return this.collisionGrid;
-        }
-
-        if (splats.length === 0) {
-            return null;
-        }
-
-        this.collisionGrid = WalkCollisionGrid.build(this.scene);
-        this.events.fire('walk.collisionGrid', {
-            ok: true,
-            reason: 'built',
-            ...this.collisionGrid.stats,
-            cellSize: COLLISION_GRID_CELL_SIZE,
-            yBinSize: COLLISION_GRID_Y_BIN_SIZE,
-            capsuleRadius: COLLISION_GRID_CAPSULE_RADIUS,
-            playerHeight: COLLISION_GRID_PLAYER_HEIGHT
-        });
-        return this.collisionGrid;
-    }
-
-    private reportCollisionGrid(now: number, reason: string, details: Record<string, unknown>) {
-        if (reason !== 'blocked' && now - this.lastCollisionGridReportAt < COLLISION_GRID_REPORT_INTERVAL_MS) {
+    private async loadCollisionMesh(details: CollisionMeshLoadDetails) {
+        if (!details.url || details.url === this.collisionMeshUrl && this.collisionMesh) {
             return;
         }
 
-        this.lastCollisionGridReportAt = now;
-        this.events.fire('walk.collisionGrid', {
+        this.collisionMeshAbort?.abort();
+        this.collisionMeshAbort = new AbortController();
+        this.collisionMesh = null;
+        this.collisionMeshUrl = details.url;
+        const startedAt = performance.now();
+        this.events.fire('walk.collisionMesh', {
+            ok: true,
+            reason: 'load-start',
+            url: details.url,
+            requestId: details.requestId ?? null
+        });
+
+        try {
+            const response = await fetch(details.url, { signal: this.collisionMeshAbort.signal, cache: 'force-cache' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+
+            const buffer = await response.arrayBuffer();
+            const { mesh, parseMs } = WalkCollisionMesh.fromGlb(buffer, details.transform);
+            if (details.url !== this.collisionMeshUrl) {
+                return;
+            }
+            this.collisionMesh = mesh;
+            this.events.fire('walk.collisionMesh', {
+                ok: true,
+                reason: 'ready',
+                url: details.url,
+                requestId: details.requestId ?? null,
+                byteLength: buffer.byteLength,
+                loadMs: Number((performance.now() - startedAt).toFixed(1)),
+                parseMs,
+                triangles: mesh.triangleCount,
+                blockingTriangles: mesh.blockingTriangleCount,
+                cells: mesh.cellCount,
+                cellSize: COLLISION_MESH_CELL_SIZE,
+                capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
+                playerHeight: COLLISION_MESH_PLAYER_HEIGHT
+            });
+        } catch (error) {
+            if (this.collisionMeshAbort.signal.aborted) {
+                return;
+            }
+            this.collisionMesh = null;
+            this.events.fire('walk.collisionMesh', {
+                ok: false,
+                reason: 'load-failed',
+                url: details.url,
+                requestId: details.requestId ?? null,
+                error: error instanceof Error ? error.message : 'collision mesh load failed'
+            });
+        }
+    }
+
+    private reportCollisionMesh(now: number, reason: string, details: Record<string, unknown>) {
+        if (reason !== 'blocked' && now - this.lastCollisionMeshReportAt < COLLISION_MESH_REPORT_INTERVAL_MS) {
+            return;
+        }
+
+        this.lastCollisionMeshReportAt = now;
+        this.events.fire('walk.collisionMesh', {
             ok: true,
             reason,
             embeddedControls: this.embeddedControls,
@@ -661,9 +969,9 @@ class WalkTool {
         });
     }
 
-    private resolveCollisionGridMove(focalPoint: Vec3, desiredMove: Vec3) {
-        const grid = this.ensureCollisionGrid();
-        if (!grid) {
+    private resolveCollisionMeshMove(focalPoint: Vec3, desiredMove: Vec3) {
+        const mesh = this.collisionMesh;
+        if (!mesh) {
             return desiredMove;
         }
 
@@ -680,9 +988,9 @@ class WalkTool {
             }
 
             const proposed = tmpVec.copy(focalPoint).add(candidate.move);
-            const hit = grid.intersectsPlayerCapsule(proposed);
+            const hit = mesh.intersectsPlayerCapsule(proposed);
             if (!hit.blocked) {
-                this.reportCollisionGrid(now, candidate.reason, {
+                this.reportCollisionMesh(now, candidate.reason, {
                     blocked: false,
                     moveX: Number(candidate.move.x.toFixed(3)),
                     moveZ: Number(candidate.move.z.toFixed(3))
@@ -692,12 +1000,10 @@ class WalkTool {
         }
 
         const blockedHead = tmpVec.copy(focalPoint).add(desiredMove);
-        const hit = grid.intersectsPlayerCapsule(blockedHead);
-        this.reportCollisionGrid(now, 'blocked', {
+        const hit = mesh.intersectsPlayerCapsule(blockedHead);
+        this.reportCollisionMesh(now, 'blocked', {
             blocked: true,
-            cellX: hit.cellX ?? null,
-            cellZ: hit.cellZ ?? null,
-            bin: hit.bin ?? null,
+            triangle: hit.triangle ?? null,
             headX: Number(blockedHead.x.toFixed(3)),
             headY: Number(blockedHead.y.toFixed(3)),
             headZ: Number(blockedHead.z.toFixed(3)),
