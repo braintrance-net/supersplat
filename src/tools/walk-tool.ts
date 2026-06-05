@@ -30,12 +30,14 @@ const forwardVec = new Vec3();
 const rightVec = new Vec3();
 const moveVec = new Vec3();
 const screenPos = new Vec3();
-const COLLISION_SAMPLE_INTERVAL_MS = 1000;
-const COLLISION_SLOW_SAMPLE_INTERVAL_MS = 1800;
+const COLLISION_SAMPLE_INTERVAL_MS = 700;
+const COLLISION_EMBEDDED_SAMPLE_INTERVAL_MS = 450;
+const COLLISION_SLOW_SAMPLE_INTERVAL_MS = 1400;
 const COLLISION_REPORT_INTERVAL_MS = 1800;
 const COLLISION_SLOW_SAMPLE_MS = 28;
 const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 const COLLISION_POINTER_LOOK_DEFER_MS = 160;
+const COLLISION_POINTER_LOOK_MAX_DEFER_MS = 900;
 
 class WalkTool {
     private events: Events;
@@ -375,23 +377,25 @@ class WalkTool {
 
     private updateCollisionProxy(enabled: boolean) {
         const now = performance.now();
-        if (!enabled || this.embeddedControls) {
+        if (!enabled) {
             if (this.collisionProxy.blocked) {
                 this.collisionProxy.blocked = false;
-                this.reportCollisionProxy(now, this.embeddedControls ? 'embedded-disabled' : 'released');
-            } else if (enabled && this.embeddedControls && now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.reportCollisionProxy(now, 'released');
+            } else if (now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS && this.collisionProxy.frontDistance !== null) {
                 this.collisionProxy.frontDistance = null;
                 this.collisionProxy.sampleMs = null;
-                this.reportCollisionProxy(now, 'embedded-disabled');
+                this.reportCollisionProxy(now, 'idle');
             }
             return;
         }
-        if (now - this.lastLookAt < COLLISION_POINTER_LOOK_DEFER_MS) {
+        if (now - this.lastLookAt < COLLISION_POINTER_LOOK_DEFER_MS &&
+            now - this.collisionProxy.lastSampleAt < COLLISION_POINTER_LOOK_MAX_DEFER_MS) {
             return;
         }
+        const regularSampleInterval = this.embeddedControls ? COLLISION_EMBEDDED_SAMPLE_INTERVAL_MS : COLLISION_SAMPLE_INTERVAL_MS;
         const sampleInterval = (this.collisionProxy.sampleMs ?? 0) > COLLISION_SLOW_SAMPLE_MS ?
             COLLISION_SLOW_SAMPLE_INTERVAL_MS :
-            COLLISION_SAMPLE_INTERVAL_MS;
+            regularSampleInterval;
         if (this.collisionProxy.pending || now - this.collisionProxy.lastSampleAt < sampleInterval) {
             return;
         }
@@ -415,7 +419,11 @@ class WalkTool {
             this.collisionProxy.blocked = blocked;
             this.collisionProxy.sampleMs = sampleMs;
             if (changed || sampleMs >= COLLISION_SLOW_SAMPLE_MS || now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
-                this.reportCollisionProxy(performance.now(), changed ? 'changed' : sampleMs >= COLLISION_SLOW_SAMPLE_MS ? 'slow-sample' : 'sampled');
+                this.reportCollisionProxy(performance.now(), changed ? 'changed' : sampleMs >= COLLISION_SLOW_SAMPLE_MS ? 'slow-sample' : 'sampled', {
+                    canBlockFromView,
+                    clearance,
+                    sampleInterval
+                });
             }
         }).catch((error: unknown) => {
             this.collisionProxy.pending = false;
@@ -429,17 +437,20 @@ class WalkTool {
         });
     }
 
-    private reportCollisionProxy(now: number, reason: string) {
+    private reportCollisionProxy(now: number, reason: string, details: Record<string, unknown> = {}) {
         this.collisionProxy.lastReportAt = now;
         this.events.fire('walk.collisionProxy', {
             ok: true,
             reason,
             blocked: this.collisionProxy.blocked,
+            pending: this.collisionProxy.pending,
+            embeddedControls: this.embeddedControls,
             frontDistance: this.collisionProxy.frontDistance === null ? null : Number(this.collisionProxy.frontDistance.toFixed(3)),
             viewDistance: Number(this.collisionProxy.viewDistance.toFixed(3)),
             sampleMs: this.collisionProxy.sampleMs === null ? null : Number(this.collisionProxy.sampleMs.toFixed(1)),
             lookAgeMs: Number(Math.max(0, now - this.lastLookAt).toFixed(1)),
-            elevation: Number(this.camera.elevation.toFixed(2))
+            elevation: Number(this.camera.elevation.toFixed(2)),
+            ...details
         });
     }
 

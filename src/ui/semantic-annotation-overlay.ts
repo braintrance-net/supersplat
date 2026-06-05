@@ -338,6 +338,7 @@ class SemanticAnnotationOverlay {
     private multiplayerAvatarAsset: Asset | null = null;
     private multiplayerAvatarLoading = false;
     private multiplayerAvatarFailed = false;
+    private multiplayerAvatarLoadStartedAt: number | null = null;
     private interactionMode: 'edit' | 'game' = 'edit';
     private activeGameTargetIds = new Set<string>();
     private foundAnnotationIds = new Set<string>();
@@ -361,6 +362,7 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
+        events.on('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         events.on('update', this.onSceneUpdate, this);
         events.on('prerender', this.drawHitVolumes, this);
         events.on('postrender', this.update, this);
@@ -377,6 +379,7 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
+        this.events.off('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         this.events.off('update', this.onSceneUpdate, this);
         this.events.off('prerender', this.drawHitVolumes, this);
         this.events.off('postrender', this.update, this);
@@ -407,9 +410,16 @@ class SemanticAnnotationOverlay {
             this.setShowHitboxes(false);
             this.cancelClickPrewarm();
         } else {
+            this.preloadMultiplayerAvatarAsset({ reason: 'game-mode' });
             this.scheduleClickPrewarm('game-mode');
         }
         this.syncMarkerClasses();
+    }
+
+    private updateMultiplayerMarkerAvatarState(marker: HTMLDivElement, avatar: MultiplayerAvatarInstance | null = null) {
+        const expects3dAvatar = !this.multiplayerAvatarFailed;
+        marker.classList.toggle('has-3d-avatar', Boolean(avatar));
+        marker.classList.toggle('awaiting-3d-avatar', expects3dAvatar && !avatar);
     }
 
     private setMultiplayerPlayers(players?: MultiplayerOverlayPlayer[]) {
@@ -426,7 +436,7 @@ class SemanticAnnotationOverlay {
         }
 
         if (this.multiplayerPlayers.length > 0) {
-            this.loadMultiplayerAvatarAsset();
+            this.preloadMultiplayerAvatarAsset({ reason: 'players', count: this.multiplayerPlayers.length });
         }
 
         for (const player of this.multiplayerPlayers) {
@@ -451,6 +461,7 @@ class SemanticAnnotationOverlay {
 
             marker.style.setProperty('--multiplayer-avatar-color', player.color || '#53d6ff');
             marker.querySelector('.multiplayer-avatar-label')!.textContent = player.label;
+            this.updateMultiplayerMarkerAvatarState(marker);
         }
 
         this.update();
@@ -613,24 +624,49 @@ class SemanticAnnotationOverlay {
         this.scene.forceRender = true;
     }
 
-    private loadMultiplayerAvatarAsset() {
+    private preloadMultiplayerAvatarAsset(details: { reason?: string; count?: number } = {}) {
+        this.loadMultiplayerAvatarAsset(details.reason ?? 'preload', details);
+    }
+
+    private loadMultiplayerAvatarAsset(reason = 'update', details: Record<string, unknown> = {}) {
         if (this.multiplayerAvatarAsset || this.multiplayerAvatarLoading || this.multiplayerAvatarFailed) {
             return;
         }
 
         this.multiplayerAvatarLoading = true;
+        this.multiplayerAvatarLoadStartedAt = performance.now();
+        this.emitDiagnostic('multiplayer-avatar-preload-start', {
+            url: MULTIPLAYER_AVATAR_URL,
+            reason,
+            ...details
+        });
         this.scene.app.assets.loadFromUrl(MULTIPLAYER_AVATAR_URL, 'container', (error: unknown, asset?: Asset) => {
             this.multiplayerAvatarLoading = false;
+            const loadMs = this.multiplayerAvatarLoadStartedAt === null ? null : performance.now() - this.multiplayerAvatarLoadStartedAt;
             if (error || !asset) {
                 this.multiplayerAvatarFailed = true;
                 this.emitDiagnostic('multiplayer-avatar-load-failed', {
                     url: MULTIPLAYER_AVATAR_URL,
+                    loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
                     error: error instanceof Error ? error.message : String(error ?? 'unknown')
                 });
+                for (const marker of this.multiplayerMarkers.values()) {
+                    this.updateMultiplayerMarkerAvatarState(marker);
+                }
                 return;
             }
 
             this.multiplayerAvatarAsset = asset;
+            const resource = asset.resource as MultiplayerAvatarContainer | undefined;
+            this.emitDiagnostic('multiplayer-avatar-preload-ready', {
+                url: MULTIPLAYER_AVATAR_URL,
+                loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
+                animations: resource?.animations?.map(animation => animation.name) ?? [],
+                waitingPlayers: this.multiplayerPlayers.length
+            });
+            for (const marker of this.multiplayerMarkers.values()) {
+                this.updateMultiplayerMarkerAvatarState(marker);
+            }
             this.update();
             this.scene.forceRender = true;
         });
@@ -1197,6 +1233,7 @@ class SemanticAnnotationOverlay {
             return existing;
         }
 
+        const startedAt = performance.now();
         const head = {
             x: player.position[0],
             y: player.position[1],
@@ -1215,6 +1252,7 @@ class SemanticAnnotationOverlay {
         const bestYByRadius = MULTIPLAYER_GROUND_RADII.map(() => -Infinity);
         const maxRadiusSq = radiusSquares[radiusSquares.length - 1] ?? 0;
         let visited = 0;
+        let sampled = 0;
 
         for (const splat of splats) {
             const sorter: { centers?: Float32Array } | undefined = splat.entity.gsplat?.instance?.sorter;
@@ -1231,6 +1269,7 @@ class SemanticAnnotationOverlay {
                 if (visited % stride !== 0) {
                     continue;
                 }
+                sampled += 1;
                 if (state && ((state[i] ?? 0) & State.deleted) !== 0) {
                     continue;
                 }
@@ -1286,6 +1325,16 @@ class SemanticAnnotationOverlay {
             groundY: measuredGroundY
         } satisfies MultiplayerHeightCalibration;
         this.multiplayerHeightCalibrations.set(player.id, calibration);
+        this.emitDiagnostic('multiplayer-avatar-height-calibrated', {
+            playerId: player.id,
+            height: Number(calibration.height.toFixed(3)),
+            groundY: calibration.groundY === undefined ? null : Number(calibration.groundY.toFixed(3)),
+            source: measuredHeight === null ? 'default' : measuredGroundY === undefined ? 'target' : 'splat-ground',
+            totalCenters,
+            stride,
+            sampled,
+            calibrationMs: Number((performance.now() - startedAt).toFixed(1))
+        });
         return calibration;
     }
 
@@ -1614,7 +1663,7 @@ class SemanticAnnotationOverlay {
 
     private updateMultiplayerPlayers(clientWidth: number, clientHeight: number, cameraPosition: Vec3) {
         if (this.multiplayerPlayers.length > 0) {
-            this.loadMultiplayerAvatarAsset();
+            this.loadMultiplayerAvatarAsset('update');
         }
 
         const nowMs = performance.now();
@@ -1654,7 +1703,7 @@ class SemanticAnnotationOverlay {
             if (avatar) {
                 this.updateMultiplayerAvatar(player, avatar, avatarWorldHeight, nowMs);
             }
-            marker.classList.toggle('has-3d-avatar', Boolean(avatar));
+            this.updateMultiplayerMarkerAvatarState(marker, avatar);
 
             this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
@@ -1672,7 +1721,7 @@ class SemanticAnnotationOverlay {
 
             marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
             marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
-            marker.style.transform = avatar ?
+            marker.style.transform = avatar || !this.multiplayerAvatarFailed ?
                 `translate(${headX.toFixed(1)}px, ${headY.toFixed(1)}px)` :
                 `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
