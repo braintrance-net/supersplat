@@ -1121,9 +1121,11 @@ class WalkTool {
     }
 
     private collisionAnchors(camera = this.camera) {
+        const targetHead = camera.focalPoint;
+        targetHead.y += COLLISION_MESH_PLAYER_HEIGHT;
         return [
             this.cameraPosition(camera),
-            camera.focalPoint
+            targetHead
         ];
     }
 
