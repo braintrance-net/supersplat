@@ -659,6 +659,7 @@ const emptyPointerLookStats = () => ({
 
 const POINTER_LOOK_LONG_GAP_MS = 80;
 const POINTER_LOOK_IDLE_RESET_MS = 1000;
+const LONG_TASK_REPORT_MS = 5000;
 
 const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
@@ -675,13 +676,54 @@ const registerIframeApi = (events: Events) => {
     let perfTotalGapMs = 0;
     let perfMaxGapMs = 0;
     let perfLastFrameAt: number | null = null;
+    let perfSampleStartedAt = performance.now();
+    let perfLongFrameCount = 0;
+    let perfVeryLongFrameCount = 0;
     let lastPostRenderAt: number | null = null;
     let rafFrameCount = 0;
     let rafTotalGapMs = 0;
     let rafMaxGapMs = 0;
     let rafLastFrameAt: number | null = null;
+    let rafSampleStartedAt = performance.now();
+    let rafLongFrameCount = 0;
+    let rafVeryLongFrameCount = 0;
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
+
+    if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+        let longTaskCount = 0;
+        let longTaskTotalMs = 0;
+        let longTaskMaxMs = 0;
+        let lastLongTaskReportAt = performance.now();
+        const flushLongTasks = (reason: string) => {
+            if (longTaskCount === 0 || !window.parent || window.parent === window) {
+                return;
+            }
+            postDiagnostic(window.parent, '*', 'editor-longtask', {
+                reason,
+                count: longTaskCount,
+                totalMs: Number(longTaskTotalMs.toFixed(1)),
+                maxMs: Number(longTaskMaxMs.toFixed(1)),
+                activeTool: events.invoke('tool.active') as string | null
+            });
+            longTaskCount = 0;
+            longTaskTotalMs = 0;
+            longTaskMaxMs = 0;
+            lastLongTaskReportAt = performance.now();
+        };
+        const longTaskObserver = new PerformanceObserver((list) => {
+            for (const entry of list.getEntries()) {
+                longTaskCount += 1;
+                longTaskTotalMs += entry.duration;
+                longTaskMaxMs = Math.max(longTaskMaxMs, entry.duration);
+            }
+            if (performance.now() - lastLongTaskReportAt >= LONG_TASK_REPORT_MS) {
+                flushLongTasks('interval');
+            }
+        });
+        longTaskObserver.observe({ type: 'longtask', buffered: true });
+        window.setInterval(() => flushLongTasks('interval'), LONG_TASK_REPORT_MS);
+    }
 
     const resetPointerLookState = () => {
         pointerLookStats = emptyPointerLookStats();
@@ -701,6 +743,12 @@ const registerIframeApi = (events: Events) => {
             const gapMs = now - rafLastFrameAt;
             rafTotalGapMs += gapMs;
             rafMaxGapMs = Math.max(rafMaxGapMs, gapMs);
+            if (gapMs >= 50) {
+                rafLongFrameCount += 1;
+            }
+            if (gapMs >= 100) {
+                rafVeryLongFrameCount += 1;
+            }
         }
         rafLastFrameAt = now;
         rafFrameCount += 1;
@@ -808,6 +856,12 @@ const registerIframeApi = (events: Events) => {
             const gapMs = now - perfLastFrameAt;
             perfTotalGapMs += gapMs;
             perfMaxGapMs = Math.max(perfMaxGapMs, gapMs);
+            if (gapMs >= 50) {
+                perfLongFrameCount += 1;
+            }
+            if (gapMs >= 100) {
+                perfVeryLongFrameCount += 1;
+            }
         }
         perfLastFrameAt = now;
         lastPostRenderAt = now;
@@ -820,10 +874,13 @@ const registerIframeApi = (events: Events) => {
         }
 
         const frameCount = perfFrameCount;
+        const now = performance.now();
+        const perfSampleMs = Math.max(1, now - perfSampleStartedAt);
+        const rafSampleMs = Math.max(1, now - rafSampleStartedAt);
         const avgFrameMs = frameCount > 1 ? perfTotalGapMs / (frameCount - 1) : 0;
         const browserFrameCount = rafFrameCount;
         const avgBrowserFrameMs = browserFrameCount > 1 ? rafTotalGapMs / (browserFrameCount - 1) : 0;
-        const sinceLastPostrenderMs = lastPostRenderAt === null ? null : performance.now() - lastPostRenderAt;
+        const sinceLastPostrenderMs = lastPostRenderAt === null ? null : now - lastPostRenderAt;
         const canvas = (window.scene as any)?.canvas as HTMLCanvasElement | undefined;
         const targetSize = (window.scene as any)?.camera?.targetSize as { width?: number, height?: number } | undefined;
 
@@ -831,11 +888,15 @@ const registerIframeApi = (events: Events) => {
             metric: 'postrender',
             idle: frameCount === 0,
             rendered: frameCount > 0,
+            sampleMs: Number(perfSampleMs.toFixed(1)),
             sinceLastPostrenderMs: sinceLastPostrenderMs === null ? null : Number(sinceLastPostrenderMs.toFixed(1)),
             frames: frameCount,
+            windowFps: Number((frameCount * 1000 / perfSampleMs).toFixed(1)),
             approxFps: avgFrameMs > 0 ? Number((1000 / avgFrameMs).toFixed(1)) : 0,
             avgFrameMs: Number(avgFrameMs.toFixed(1)),
             maxFrameMs: Number(perfMaxGapMs.toFixed(1)),
+            longFrames: perfLongFrameCount,
+            veryLongFrames: perfVeryLongFrameCount,
             canvas: canvas ? { width: canvas.clientWidth, height: canvas.clientHeight } : null,
             targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null,
             dpr: window.devicePixelRatio,
@@ -845,10 +906,14 @@ const registerIframeApi = (events: Events) => {
 
         postDiagnostic(window.parent, '*', 'viewer-raf-perf', {
             metric: 'requestAnimationFrame',
+            sampleMs: Number(rafSampleMs.toFixed(1)),
             frames: browserFrameCount,
+            windowFps: Number((browserFrameCount * 1000 / rafSampleMs).toFixed(1)),
             approxFps: avgBrowserFrameMs > 0 ? Number((1000 / avgBrowserFrameMs).toFixed(1)) : 0,
             avgFrameMs: Number(avgBrowserFrameMs.toFixed(1)),
             maxFrameMs: Number(rafMaxGapMs.toFixed(1)),
+            longFrames: rafLongFrameCount,
+            veryLongFrames: rafVeryLongFrameCount,
             activeTool: events.invoke('tool.active') as string | null
         });
 
@@ -856,10 +921,16 @@ const registerIframeApi = (events: Events) => {
         perfTotalGapMs = 0;
         perfMaxGapMs = 0;
         perfLastFrameAt = null;
+        perfSampleStartedAt = performance.now();
+        perfLongFrameCount = 0;
+        perfVeryLongFrameCount = 0;
         rafFrameCount = 0;
         rafTotalGapMs = 0;
         rafMaxGapMs = 0;
         rafLastFrameAt = null;
+        rafSampleStartedAt = performance.now();
+        rafLongFrameCount = 0;
+        rafVeryLongFrameCount = 0;
     }, 2000);
 
     events.on('semanticAnnotations.activate', (annotationId: string) => {
