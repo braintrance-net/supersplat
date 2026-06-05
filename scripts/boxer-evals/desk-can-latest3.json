@@ -1,0 +1,170 @@
+[
+  {
+    "id": "angle-298-drifted",
+    "scene": {
+      "default_load_url": "/static/dev-assets/desk.ply"
+    },
+    "prompt": {
+      "type": "click",
+      "click_xy": [1075, 688]
+    },
+    "camera": {
+      "position": {
+        "x": -7.272263526916504,
+        "y": 19.01415252685547,
+        "z": 6.998732566833496
+      },
+      "target": {
+        "x": 4.417496277810947,
+        "y": 13.230410354345036,
+        "z": 0.6517109183905481
+      },
+      "fov": 75,
+      "azim": 298.49999999999886,
+      "elevation": -23.500000000000036,
+      "distance": 0.2139147484426135,
+      "ortho": false
+    },
+    "camera_changed_since_boxer_run": true,
+    "frame": {
+      "image_width": 2186,
+      "image_height": 1165
+    },
+    "target": {
+      "type": "axis_aligned_box",
+      "center": [1.2573776245117188, 14.230040550231934, 2.186706304550171],
+      "dimensions": [1, 2, 1],
+      "rotation": [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ]
+    }
+  },
+  {
+    "id": "angle-280-drifted",
+    "scene": {
+      "default_load_url": "/static/dev-assets/desk.ply"
+    },
+    "prompt": {
+      "type": "click",
+      "click_xy": [1522, 729]
+    },
+    "camera": {
+      "position": {
+        "x": -6.916441440582275,
+        "y": 18.80007553100586,
+        "z": 0.9026814699172974
+      },
+      "target": {
+        "x": 5.688059028377054,
+        "y": 11.990522020183176,
+        "z": -1.3652261473142397
+      },
+      "fov": 75,
+      "azim": 280.1999999999989,
+      "elevation": -28.000000000000046,
+      "distance": 0.21391474844261346,
+      "ortho": false
+    },
+    "camera_changed_since_boxer_run": true,
+    "frame": {
+      "image_width": 2186,
+      "image_height": 1165
+    },
+    "target": {
+      "type": "axis_aligned_box",
+      "center": [1.2573776245117188, 14.230040550231934, 2.186706304550171],
+      "dimensions": [1, 2, 1],
+      "rotation": [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ]
+    }
+  },
+  {
+    "id": "angle-205-clean",
+    "scene": {
+      "default_load_url": "/static/dev-assets/desk.ply"
+    },
+    "prompt": {
+      "type": "click",
+      "click_xy": [933, 587]
+    },
+    "camera": {
+      "position": {
+        "x": -3.0647239685058594,
+        "y": 17.730533599853516,
+        "z": -4.151430606842041
+      },
+      "target": {
+        "x": 2.403297531377464,
+        "y": 10.988131146775437,
+        "z": 7.468706852453181
+      },
+      "fov": 75,
+      "azim": 205.19999999999948,
+      "elevation": -27.70000000000005,
+      "distance": 0.21391474844261346,
+      "ortho": false
+    },
+    "camera_changed_since_boxer_run": false,
+    "frame": {
+      "image_width": 2186,
+      "image_height": 1165
+    },
+    "target": {
+      "type": "axis_aligned_box",
+      "center": [1.2573776245117188, 14.230040550231934, 2.186706304550171],
+      "dimensions": [1, 2, 1],
+      "rotation": [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ]
+    }
+  },
+  {
+    "id": "mouse-angle-278-clean",
+    "scene": {
+      "default_load_url": "/static/dev-assets/desk.ply"
+    },
+    "prompt": {
+      "type": "click",
+      "click_xy": [877, 697]
+    },
+    "camera": {
+      "position": {
+        "x": -12.953771591186523,
+        "y": 16.6672420501709,
+        "z": 8.889004707336426
+      },
+      "target": {
+        "x": 53.33093371797499,
+        "y": 5.94316536700998,
+        "z": -0.5447062408759251
+      },
+      "fov": 75,
+      "azim": 278.0999999999999,
+      "elevation": -9.100000000000009,
+      "distance": 1.0000000000000002,
+      "ortho": false
+    },
+    "camera_changed_since_boxer_run": false,
+    "frame": {
+      "image_width": 2186,
+      "image_height": 1165
+    },
+    "target": {
+      "type": "axis_aligned_box",
+      "center": [0, 13.729595184326172, 5.048304557800293],
+      "dimensions": [2, 1, 1.75],
+      "rotation": [
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1]
+      ]
+    }
+  }
+]

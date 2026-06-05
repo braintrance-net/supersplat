@@ -71,6 +71,7 @@ declare global {
                 ortho?: boolean;
             };
             boxerBackendUrl?: string;
+            boxerGpuDepth?: boolean;
             sam3BackendUrl?: string;
             semanticScanBackendUrl?: string;
             sketchfabProxyBaseUrl?: string;
@@ -91,6 +92,14 @@ declare global {
                 } | null;
             };
             copyPresetState: () => Promise<string>;
+            runBoxerEvalCase: (evalCase: unknown) => Promise<unknown>;
+            runBoxerEvalFusion: (payload: unknown) => Promise<unknown>;
+            runBoxerDetectAll: () => Promise<unknown>;
+            copyBoxerEvalCase: (payload?: unknown) => Promise<unknown>;
+            copyBoxerClickTestCase: (payload?: unknown) => Promise<unknown>;
+            setBoxerEvalTarget: (payload?: unknown) => unknown;
+            getBoxerEvalTarget: () => unknown;
+            clearBoxerEvalTarget: () => unknown;
         };
     }
 }
@@ -353,6 +362,30 @@ const main = async () => {
             console.log('SuperSplat preset state\n', json);
             await navigator.clipboard.writeText(json).catch(() => {});
             return json;
+        },
+        runBoxerEvalCase: (evalCase: unknown) => {
+            return events.invoke('boxer.runEvalCase', evalCase);
+        },
+        runBoxerEvalFusion: (payload: unknown) => {
+            return events.invoke('boxer.runEvalFusion', payload);
+        },
+        runBoxerDetectAll: () => {
+            return events.invoke('boxer.runDetectAll');
+        },
+        copyBoxerEvalCase: (payload?: unknown) => {
+            return events.invoke('boxer.copyEvalCase', payload);
+        },
+        copyBoxerClickTestCase: (payload?: unknown) => {
+            return events.invoke('boxer.copyClickTestCase', payload);
+        },
+        setBoxerEvalTarget: (payload?: unknown) => {
+            return events.invoke('boxer.setStickyEvalTarget', payload);
+        },
+        getBoxerEvalTarget: () => {
+            return events.invoke('boxer.currentEvalTarget');
+        },
+        clearBoxerEvalTarget: () => {
+            return events.invoke('boxer.clearEvalTarget');
         }
     };
 
@@ -379,10 +412,27 @@ const main = async () => {
             decodeURIComponent(filenameList[i]) :
             getFilenameFromUrl(decoded);
 
-        await events.invoke('import', [{
-            filename,
-            url: decoded
-        }]);
+        events.fire('progressStart', useDefaultLoad ? 'Loading demo scene...' : `Loading ${filename}...`);
+        events.fire('progressUpdate', {
+            text: filename,
+            progress: loadList.length > 1 ? (i / loadList.length) * 100 : 0
+        });
+        if (useDefaultLoad && i === 0) {
+            events.fire('toast', 'Loading demo scene...', 'info', 2500);
+        }
+
+        try {
+            await events.invoke('import', [{
+                filename,
+                url: decoded
+            }]);
+            events.fire('progressUpdate', {
+                text: filename,
+                progress: ((i + 1) / loadList.length) * 100
+            });
+        } finally {
+            events.fire('progressEnd');
+        }
     }
 
     if (useDefaultLoad) {

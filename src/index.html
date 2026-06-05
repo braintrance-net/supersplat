@@ -16,7 +16,7 @@
             (() => {
                 const sw = navigator.serviceWorker;
                 const markerKey = 'supersplat:legacy-service-worker-clear:v1';
-                if (!sw || window.localStorage?.getItem(markerKey) === 'done') {
+                if (!sw || (window.localStorage?.getItem(markerKey) === 'done' && !sw.controller)) {
                     return;
                 }
 

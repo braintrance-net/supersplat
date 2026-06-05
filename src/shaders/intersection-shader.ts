@@ -79,39 +79,40 @@ const fragmentShader = /* glsl */ `
             vec4 clip = matrix_viewProjection * vec4(world, 1.0);
             vec3 ndc = clip.xyz / clip.w;
 
-            // skip offscreen fragments
-            if (!any(greaterThan(abs(ndc), vec3(1.0)))) {
-                if (mode == 0) {
-                    // select by mask
-                    ivec2 maskUV = ivec2((ndc.xy * vec2(0.5, -0.5) + 0.5) * mask_params);
-                    clr[i] = texelFetch(mask, maskUV, 0).a < 1.0 ? 0.0 : 1.0;
-                } else if (mode == 1) {
-                    // select by rect
-                    clr[i] = all(greaterThan(ndc.xy * vec2(1.0, -1.0), rect_params.xy)) && all(lessThan(ndc.xy * vec2(1.0, -1.0), rect_params.zw)) ? 1.0 : 0.0;
-                } else if (mode == 2) {
-                    // select by sphere
-                    clr[i] = length(world - sphere_params.xyz) < sphere_params.w ? 1.0 : 0.0;
-                } else if (mode == 3) {
-                    // select by box
-                    vec3 relativePosition = world - box_params.xyz;
-                    bool isInsideCube = true;
-                    if (relativePosition.x < -aabb_params.x || relativePosition.x > aabb_params.x) {
-                        isInsideCube = false;
+            if (mode == 0 || mode == 1) {
+                if (!any(greaterThan(abs(ndc), vec3(1.0)))) {
+                    if (mode == 0) {
+                        // select by mask
+                        ivec2 maskUV = ivec2((ndc.xy * vec2(0.5, -0.5) + 0.5) * mask_params);
+                        clr[i] = texelFetch(mask, maskUV, 0).a < 1.0 ? 0.0 : 1.0;
+                    } else {
+                        // select by rect
+                        clr[i] = all(greaterThan(ndc.xy * vec2(1.0, -1.0), rect_params.xy)) && all(lessThan(ndc.xy * vec2(1.0, -1.0), rect_params.zw)) ? 1.0 : 0.0;
                     }
-                    if (relativePosition.y < -aabb_params.y || relativePosition.y > aabb_params.y) {
-                        isInsideCube = false;
-                    }
-                    if (relativePosition.z < -aabb_params.z || relativePosition.z > aabb_params.z) {
-                        isInsideCube = false;
-                    }
-                    clr[i] = isInsideCube ? 1.0 : 0.0;
-                } else if (mode == 4) {
-                    // select by oriented bounding box (OBB)
-                    // rel * R = R^T * rel: transform world offset into OBB local frame
-                    vec3 rel = world - box_params.xyz;
-                    vec3 local = rel * obb_rotation;
-                    clr[i] = all(lessThan(abs(local), aabb_params.xyz)) ? 1.0 : 0.0;
                 }
+            } else if (mode == 2) {
+                // select by sphere
+                clr[i] = length(world - sphere_params.xyz) < sphere_params.w ? 1.0 : 0.0;
+            } else if (mode == 3) {
+                // select by box
+                vec3 relativePosition = world - box_params.xyz;
+                bool isInsideCube = true;
+                if (relativePosition.x < -aabb_params.x || relativePosition.x > aabb_params.x) {
+                    isInsideCube = false;
+                }
+                if (relativePosition.y < -aabb_params.y || relativePosition.y > aabb_params.y) {
+                    isInsideCube = false;
+                }
+                if (relativePosition.z < -aabb_params.z || relativePosition.z > aabb_params.z) {
+                    isInsideCube = false;
+                }
+                clr[i] = isInsideCube ? 1.0 : 0.0;
+            } else if (mode == 4) {
+                // select by oriented bounding box (OBB)
+                // rel * R = R^T * rel: transform world offset into OBB local frame
+                vec3 rel = world - box_params.xyz;
+                vec3 local = rel * obb_rotation;
+                clr[i] = all(lessThan(abs(local), aabb_params.xyz)) ? 1.0 : 0.0;
             }
         }
 

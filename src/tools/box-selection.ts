@@ -38,6 +38,7 @@ class BoxSelection {
         const setButton = new Button({ text: 'Set', class: 'select-toolbar-button' });
         const addButton = new Button({ text: 'Add', class: 'select-toolbar-button' });
         const removeButton = new Button({ text: 'Remove', class: 'select-toolbar-button' });
+        const copyEvalButton = new Button({ text: 'Copy Eval', class: 'select-toolbar-button' });
 
         const lenX = new NumericInput({
             precision: 2,
@@ -66,11 +67,26 @@ class BoxSelection {
         selectToolbar.append(setButton);
         selectToolbar.append(addButton);
         selectToolbar.append(removeButton);
+        selectToolbar.append(copyEvalButton);
         selectToolbar.append(lenX);
         selectToolbar.append(lenY);
         selectToolbar.append(lenZ);
 
         canvasContainer.append(selectToolbar);
+
+        const currentBox = () => {
+            const p = box.pivot.getPosition();
+            return {
+                type: 'axis_aligned_box',
+                center: [p.x, p.y, p.z],
+                dimensions: [box.lenX, box.lenY, box.lenZ],
+                rotation: [
+                    [1, 0, 0],
+                    [0, 1, 0],
+                    [0, 0, 1]
+                ]
+            };
+        };
 
         const apply = (op: 'set' | 'add' | 'remove') => {
             const p = box.pivot.getPosition();
@@ -89,6 +105,10 @@ class BoxSelection {
             e.stopPropagation();
             apply('remove');
         });
+        copyEvalButton.dom.addEventListener('pointerdown', async (e) => {
+            e.stopPropagation();
+            await events.invoke('boxer.copyEvalCase', currentBox());
+        });
         lenX.on('change', () => {
             box.lenX = lenX.value;
         });
@@ -105,6 +125,12 @@ class BoxSelection {
                 gizmo.attach([box.pivot]);
             }
         });
+
+        try {
+            events.function('boxSelection.currentBox', currentBox);
+        } catch (err) {
+            console.warn('[BoxSelection] boxSelection.currentBox was already registered', err);
+        }
 
         const updateGizmoSize = () => {
             const { camera, canvas } = scene;

@@ -53,20 +53,27 @@ const parseNumber = (value) => {
     return Number.isFinite(result) ? result : undefined;
 };
 
-const defaultCameraPosition = parseVec3(process.env.DEFAULT_CAMERA_POSITION);
-const defaultCameraTarget = parseVec3(process.env.DEFAULT_CAMERA_TARGET);
+const DEFAULT_DEMO_SPLAT_URL = '/static/dev-assets/desk.ply';
+const DEFAULT_DEMO_CAMERA_POSITION = '-18.953201293945312,21.82550811767578,0.7397304773330688';
+const DEFAULT_DEMO_CAMERA_TARGET = '1.1438245773315447,14.384140968322754,3.0117335319519043';
+const DEFAULT_DEMO_CAMERA_FOV = '75';
+const DEFAULT_DEMO_BOXER_BACKEND_URL = 'http://3.19.208.185:8000';
+
+const defaultCameraPosition = parseVec3(process.env.DEFAULT_CAMERA_POSITION || DEFAULT_DEMO_CAMERA_POSITION);
+const defaultCameraTarget = parseVec3(process.env.DEFAULT_CAMERA_TARGET || DEFAULT_DEMO_CAMERA_TARGET);
 const defaultCamera = defaultCameraPosition && defaultCameraTarget ? {
     position: defaultCameraPosition,
     target: defaultCameraTarget,
-    fov: parseNumber(process.env.DEFAULT_CAMERA_FOV),
+    fov: parseNumber(process.env.DEFAULT_CAMERA_FOV || DEFAULT_DEMO_CAMERA_FOV),
     ortho: process.env.DEFAULT_CAMERA_ORTHO === undefined ? undefined : process.env.DEFAULT_CAMERA_ORTHO === 'true'
 } : undefined;
 const exposeClientApiKeys = process.env.EXPOSE_CLIENT_API_KEYS === 'true';
 
 const SUPERSPLAT_CONFIG = JSON.stringify({
-    defaultLoadUrl: process.env.DEFAULT_SPLAT_URL || '',
+    defaultLoadUrl: process.env.DEFAULT_SPLAT_URL || DEFAULT_DEMO_SPLAT_URL,
     defaultCamera,
-    boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
+    boxerBackendUrl: process.env.BOXER_BACKEND_URL || DEFAULT_DEMO_BOXER_BACKEND_URL,
+    boxerGpuDepth: process.env.BOXER_GPU_DEPTH === 'true',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
     sketchfabProxyBaseUrl: process.env.SKETCHFAB_PROXY_BASE_URL || '',
     openAiProxyBaseUrl: process.env.OPENAI_PROXY_BASE_URL || '',
