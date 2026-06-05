@@ -324,7 +324,7 @@ class Sam3Selection {
                 body: JSON.stringify(refineBody),
                 signal
             });
-            if (res.status === 404 || res.status === 405) {
+            if (res.status === 404 || res.status === 405 || res.status === 501) {
                 res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

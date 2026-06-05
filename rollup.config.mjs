@@ -67,6 +67,7 @@ const SUPERSPLAT_CONFIG = JSON.stringify({
     defaultLoadUrl: process.env.DEFAULT_SPLAT_URL || '',
     defaultCamera,
     boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
+    boxerGpuDepth: process.env.BOXER_GPU_DEPTH === 'true',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
     sketchfabProxyBaseUrl: process.env.SKETCHFAB_PROXY_BASE_URL || '',
     openAiProxyBaseUrl: process.env.OPENAI_PROXY_BASE_URL || '',

@@ -720,6 +720,25 @@ class Camera extends Element {
         return this.picker.readIds(x, y, width, height);
     }
 
+    async splatDepthRect(splat: Splat, x = 0, y = 0, width = 1, height = 1) {
+        this.picker.prepareDepth(splat);
+        const normalized = await this.picker.readDepthRect(x, y, width, height);
+        if (!normalized) return null;
+
+        const data = new Float32Array(normalized.data.length);
+        const depthRange = this.far - this.near;
+        for (let i = 0; i < normalized.data.length; i++) {
+            const value = normalized.data[i];
+            data[i] = value > 0 ? value * depthRange + this.near : 0;
+        }
+
+        return {
+            data,
+            width: normalized.width,
+            height: normalized.height
+        };
+    }
+
     docSerialize() {
         const pack3 = (v: Vec3) => [v.x, v.y, v.z];
 

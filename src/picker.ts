@@ -238,6 +238,44 @@ class Picker {
         return r / alpha;
     }
 
+    async readDepthRect(x: number, y: number, width: number, height: number): Promise<{
+        data: Float32Array;
+        width: number;
+        height: number;
+    } | null> {
+        if (!this.depthRenderTarget) {
+            return null;
+        }
+
+        const rt = this.depthRenderTarget;
+        const colorBuffer = rt.colorBuffer;
+
+        const px = Math.max(0, Math.min(rt.width - 1, Math.floor(x * rt.width)));
+        const py = Math.max(0, Math.min(rt.height - 1, Math.floor(y * rt.height)));
+        const pw = Math.max(1, Math.min(rt.width - px, Math.ceil((x + width) * rt.width) - px));
+        const ph = Math.max(1, Math.min(rt.height - py, Math.ceil((y + height) * rt.height) - py));
+        const texY = this.device.isWebGL2 ? rt.height - py - ph : py;
+
+        const pixels = await colorBuffer.read(px, texY, pw, ph, {
+            renderTarget: rt,
+            immediate: false
+        });
+        const data = new Float32Array(pw * ph);
+
+        for (let sy = 0; sy < ph; sy++) {
+            const outY = this.device.isWebGL2 ? ph - 1 - sy : sy;
+            for (let sx = 0; sx < pw; sx++) {
+                const src = (sy * pw + sx) * 4;
+                const r = half2Float(pixels[src]);
+                const transmittance = half2Float(pixels[src + 3]);
+                const alpha = 1 - transmittance;
+                data[outY * pw + sx] = alpha >= 1e-6 ? r / alpha : 0;
+            }
+        }
+
+        return { data, width: pw, height: ph };
+    }
+
     // Clean up resources
     destroy() {
         this.renderPass?.destroy();
