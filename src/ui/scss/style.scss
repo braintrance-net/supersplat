@@ -204,6 +204,48 @@ body.simplified-ui {
 body.advanced-ui {
 }
 
+body.time-trial-game-mode {
+    #bottom-toolbar,
+    #undo-redo-toolbar,
+    #undo-redo-undo,
+    #undo-redo-redo,
+    #bottom-toolbar-undo,
+    #bottom-toolbar-redo,
+    #right-toolbar,
+    #menu-bar,
+    #app-label,
+    #data-panel,
+    #scene-panel,
+    #timeline-panel,
+    #view-panel,
+    #color-panel,
+    #asset-browser,
+    #cursor-label,
+    #radial-menu-container,
+    #view-cube-container,
+    #mode-toggle,
+    #ui-mode-toggle {
+        display: none !important;
+    }
+
+    #semantic-annotation-overlay:not(.show-hitboxes) {
+        .semantic-annotation-marker,
+        .semantic-annotation-hitbox,
+        .semantic-annotation-pin,
+        .semantic-annotation-body {
+            display: none !important;
+        }
+    }
+
+    #semantic-annotation-overlay.show-hitboxes {
+        .semantic-annotation-body,
+        .semantic-annotation-label,
+        .semantic-annotation-description {
+            display: none !important;
+        }
+    }
+}
+
 #ui-mode-toggle {
     position: absolute;
     top: 20px;
