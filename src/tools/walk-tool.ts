@@ -1,8 +1,11 @@
 import { Vec3 } from 'playcanvas';
 
 import { Camera } from '../camera';
+import { ElementType } from '../element';
 import { Events } from '../events';
 import { Scene } from '../scene';
+import { Splat } from '../splat';
+import { State } from '../splat-state';
 
 type ArrowDirection = 'north' | 'south' | 'east' | 'west';
 type WalkInputState = {
@@ -25,6 +28,22 @@ type CollisionProxyState = {
     sampleMs: number | null;
 };
 
+type CollisionGridBuildStats = {
+    signature: string;
+    totalCenters: number;
+    sampledCenters: number;
+    stride: number;
+    cells: number;
+    buildMs: number;
+};
+
+type CollisionGridHit = {
+    blocked: boolean;
+    cellX?: number;
+    cellZ?: number;
+    bin?: number;
+};
+
 const tmpVec = new Vec3();
 const forwardVec = new Vec3();
 const rightVec = new Vec3();
@@ -38,6 +57,127 @@ const COLLISION_SLOW_SAMPLE_MS = 28;
 const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 const COLLISION_POINTER_LOOK_DEFER_MS = 160;
 const COLLISION_POINTER_LOOK_MAX_DEFER_MS = 900;
+const COLLISION_GRID_CELL_SIZE = 0.16;
+const COLLISION_GRID_Y_BIN_SIZE = 0.18;
+const COLLISION_GRID_MAX_SAMPLES = 500_000;
+const COLLISION_GRID_PLAYER_HEIGHT = 1.65;
+const COLLISION_GRID_CAPSULE_RADIUS = 0.22;
+const COLLISION_GRID_STEP_HEIGHT = 0.32;
+const COLLISION_GRID_HEAD_CLEARANCE = 0.18;
+const COLLISION_GRID_REPORT_INTERVAL_MS = 900;
+
+class WalkCollisionGrid {
+    readonly stats: CollisionGridBuildStats;
+    private readonly cells = new Map<string, Set<number>>();
+
+    private constructor(stats: Omit<CollisionGridBuildStats, 'cells' | 'buildMs'>, buildStartedAt: number) {
+        this.stats = {
+            ...stats,
+            cells: 0,
+            buildMs: 0
+        };
+        this.buildStartedAt = buildStartedAt;
+    }
+
+    private readonly buildStartedAt: number;
+
+    static signatureForSplats(splats: Splat[]) {
+        return splats.map(splat => `${splat.uid}:${splat.numSplats}:${splat.changedCounter}`).join('|');
+    }
+
+    static build(scene: Scene) {
+        const buildStartedAt = performance.now();
+        const splats = (scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
+        const signature = WalkCollisionGrid.signatureForSplats(splats);
+        const totalCenters = splats.reduce((total, splat) => {
+            const centers: Float32Array | undefined = splat.entity.gsplat?.instance?.sorter?.centers;
+            return total + (centers ? centers.length / 3 : 0);
+        }, 0);
+        const stride = Math.max(1, Math.ceil(totalCenters / COLLISION_GRID_MAX_SAMPLES));
+        const grid = new WalkCollisionGrid({ signature, totalCenters, sampledCenters: 0, stride }, buildStartedAt);
+
+        for (const splat of splats) {
+            const centers: Float32Array | undefined = splat.entity.gsplat?.instance?.sorter?.centers;
+            if (!centers) {
+                continue;
+            }
+
+            const state = splat.splatData.getProp('state') as Uint8Array | undefined;
+            const worldTransform = splat.entity.getWorldTransform().data as Float32Array;
+            const count = centers.length / 3;
+            for (let i = 0; i < count; i += stride) {
+                if (state && ((state[i] ?? 0) & State.deleted) !== 0) {
+                    continue;
+                }
+
+                const localX = centers[i * 3];
+                const localY = centers[i * 3 + 1];
+                const localZ = centers[i * 3 + 2];
+                const worldX = worldTransform[0] * localX + worldTransform[4] * localY + worldTransform[8] * localZ + worldTransform[12];
+                const worldY = worldTransform[1] * localX + worldTransform[5] * localY + worldTransform[9] * localZ + worldTransform[13];
+                const worldZ = worldTransform[2] * localX + worldTransform[6] * localY + worldTransform[10] * localZ + worldTransform[14];
+
+                grid.addPoint(worldX, worldY, worldZ);
+            }
+        }
+
+        grid.stats.cells = grid.cells.size;
+        grid.stats.buildMs = Number((performance.now() - grid.buildStartedAt).toFixed(1));
+        return grid;
+    }
+
+    private addPoint(x: number, y: number, z: number) {
+        if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+            return;
+        }
+
+        const cellX = Math.floor(x / COLLISION_GRID_CELL_SIZE);
+        const cellZ = Math.floor(z / COLLISION_GRID_CELL_SIZE);
+        const bin = Math.floor(y / COLLISION_GRID_Y_BIN_SIZE);
+        const key = `${cellX},${cellZ}`;
+        let bins = this.cells.get(key);
+        if (!bins) {
+            bins = new Set<number>();
+            this.cells.set(key, bins);
+        }
+        bins.add(bin);
+        this.stats.sampledCenters += 1;
+    }
+
+    intersectsPlayerCapsule(head: Vec3): CollisionGridHit {
+        const radius = COLLISION_GRID_CAPSULE_RADIUS;
+        const cellRadius = Math.ceil(radius / COLLISION_GRID_CELL_SIZE);
+        const centerCellX = Math.floor(head.x / COLLISION_GRID_CELL_SIZE);
+        const centerCellZ = Math.floor(head.z / COLLISION_GRID_CELL_SIZE);
+        const minBin = Math.floor((head.y - COLLISION_GRID_PLAYER_HEIGHT + COLLISION_GRID_STEP_HEIGHT) / COLLISION_GRID_Y_BIN_SIZE);
+        const maxBin = Math.floor((head.y - COLLISION_GRID_HEAD_CLEARANCE) / COLLISION_GRID_Y_BIN_SIZE);
+
+        for (let dx = -cellRadius; dx <= cellRadius; dx += 1) {
+            for (let dz = -cellRadius; dz <= cellRadius; dz += 1) {
+                const cellX = centerCellX + dx;
+                const cellZ = centerCellZ + dz;
+                const cellCenterX = (cellX + 0.5) * COLLISION_GRID_CELL_SIZE;
+                const cellCenterZ = (cellZ + 0.5) * COLLISION_GRID_CELL_SIZE;
+                if (Math.hypot(cellCenterX - head.x, cellCenterZ - head.z) > radius + COLLISION_GRID_CELL_SIZE * 0.75) {
+                    continue;
+                }
+
+                const bins = this.cells.get(`${cellX},${cellZ}`);
+                if (!bins) {
+                    continue;
+                }
+
+                for (let bin = minBin; bin <= maxBin; bin += 1) {
+                    if (bins.has(bin)) {
+                        return { blocked: true, cellX, cellZ, bin };
+                    }
+                }
+            }
+        }
+
+        return { blocked: false };
+    }
+}
 
 class WalkTool {
     private events: Events;
@@ -62,6 +202,8 @@ class WalkTool {
     private externalJumpWasPressed = false;
     private embeddedControls = false;
     private lastArrowPositionAt = 0;
+    private collisionGrid: WalkCollisionGrid | null = null;
+    private lastCollisionGridReportAt = 0;
     private collisionProxy: CollisionProxyState = {
         pending: false,
         frontDistance: null,
@@ -448,8 +590,11 @@ class WalkTool {
                 moveVec.mulScalar(1 / moveLength);
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
-                focalPoint.add(moveVec);
-                changed = true;
+                const resolvedMove = this.resolveCollisionGridMove(focalPoint, moveVec);
+                if (resolvedMove) {
+                    focalPoint.add(resolvedMove);
+                    changed = true;
+                }
             }
         }
 
@@ -467,6 +612,90 @@ class WalkTool {
             camera.setFocalPoint(focalPoint, 0);
             this.scene.forceRender = true;
         }
+    }
+
+    private ensureCollisionGrid() {
+        const splats = (this.scene.getElementsByType(ElementType.splat) as Splat[]).filter(splat => splat.visible);
+        const signature = WalkCollisionGrid.signatureForSplats(splats);
+        if (this.collisionGrid?.stats.signature === signature) {
+            return this.collisionGrid;
+        }
+
+        if (splats.length === 0) {
+            return null;
+        }
+
+        this.collisionGrid = WalkCollisionGrid.build(this.scene);
+        this.events.fire('walk.collisionGrid', {
+            ok: true,
+            reason: 'built',
+            ...this.collisionGrid.stats,
+            cellSize: COLLISION_GRID_CELL_SIZE,
+            yBinSize: COLLISION_GRID_Y_BIN_SIZE,
+            capsuleRadius: COLLISION_GRID_CAPSULE_RADIUS,
+            playerHeight: COLLISION_GRID_PLAYER_HEIGHT
+        });
+        return this.collisionGrid;
+    }
+
+    private reportCollisionGrid(now: number, reason: string, details: Record<string, unknown>) {
+        if (reason !== 'blocked' && now - this.lastCollisionGridReportAt < COLLISION_GRID_REPORT_INTERVAL_MS) {
+            return;
+        }
+
+        this.lastCollisionGridReportAt = now;
+        this.events.fire('walk.collisionGrid', {
+            ok: true,
+            reason,
+            embeddedControls: this.embeddedControls,
+            ...details
+        });
+    }
+
+    private resolveCollisionGridMove(focalPoint: Vec3, desiredMove: Vec3) {
+        const grid = this.ensureCollisionGrid();
+        if (!grid) {
+            return desiredMove;
+        }
+
+        const now = performance.now();
+        const candidates = [
+            { reason: 'clear', move: desiredMove },
+            { reason: 'slide-x', move: tmpVec.set(desiredMove.x, 0, 0).clone() },
+            { reason: 'slide-z', move: tmpVec.set(0, 0, desiredMove.z).clone() }
+        ];
+
+        for (const candidate of candidates) {
+            if (Math.hypot(candidate.move.x, candidate.move.z) <= 0.00001) {
+                continue;
+            }
+
+            const proposed = tmpVec.copy(focalPoint).add(candidate.move);
+            const hit = grid.intersectsPlayerCapsule(proposed);
+            if (!hit.blocked) {
+                this.reportCollisionGrid(now, candidate.reason, {
+                    blocked: false,
+                    moveX: Number(candidate.move.x.toFixed(3)),
+                    moveZ: Number(candidate.move.z.toFixed(3))
+                });
+                return candidate.move;
+            }
+        }
+
+        const blockedHead = tmpVec.copy(focalPoint).add(desiredMove);
+        const hit = grid.intersectsPlayerCapsule(blockedHead);
+        this.reportCollisionGrid(now, 'blocked', {
+            blocked: true,
+            cellX: hit.cellX ?? null,
+            cellZ: hit.cellZ ?? null,
+            bin: hit.bin ?? null,
+            headX: Number(blockedHead.x.toFixed(3)),
+            headY: Number(blockedHead.y.toFixed(3)),
+            headZ: Number(blockedHead.z.toFixed(3)),
+            moveX: Number(desiredMove.x.toFixed(3)),
+            moveZ: Number(desiredMove.z.toFixed(3))
+        });
+        return null;
     }
 
     private updateCollisionProxy(enabled: boolean) {

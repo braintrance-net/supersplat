@@ -1003,6 +1003,18 @@ const registerIframeApi = (events: Events) => {
         }
     });
 
+    events.on('walk.collisionGrid', (details: Record<string, unknown>) => {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: DIAGNOSTIC,
+                source: 'supersplat',
+                label: 'walk-collision-grid',
+                details,
+                at: new Date().toISOString()
+            }, '*');
+        }
+    });
+
     window.addEventListener('message', async (event: MessageEvent) => {
         const source = event.source as Window | null;
         if (!source) {
