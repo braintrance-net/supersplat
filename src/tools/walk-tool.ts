@@ -1052,10 +1052,11 @@ class WalkTool {
         }
 
         const now = performance.now();
+        const fullMove = desiredMove.clone();
         const candidates = [
-            { reason: 'clear', move: desiredMove },
-            { reason: 'slide-x', move: tmpVec.set(desiredMove.x, 0, 0).clone() },
-            { reason: 'slide-z', move: tmpVec.set(0, 0, desiredMove.z).clone() }
+            { reason: 'clear', move: fullMove },
+            { reason: 'slide-x', move: new Vec3(fullMove.x, 0, 0) },
+            { reason: 'slide-z', move: new Vec3(0, 0, fullMove.z) }
         ];
 
         for (const candidate of candidates) {
@@ -1075,7 +1076,7 @@ class WalkTool {
             }
         }
 
-        const blockedHead = tmpVec.copy(focalPoint).add(desiredMove);
+        const blockedHead = tmpVec.copy(focalPoint).add(fullMove);
         const hit = mesh.intersectsPlayerCapsule(blockedHead);
         this.reportCollisionMesh(now, 'blocked', {
             blocked: true,
@@ -1083,8 +1084,8 @@ class WalkTool {
             headX: Number(blockedHead.x.toFixed(3)),
             headY: Number(blockedHead.y.toFixed(3)),
             headZ: Number(blockedHead.z.toFixed(3)),
-            moveX: Number(desiredMove.x.toFixed(3)),
-            moveZ: Number(desiredMove.z.toFixed(3))
+            moveX: Number(fullMove.x.toFixed(3)),
+            moveZ: Number(fullMove.z.toFixed(3))
         });
         return null;
     }
