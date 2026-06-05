@@ -329,6 +329,7 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerTargetScreenPos = new Vec3();
     private readonly captureViewMatrix = new Mat4();
     private readonly hitVolumes = new Map<string, MaskHitVolume>();
+    private readonly hitVolumeSourceSignatures = new Map<string, string>();
     private readonly markerRenderStates = new Map<string, MarkerRenderState>();
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
@@ -404,6 +405,9 @@ class SemanticAnnotationOverlay {
     }
 
     private setInteractionMode(mode: 'edit' | 'game') {
+        if (this.interactionMode === mode) {
+            return;
+        }
         this.interactionMode = mode;
         this.container.classList.toggle('game-mode', mode === 'game');
         if (mode !== 'game') {
@@ -469,22 +473,46 @@ class SemanticAnnotationOverlay {
     }
 
     private setGameTargets(annotationIds?: string[]) {
-        this.activeGameTargetIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
+        const nextTargetIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
+        if (this.sameStringSet(this.activeGameTargetIds, nextTargetIds)) {
+            return;
+        }
+        this.activeGameTargetIds = nextTargetIds;
         this.syncMarkerClasses();
         this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
         this.scheduleClickPrewarm('game-targets');
     }
 
     private setFoundTargets(annotationIds?: string[]) {
-        this.foundAnnotationIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
+        const nextFoundIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
+        if (this.sameStringSet(this.foundAnnotationIds, nextFoundIds)) {
+            return;
+        }
+        this.foundAnnotationIds = nextFoundIds;
         this.syncMarkerClasses();
     }
 
     private setShowHitboxes(showHitboxes?: boolean) {
-        this.showHitboxes = showHitboxes === true;
+        const nextShowHitboxes = showHitboxes === true;
+        if (this.showHitboxes === nextShowHitboxes) {
+            return;
+        }
+        this.showHitboxes = nextShowHitboxes;
         this.container.classList.toggle('show-hitboxes', this.showHitboxes);
         this.syncMarkerClasses();
         this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
+    }
+
+    private sameStringSet(left: Set<string>, right: Set<string>) {
+        if (left.size !== right.size) {
+            return false;
+        }
+        for (const value of left) {
+            if (!right.has(value)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private syncMarkerClasses() {
@@ -1446,13 +1474,19 @@ class SemanticAnnotationOverlay {
             }
 
             attempted += 1;
-            const volume = await this.buildMaskHitVolume(annotation, maskSrc).catch((_error: unknown): null => null);
+            const signature = this.hitVolumeSignature(annotation, maskSrc);
+            const cachedVolume = this.hitVolumes.get(annotation.id);
+            const cachedSignature = this.hitVolumeSourceSignatures.get(annotation.id);
+            const volume = cachedVolume && cachedSignature === signature ?
+                cachedVolume :
+                await this.buildMaskHitVolume(annotation, maskSrc).catch((_error: unknown): null => null);
             if (generation !== this.hitVolumeGeneration) {
                 return;
             }
             if (volume) {
                 built += 1;
                 nextHitVolumes.set(annotation.id, volume);
+                this.hitVolumeSourceSignatures.set(annotation.id, signature);
             }
         }
 
@@ -1462,6 +1496,11 @@ class SemanticAnnotationOverlay {
         this.hitVolumes.clear();
         for (const [id, volume] of nextHitVolumes) {
             this.hitVolumes.set(id, volume);
+        }
+        for (const id of Array.from(this.hitVolumeSourceSignatures.keys())) {
+            if (!this.hitVolumes.has(id)) {
+                this.hitVolumeSourceSignatures.delete(id);
+            }
         }
         this.syncMarkerClasses();
         this.update();
@@ -1476,6 +1515,22 @@ class SemanticAnnotationOverlay {
 
     private shouldAbortHitVolumeBuild(generation: number) {
         return generation !== this.hitVolumeGeneration;
+    }
+
+    private hitVolumeSignature(annotation: SemanticAnnotation, maskSrc: string) {
+        return JSON.stringify({
+            id: annotation.id,
+            maskSrc,
+            position: annotation.position,
+            radius: annotation.radius,
+            sourceCamera: annotation.source?.camera,
+            targetImage: {
+                width: annotation.targetImage?.width,
+                height: annotation.targetImage?.height,
+                fullWidth: annotation.targetImage?.fullWidth,
+                fullHeight: annotation.targetImage?.fullHeight
+            }
+        });
     }
 
     private sourceViewMatrix(annotation: SemanticAnnotation) {

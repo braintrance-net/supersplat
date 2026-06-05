@@ -715,6 +715,7 @@ const registerIframeApi = (events: Events) => {
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
     let activeCollisionMeshSrc: string | null = null;
+    let lastGameModeSignature = '';
 
     events.on('scene.clear', () => {
         activeCollisionMeshSrc = null;
@@ -1231,6 +1232,20 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isGameModeMessage(event.data)) {
+            const gameModeSignature = JSON.stringify({
+                enabled: event.data.enabled,
+                objectiveIds: event.data.objectiveIds ?? [],
+                showHitboxes: event.data.showHitboxes === true,
+                hideChrome: event.data.hideChrome !== false
+            });
+            if (gameModeSignature === lastGameModeSignature) {
+                postDiagnostic(source, event.origin, 'game-mode-skip', {
+                    enabled: event.data.enabled,
+                    objectiveCount: event.data.objectiveIds?.length ?? 0
+                });
+                return;
+            }
+            lastGameModeSignature = gameModeSignature;
             events.fire('walk.embeddedControls', event.data.enabled);
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
@@ -1254,6 +1269,7 @@ const registerIframeApi = (events: Events) => {
                     events.fire('tool.walk');
                 }
             } else {
+                lastGameModeSignature = '';
                 document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
                 if (document.pointerLockElement) {
                     document.exitPointerLock();
