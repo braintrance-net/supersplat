@@ -1278,10 +1278,6 @@ const registerIframeApi = (events: Events) => {
             let rendered = false;
             resetGameModeState();
             events.fire('multiplayer.players', []);
-            events.fire('walk.collisionMeshClear', {
-                reason: 'load-file',
-                requestId: event.data.requestId ?? null
-            });
             postDiagnostic(source, event.origin, 'load-file-start', {
                 filename: event.data.filename,
                 byteLength: event.data.data?.byteLength ?? 0
