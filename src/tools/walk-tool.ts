@@ -625,11 +625,13 @@ class WalkTool {
             return;
         }
 
+        this.clearNativeFlyInput();
         this.onEmbeddedKeyDownBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, true);
         this.onEmbeddedKeyUpBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, false);
         const clearEmbeddedInput = () => {
             this.embeddedKeyboardInput = {};
             this.externalJumpWasPressed = false;
+            this.clearNativeFlyInput();
         };
         this.onEmbeddedFocusLossBound = clearEmbeddedInput;
         this.onEmbeddedVisibilityChangeBound = () => {
@@ -663,6 +665,18 @@ class WalkTool {
             this.onEmbeddedVisibilityChangeBound = null;
         }
         this.embeddedKeyboardInput = {};
+        this.clearNativeFlyInput();
+    }
+
+    private clearNativeFlyInput() {
+        this.events.fire('camera.fly.forward', false);
+        this.events.fire('camera.fly.backward', false);
+        this.events.fire('camera.fly.left', false);
+        this.events.fire('camera.fly.right', false);
+        this.events.fire('camera.fly.down', false);
+        this.events.fire('camera.fly.up', false);
+        this.events.fire('camera.modifier.fast', false);
+        this.events.fire('camera.modifier.slow', false);
     }
 
     private isTypingTarget(target: EventTarget | null) {
@@ -716,6 +730,9 @@ class WalkTool {
         }
 
         event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        this.clearNativeFlyInput();
         this.ensureUpdateLoop();
     }
 
