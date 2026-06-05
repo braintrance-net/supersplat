@@ -703,6 +703,11 @@ const registerIframeApi = (events: Events) => {
     let rafVeryLongFrameCount = 0;
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
+    let activeCollisionMeshSrc: string | null = null;
+
+    events.on('scene.clear', () => {
+        activeCollisionMeshSrc = null;
+    });
 
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
         let longTaskCount = 0;
@@ -1298,9 +1303,13 @@ const registerIframeApi = (events: Events) => {
                 }
 
                 applyTransformState(events, event.data.transform);
-                const collisionMeshSrc = hasSceneData ?
-                    collisionMeshSrcForFilename(event.data.filename, event.data.collisionMeshSrc) :
-                    null;
+                let collisionMeshSrc: string | null = null;
+                if (hasSceneData) {
+                    collisionMeshSrc = collisionMeshSrcForFilename(event.data.filename, event.data.collisionMeshSrc);
+                    activeCollisionMeshSrc = collisionMeshSrc;
+                } else if (event.data.transform && activeCollisionMeshSrc) {
+                    collisionMeshSrc = activeCollisionMeshSrc;
+                }
                 if (collisionMeshSrc) {
                     events.fire('walk.collisionMeshLoad', {
                         url: collisionMeshSrc,
