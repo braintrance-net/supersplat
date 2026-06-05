@@ -1287,7 +1287,8 @@ const registerIframeApi = (events: Events) => {
                 byteLength: event.data.data?.byteLength ?? 0
             }, event.data.requestId);
             try {
-                if (event.data.data) {
+                const hasSceneData = Boolean(event.data.data);
+                if (hasSceneData && event.data.data) {
                     events.fire('scene.clear');
                     const file = new File([event.data.data], event.data.filename);
                     await events.invoke('import', [{
@@ -1301,7 +1302,9 @@ const registerIframeApi = (events: Events) => {
                 }
 
                 applyTransformState(events, event.data.transform);
-                const collisionMeshSrc = collisionMeshSrcForFilename(event.data.filename, event.data.collisionMeshSrc);
+                const collisionMeshSrc = hasSceneData ?
+                    collisionMeshSrcForFilename(event.data.filename, event.data.collisionMeshSrc) :
+                    null;
                 if (collisionMeshSrc) {
                     events.fire('walk.collisionMeshLoad', {
                         url: collisionMeshSrc,

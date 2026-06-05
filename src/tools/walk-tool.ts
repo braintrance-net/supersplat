@@ -533,6 +533,7 @@ class WalkTool {
         this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
         this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
         this.events.on('walk.collisionMeshClear', this.clearCollisionMesh, this);
+        this.events.on('scene.clear', this.clearCollisionMesh, this);
     }
 
     activate() {
