@@ -53,6 +53,7 @@ type MultiplayerAvatarInstance = {
     rig: MultiplayerAvatarRig | null;
     usesProceduralRig: boolean;
     state: MultiplayerAvatarAnimation;
+    smoothedPlanarSpeed: number;
     phase: number;
     lastPosition: Vec3;
     lastUpdateMs: number;
@@ -114,7 +115,9 @@ const MULTIPLAYER_RAYCAST_MAX_SAMPLES = 260_000;
 const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
 const MULTIPLAYER_AVATAR_URL = '/static/dev-assets/kenney/kenney-avatar-animated.glb';
 const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
-const MULTIPLAYER_AVATAR_RUN_SPEED = 0.035;
+const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
+const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
+const MULTIPLAYER_AVATAR_SPEED_SMOOTHING = 0.32;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 
@@ -579,7 +582,7 @@ class SemanticAnnotationOverlay {
             };
         }
 
-        const animationRoot = (entity.findByName('RootNode') ?? entity.findByName('Root') ?? entity) as Entity;
+        const animationRoot = (entity.findByName('Root') ?? entity.findByName('RootNode') ?? entity) as Entity;
         entity.addComponent('anim', { activate: true, rootBone: animationRoot });
         const anim = (entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
         if (!anim) {
@@ -745,6 +748,7 @@ class SemanticAnnotationOverlay {
             rig,
             usesProceduralRig: !animationSetup.nativeAnimation,
             state: 'idle',
+            smoothedPlanarSpeed: 0,
             phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
             lastUpdateMs: performance.now()
@@ -788,7 +792,11 @@ class SemanticAnnotationOverlay {
         const dz = feetZ - instance.lastPosition.z;
         const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
         const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
-        this.transitionMultiplayerAvatar(instance, planarSpeed > MULTIPLAYER_AVATAR_RUN_SPEED ? 'run' : 'idle');
+        instance.smoothedPlanarSpeed += (planarSpeed - instance.smoothedPlanarSpeed) * MULTIPLAYER_AVATAR_SPEED_SMOOTHING;
+        const nextState = instance.state === 'run' ?
+            (instance.smoothedPlanarSpeed < MULTIPLAYER_AVATAR_RUN_STOP_SPEED ? 'idle' : 'run') :
+            (instance.smoothedPlanarSpeed > MULTIPLAYER_AVATAR_RUN_START_SPEED ? 'run' : 'idle');
+        this.transitionMultiplayerAvatar(instance, nextState);
 
         let forwardX = dx;
         let forwardZ = dz;
@@ -1469,6 +1477,7 @@ class SemanticAnnotationOverlay {
                 const avatar = this.multiplayerAvatarInstances.get(player.id);
                 if (avatar) {
                     avatar.entity.enabled = false;
+                    avatar.smoothedPlanarSpeed = 0;
                     avatar.lastPosition.set(player.position[0], player.position[1], player.position[2]);
                     avatar.lastUpdateMs = nowMs;
                 }
