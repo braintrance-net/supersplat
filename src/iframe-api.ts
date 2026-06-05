@@ -1309,10 +1309,13 @@ const registerIframeApi = (events: Events) => {
                 renderScale
             });
             if (gameModeSignature === lastGameModeSignature) {
+                const renderScaleResult = applyGameModeRenderScale(renderScale);
                 postDiagnostic(source, event.origin, 'game-mode-skip', {
                     enabled: event.data.enabled,
                     objectiveCount: event.data.objectiveIds?.length ?? 0,
-                    renderScale: activeGameModeRenderScale
+                    renderScale: renderScaleResult.renderScale,
+                    baseTargetSize: renderScaleResult.baseTargetSize,
+                    targetSize: renderScaleResult.targetSize
                 });
                 return;
             }
