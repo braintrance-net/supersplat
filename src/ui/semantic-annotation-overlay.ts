@@ -560,15 +560,14 @@ class SemanticAnnotationOverlay {
                 continue;
             }
 
-            const shouldProjectGameMarkers = this.shouldProjectAnnotationMarkers();
             const hasUsableVolume = !this.requiresMaskVolume(annotation) || this.hitVolumes.has(annotation.id);
-            changed = this.setMarkerClass(marker, 'inactive-game-target', shouldProjectGameMarkers && this.interactionMode === 'game' && !this.isActiveGameTarget(annotation)) || changed;
-            changed = this.setMarkerClass(marker, 'found-game-target', shouldProjectGameMarkers && this.foundAnnotationIds.has(annotation.id)) || changed;
-            changed = this.setMarkerClass(marker, 'missing-hit-volume', shouldProjectGameMarkers && this.interactionMode === 'game' && this.requiresMaskVolume(annotation) && !hasUsableVolume) || changed;
+            changed = this.setMarkerClass(marker, 'inactive-game-target', this.interactionMode === 'game' && !this.isActiveGameTarget(annotation)) || changed;
+            changed = this.setMarkerClass(marker, 'found-game-target', this.foundAnnotationIds.has(annotation.id)) || changed;
+            changed = this.setMarkerClass(marker, 'missing-hit-volume', this.interactionMode === 'game' && this.requiresMaskVolume(annotation) && !hasUsableVolume) || changed;
             changed = this.setMarkerClass(
                 marker,
                 'visible-test-target',
-                shouldProjectGameMarkers && this.interactionMode === 'game' && this.showHitboxes && this.isActiveGameTarget(annotation)
+                this.interactionMode === 'game' && this.showHitboxes && this.isActiveGameTarget(annotation)
             ) || changed;
         }
         if (changed) {
@@ -1066,15 +1065,12 @@ class SemanticAnnotationOverlay {
 
     private shouldShowVolume(annotation: SemanticAnnotation) {
         return this.interactionMode !== 'game' ||
+            this.foundAnnotationIds.has(annotation.id) ||
             (this.showHitboxes && this.isActiveGameTarget(annotation));
     }
 
     private shouldUpdateAnnotationMarker(annotation: SemanticAnnotation) {
         return this.interactionMode !== 'game' || (this.showHitboxes && this.isActiveGameTarget(annotation));
-    }
-
-    private shouldProjectAnnotationMarkers() {
-        return this.interactionMode !== 'game' || this.showHitboxes;
     }
 
     private setMarkerClass(marker: HTMLElement, className: string, enabled: boolean) {
@@ -1721,14 +1717,6 @@ class SemanticAnnotationOverlay {
     private update() {
         const { clientWidth, clientHeight } = this.scene.canvas;
         const cameraPosition = this.scene.camera.position;
-
-        if (!this.shouldProjectAnnotationMarkers()) {
-            for (const [id, marker] of this.markers) {
-                this.setMarkerHidden(id, marker, true);
-            }
-            this.updateMultiplayerPlayers(clientWidth, clientHeight, cameraPosition);
-            return;
-        }
 
         for (const annotation of this.annotations) {
             const marker = this.markers.get(annotation.id);

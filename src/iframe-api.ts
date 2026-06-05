@@ -60,12 +60,6 @@ type PresetState = {
 
 type RequestId = number | string | null;
 type Vec3Tuple = [number, number, number];
-type ViewportSize = { width: number; height: number };
-type GameModeRenderScaleResult = {
-    renderScale: number | null;
-    baseTargetSize: ViewportSize | null;
-    targetSize: ViewportSize | null;
-};
 
 type MultiplayerPlayer = {
     id: string;
@@ -191,7 +185,6 @@ interface GameModeMessage {
     objectiveIds?: string[];
     showHitboxes?: boolean;
     hideChrome?: boolean;
-    renderScale?: number;
 }
 
 interface AnnotationAuthoringCaptureMessage {
@@ -383,8 +376,7 @@ const isGameModeMessage = (data: any): data is GameModeMessage => {
         typeof data.enabled === 'boolean' &&
         (data.objectiveIds === undefined || Array.isArray(data.objectiveIds)) &&
         (data.showHitboxes === undefined || typeof data.showHitboxes === 'boolean') &&
-        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean') &&
-        (data.renderScale === undefined || typeof data.renderScale === 'number')
+        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean')
     );
 };
 
@@ -689,8 +681,6 @@ const POINTER_LOOK_IDLE_RESET_MS = 1000;
 const LONG_TASK_REPORT_MS = 5000;
 const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
-const GAME_MODE_MIN_RENDER_SCALE = 0.5;
-const GAME_MODE_MAX_RENDER_SCALE = 1;
 
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -726,7 +716,6 @@ const registerIframeApi = (events: Events) => {
     let lastAutoSemanticLayerSignature = '';
     let activeCollisionMeshSrc: string | null = null;
     let lastGameModeSignature = '';
-    let activeGameModeRenderScale: number | null = null;
 
     events.on('scene.clear', () => {
         activeCollisionMeshSrc = null;
@@ -779,61 +768,6 @@ const registerIframeApi = (events: Events) => {
         }
     };
 
-    const normalizedGameModeRenderScale = (scale: number | undefined): number | null => {
-        if (typeof scale !== 'number' || !Number.isFinite(scale)) {
-            return null;
-        }
-        const clamped = Math.min(GAME_MODE_MAX_RENDER_SCALE, Math.max(GAME_MODE_MIN_RENDER_SCALE, scale));
-        return clamped < GAME_MODE_MAX_RENDER_SCALE ? clamped : null;
-    };
-
-    const applyGameModeRenderScale = (scale: number | null): GameModeRenderScaleResult => {
-        const previousRenderScale = activeGameModeRenderScale;
-        activeGameModeRenderScale = scale;
-        const scene = window.scene as any;
-        const camera = scene?.camera;
-
-        if (!camera) {
-            return {
-                renderScale: scale,
-                baseTargetSize: null,
-                targetSize: null
-            };
-        }
-
-        if (scale === null) {
-            if (previousRenderScale !== null) {
-                camera.clearTargetSizeOverride?.();
-            }
-            const targetSize = camera.targetSize as { width?: number, height?: number } | undefined;
-            return {
-                renderScale: null,
-                baseTargetSize: scene.targetSize ? { width: scene.targetSize.width, height: scene.targetSize.height } : null,
-                targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null
-            };
-        }
-
-        const baseTargetSize = scene.targetSize as { width?: number, height?: number } | undefined;
-        const baseWidth = Math.max(1, Math.round(baseTargetSize?.width ?? camera.targetSize?.width ?? 1));
-        const baseHeight = Math.max(1, Math.round(baseTargetSize?.height ?? camera.targetSize?.height ?? 1));
-        const width = Math.max(1, Math.round(baseWidth * scale));
-        const height = Math.max(1, Math.round(baseHeight * scale));
-
-        if (typeof camera.setTargetSizeOverride === 'function') {
-            camera.setTargetSizeOverride(width, height);
-        } else {
-            camera.targetSizeOverride = { width, height };
-            camera.rebuildRenderTargets?.();
-            camera.onUpdate?.(0);
-        }
-
-        return {
-            renderScale: scale,
-            baseTargetSize: { width: baseWidth, height: baseHeight },
-            targetSize: { width, height }
-        };
-    };
-
     const tickRafPerf = () => {
         const now = performance.now();
         if (rafLastFrameAt !== null) {
@@ -871,7 +805,6 @@ const registerIframeApi = (events: Events) => {
         lastGameModeSignature = '';
         events.fire('walk.embeddedControls', false);
         resetPointerLookState();
-        applyGameModeRenderScale(null);
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
         document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -1300,24 +1233,20 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isGameModeMessage(event.data)) {
-            const renderScale = event.data.enabled ? normalizedGameModeRenderScale(event.data.renderScale) : null;
             const gameModeSignature = JSON.stringify({
                 enabled: event.data.enabled,
                 objectiveIds: event.data.objectiveIds ?? [],
                 showHitboxes: event.data.showHitboxes === true,
-                hideChrome: event.data.hideChrome !== false,
-                renderScale
+                hideChrome: event.data.hideChrome !== false
             });
             if (gameModeSignature === lastGameModeSignature) {
                 postDiagnostic(source, event.origin, 'game-mode-skip', {
                     enabled: event.data.enabled,
-                    objectiveCount: event.data.objectiveIds?.length ?? 0,
-                    renderScale: activeGameModeRenderScale
+                    objectiveCount: event.data.objectiveIds?.length ?? 0
                 });
                 return;
             }
             lastGameModeSignature = gameModeSignature;
-            const renderScaleResult = applyGameModeRenderScale(renderScale);
             events.fire('walk.embeddedControls', event.data.enabled);
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
@@ -1327,10 +1256,7 @@ const registerIframeApi = (events: Events) => {
                 enabled: event.data.enabled,
                 objectiveCount: event.data.objectiveIds?.length ?? 0,
                 showHitboxes: event.data.showHitboxes === true,
-                hideChrome: event.data.hideChrome !== false,
-                renderScale: renderScaleResult.renderScale,
-                baseTargetSize: renderScaleResult.baseTargetSize,
-                targetSize: renderScaleResult.targetSize
+                hideChrome: event.data.hideChrome !== false
             });
             if (event.data.enabled) {
                 const activeTool = events.invoke('tool.active') as string | null;
