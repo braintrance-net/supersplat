@@ -375,10 +375,14 @@ class WalkTool {
 
     private updateCollisionProxy(enabled: boolean) {
         const now = performance.now();
-        if (!enabled) {
+        if (!enabled || this.embeddedControls) {
             if (this.collisionProxy.blocked) {
                 this.collisionProxy.blocked = false;
-                this.reportCollisionProxy(now, 'released');
+                this.reportCollisionProxy(now, this.embeddedControls ? 'embedded-disabled' : 'released');
+            } else if (enabled && this.embeddedControls && now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.collisionProxy.frontDistance = null;
+                this.collisionProxy.sampleMs = null;
+                this.reportCollisionProxy(now, 'embedded-disabled');
             }
             return;
         }
