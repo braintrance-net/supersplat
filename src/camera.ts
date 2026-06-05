@@ -99,6 +99,7 @@ class Camera extends Element {
 
     // overridden target size
     targetSizeOverride: { width: number, height: number } = null;
+    offscreenPreviousTargetSizeOverride: { width: number, height: number } = null;
 
     renderOverlays = true;
 
@@ -775,13 +776,21 @@ class Camera extends Element {
     }
 
     startOffscreenMode(width: number, height: number) {
+        this.offscreenPreviousTargetSizeOverride = this.targetSizeOverride ?
+            { ...this.targetSizeOverride } :
+            null;
         this.finalPass.enabled = false;
         this.setTargetSizeOverride(width, height);
     }
 
     endOffscreenMode() {
         this.finalPass.enabled = true;
-        this.clearTargetSizeOverride();
+        if (this.offscreenPreviousTargetSizeOverride) {
+            this.setTargetSizeOverride(this.offscreenPreviousTargetSizeOverride.width, this.offscreenPreviousTargetSizeOverride.height);
+            this.offscreenPreviousTargetSizeOverride = null;
+        } else {
+            this.clearTargetSizeOverride();
+        }
     }
 
     get targetSize() {
