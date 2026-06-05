@@ -660,6 +660,8 @@ const emptyPointerLookStats = () => ({
 const POINTER_LOOK_LONG_GAP_MS = 80;
 const POINTER_LOOK_IDLE_RESET_MS = 1000;
 const LONG_TASK_REPORT_MS = 5000;
+const POSTRENDER_SPIKE_GAP_MS = 120;
+const POSTRENDER_SPIKE_REPORT_MS = 1000;
 
 const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
@@ -679,6 +681,8 @@ const registerIframeApi = (events: Events) => {
     let perfSampleStartedAt = performance.now();
     let perfLongFrameCount = 0;
     let perfVeryLongFrameCount = 0;
+    let perfSpikeCount = 0;
+    let lastPostrenderSpikeReportAt = 0;
     let lastPostRenderAt: number | null = null;
     let rafFrameCount = 0;
     let rafTotalGapMs = 0;
@@ -862,6 +866,26 @@ const registerIframeApi = (events: Events) => {
             if (gapMs >= 100) {
                 perfVeryLongFrameCount += 1;
             }
+            if (gapMs >= POSTRENDER_SPIKE_GAP_MS) {
+                perfSpikeCount += 1;
+                if (window.parent && window.parent !== window && now - lastPostrenderSpikeReportAt >= POSTRENDER_SPIKE_REPORT_MS) {
+                    const scene = window.scene as any;
+                    const canvas = scene?.canvas as HTMLCanvasElement | undefined;
+                    const targetSize = scene?.camera?.targetSize as { width?: number, height?: number } | undefined;
+                    postDiagnostic(window.parent, '*', 'viewer-postrender-spike', {
+                        gapMs: Number(gapMs.toFixed(1)),
+                        rafAgeMs: rafLastFrameAt === null ? null : Number((now - rafLastFrameAt).toFixed(1)),
+                        gameModeActive,
+                        activeTool: events.invoke('tool.active') as string | null,
+                        annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0,
+                        renderNextFrame: scene?.app?.renderNextFrame ?? null,
+                        canvas: canvas ? { width: canvas.clientWidth, height: canvas.clientHeight } : null,
+                        targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null,
+                        dpr: window.devicePixelRatio
+                    });
+                    lastPostrenderSpikeReportAt = now;
+                }
+            }
         }
         perfLastFrameAt = now;
         lastPostRenderAt = now;
@@ -897,9 +921,12 @@ const registerIframeApi = (events: Events) => {
             maxFrameMs: Number(perfMaxGapMs.toFixed(1)),
             longFrames: perfLongFrameCount,
             veryLongFrames: perfVeryLongFrameCount,
+            spikeFrames: perfSpikeCount,
             canvas: canvas ? { width: canvas.clientWidth, height: canvas.clientHeight } : null,
             targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null,
             dpr: window.devicePixelRatio,
+            gameModeActive,
+            renderNextFrame: (window.scene as any)?.app?.renderNextFrame ?? null,
             activeTool: events.invoke('tool.active') as string | null,
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
         });
@@ -924,6 +951,7 @@ const registerIframeApi = (events: Events) => {
         perfSampleStartedAt = performance.now();
         perfLongFrameCount = 0;
         perfVeryLongFrameCount = 0;
+        perfSpikeCount = 0;
         rafFrameCount = 0;
         rafTotalGapMs = 0;
         rafMaxGapMs = 0;
