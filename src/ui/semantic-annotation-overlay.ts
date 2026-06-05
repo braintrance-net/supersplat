@@ -1562,6 +1562,7 @@ class SemanticAnnotationOverlay {
             radius: annotation.radius,
             sceneGeometryRevision: this.sceneGeometryRevision,
             sourceCamera: annotation.source?.camera,
+            sourceCaptureSize: annotation.source?.captureSize,
             targetImage: {
                 width: annotation.targetImage?.width,
                 height: annotation.targetImage?.height,
