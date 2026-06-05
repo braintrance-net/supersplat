@@ -42,6 +42,12 @@ type CollisionMeshHit = {
     triangle?: number;
 };
 
+type PlayerCollisionBody = {
+    head: Vec3;
+    height: number;
+    radius: number;
+};
+
 const tmpVec = new Vec3();
 const forwardVec = new Vec3();
 const rightVec = new Vec3();
@@ -56,10 +62,10 @@ const COLLISION_MAX_BLOCK_ELEVATION_DEG = 24;
 const COLLISION_POINTER_LOOK_DEFER_MS = 160;
 const COLLISION_POINTER_LOOK_MAX_DEFER_MS = 900;
 const COLLISION_MESH_CELL_SIZE = 0.5;
-const COLLISION_MESH_PLAYER_HEIGHT = 1.6;
-const COLLISION_MESH_CAPSULE_RADIUS = 0.22;
+const COLLISION_MESH_PLAYER_HEIGHT = 1.65;
+const COLLISION_MESH_CAPSULE_RADIUS = 0.34;
 const COLLISION_MESH_STEP_HEIGHT = 0.32;
-const COLLISION_MESH_HEAD_CLEARANCE = 0.18;
+const COLLISION_MESH_HEAD_CLEARANCE = 0;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
 const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
 const COLLISION_MESH_SWEEP_STEP = 0.05;
@@ -157,9 +163,9 @@ class WalkCollisionMesh {
         };
     }
 
-    intersectsPlayerCapsule(head: Vec3): CollisionMeshHit {
-        const radius = COLLISION_MESH_CAPSULE_RADIUS;
-        const minY = head.y - COLLISION_MESH_PLAYER_HEIGHT + COLLISION_MESH_STEP_HEIGHT;
+    intersectsPlayerBody(body: PlayerCollisionBody): CollisionMeshHit {
+        const { head, radius } = body;
+        const minY = head.y - body.height + COLLISION_MESH_STEP_HEIGHT;
         const maxY = head.y - COLLISION_MESH_HEAD_CLEARANCE;
         const minCellX = Math.floor((head.x - radius) / COLLISION_MESH_CELL_SIZE);
         const maxCellX = Math.floor((head.x + radius) / COLLISION_MESH_CELL_SIZE);
@@ -776,7 +782,7 @@ class WalkTool {
 
         tmpVec.mulScalar(this.stepSize);
 
-        const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionAnchors(camera), tmpVec);
+        const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionBodies(camera), tmpVec);
         if (!resolvedMove) {
             return;
         }
@@ -936,7 +942,7 @@ class WalkTool {
                 moveVec.mulScalar(1 / moveLength);
                 const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
                 moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
-                const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionAnchors(camera), moveVec);
+                const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionBodies(camera), moveVec);
                 if (resolvedMove) {
                     focalPoint.add(resolvedMove);
                     changed = true;
@@ -1073,7 +1079,7 @@ class WalkTool {
         });
     }
 
-    private resolveCollisionMeshMove(anchors: Vec3[], desiredMove: Vec3) {
+    private resolveCollisionMeshMove(bodies: PlayerCollisionBody[], desiredMove: Vec3) {
         const mesh = this.collisionMesh;
         if (!mesh) {
             return desiredMove;
@@ -1092,10 +1098,17 @@ class WalkTool {
                 continue;
             }
 
-            const hit = this.firstCollisionMeshHit(mesh, anchors, candidate.move);
+            const hit = this.firstCollisionMeshHit(mesh, bodies, candidate.move);
             if (!hit) {
                 this.reportCollisionMesh(now, candidate.reason, {
                     blocked: false,
+                    body: bodies.length,
+                    headX: Number(bodies[0].head.x.toFixed(3)),
+                    headY: Number(bodies[0].head.y.toFixed(3)),
+                    headZ: Number(bodies[0].head.z.toFixed(3)),
+                    feetY: Number((bodies[0].head.y - bodies[0].height).toFixed(3)),
+                    radius: Number(bodies[0].radius.toFixed(3)),
+                    playerHeight: Number(bodies[0].height.toFixed(3)),
                     moveX: Number(candidate.move.x.toFixed(3)),
                     moveZ: Number(candidate.move.z.toFixed(3))
                 });
@@ -1103,34 +1116,43 @@ class WalkTool {
             }
         }
 
-        const hit = this.firstCollisionMeshHit(mesh, anchors, fullMove);
-        const blockedHead = hit?.head ?? anchors[0].clone().add(fullMove);
+        const hit = this.firstCollisionMeshHit(mesh, bodies, fullMove);
+        const blockedBody = hit?.body ?? {
+            ...bodies[0],
+            head: bodies[0].head.clone().add(fullMove)
+        };
         this.reportCollisionMesh(now, 'blocked', {
             blocked: true,
             triangle: hit?.triangle ?? null,
             anchor: hit?.anchor ?? null,
             sweepStep: hit?.step ?? null,
             sweepSteps: hit?.steps ?? null,
-            headX: Number(blockedHead.x.toFixed(3)),
-            headY: Number(blockedHead.y.toFixed(3)),
-            headZ: Number(blockedHead.z.toFixed(3)),
+            headX: Number(blockedBody.head.x.toFixed(3)),
+            headY: Number(blockedBody.head.y.toFixed(3)),
+            headZ: Number(blockedBody.head.z.toFixed(3)),
+            feetY: Number((blockedBody.head.y - blockedBody.height).toFixed(3)),
+            radius: Number(blockedBody.radius.toFixed(3)),
+            playerHeight: Number(blockedBody.height.toFixed(3)),
             moveX: Number(fullMove.x.toFixed(3)),
             moveZ: Number(fullMove.z.toFixed(3))
         });
         return null;
     }
 
-    private firstCollisionMeshHit(mesh: WalkCollisionMesh, anchors: Vec3[], move: Vec3) {
+    private firstCollisionMeshHit(mesh: WalkCollisionMesh, bodies: PlayerCollisionBody[], move: Vec3) {
         const stepCount = Math.max(1, Math.ceil(Math.hypot(move.x, move.z) / COLLISION_MESH_SWEEP_STEP));
         for (let step = 1; step <= stepCount; step += 1) {
             const scale = step / stepCount;
-            for (let i = 0; i < anchors.length; i += 1) {
-                const head = anchors[i].clone().add(tmpVec.copy(move).mulScalar(scale));
-                const hit = mesh.intersectsPlayerCapsule(head);
+            for (let i = 0; i < bodies.length; i += 1) {
+                const body = {
+                    ...bodies[i],
+                    head: bodies[i].head.clone().add(tmpVec.copy(move).mulScalar(scale))
+                };
+                const hit = mesh.intersectsPlayerBody(body);
                 if (hit.blocked) {
                     return {
                         anchor: `player-${i}`,
-                        head,
+                        body,
                         step,
                         steps: stepCount,
                         triangle: hit.triangle
@@ -1141,10 +1163,14 @@ class WalkTool {
         return null;
     }
 
-    private playerCollisionAnchors(camera = this.camera) {
+    private playerCollisionBodies(camera = this.camera): PlayerCollisionBody[] {
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        return [camera.focalPoint.add(forwardVec.clone().mulScalar(distance))];
+        return [{
+            head: camera.focalPoint.add(forwardVec.clone().mulScalar(distance)),
+            height: COLLISION_MESH_PLAYER_HEIGHT,
+            radius: COLLISION_MESH_CAPSULE_RADIUS
+        }];
     }
 
     private updateCollisionProxy(enabled: boolean) {
