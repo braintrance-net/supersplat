@@ -39,6 +39,8 @@ const POINTER_LOOK = 'supersplat:pointer-look';
 const WALK_INPUT = 'supersplat:walk-input';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
+const RENDER_WARMUP = 'supersplat:render-warmup';
+const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -185,6 +187,7 @@ interface GameModeMessage {
     objectiveIds?: string[];
     showHitboxes?: boolean;
     hideChrome?: boolean;
+    camera?: CameraState;
 }
 
 interface AnnotationAuthoringCaptureMessage {
@@ -227,6 +230,15 @@ interface CrosshairClickMessage {
     type: typeof CROSSHAIR_CLICK;
     screenPoint?: [number, number];
     requestId?: RequestId;
+}
+
+interface RenderWarmupMessage {
+    type: typeof RENDER_WARMUP;
+    frames?: number;
+}
+
+interface ViewerPerfResetMessage {
+    type: typeof VIEWER_PERF_RESET;
 }
 
 interface MultiplayerPlayersMessage {
@@ -376,7 +388,8 @@ const isGameModeMessage = (data: any): data is GameModeMessage => {
         typeof data.enabled === 'boolean' &&
         (data.objectiveIds === undefined || Array.isArray(data.objectiveIds)) &&
         (data.showHitboxes === undefined || typeof data.showHitboxes === 'boolean') &&
-        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean')
+        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean') &&
+        (data.camera === undefined || typeof data.camera === 'object')
     );
 };
 
@@ -419,6 +432,14 @@ const isWalkInputMessage = (data: any): data is WalkInputMessage => {
 
 const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
     return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data) && hasOptionalScreenPoint(data);
+};
+
+const isRenderWarmupMessage = (data: any): data is RenderWarmupMessage => {
+    return data && typeof data === 'object' && data.type === RENDER_WARMUP && (data.frames === undefined || typeof data.frames === 'number');
+};
+
+const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => {
+    return data && typeof data === 'object' && data.type === VIEWER_PERF_RESET;
 };
 
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
@@ -681,6 +702,7 @@ const POINTER_LOOK_IDLE_RESET_MS = 1000;
 const LONG_TASK_REPORT_MS = 5000;
 const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
+const GAME_MODE_ACTIVE_RENDER_IDLE_MS = 320;
 
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -715,16 +737,130 @@ const registerIframeApi = (events: Events) => {
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
     let activeCollisionMeshSrc: string | null = null;
+    let lastGameModeSignature = '';
+    let renderWarmupFrame: number | null = null;
+    let activeRenderFrame: number | null = null;
+    let activeRenderUntil = 0;
+    let activeRenderWalkHeld = false;
+    let activeRenderTickCount = 0;
+    let activeRenderTotalGapMs = 0;
+    let activeRenderMaxGapMs = 0;
+    let activeRenderLastAt: number | null = null;
+    let longTaskCount = 0;
+    let longTaskTotalMs = 0;
+    let longTaskMaxMs = 0;
+    let longTaskSamples: Array<Record<string, unknown>> = [];
+    let lastLongTaskReportAt = performance.now();
+
+    const resetLongTaskStats = () => {
+        longTaskCount = 0;
+        longTaskTotalMs = 0;
+        longTaskMaxMs = 0;
+        longTaskSamples = [];
+        lastLongTaskReportAt = performance.now();
+    };
+
+    const resetViewerPerfStats = () => {
+        perfFrameCount = 0;
+        perfTotalGapMs = 0;
+        perfMaxGapMs = 0;
+        perfLastFrameAt = null;
+        perfSampleStartedAt = performance.now();
+        perfLongFrameCount = 0;
+        perfVeryLongFrameCount = 0;
+        perfSpikeCount = 0;
+        lastPostRenderAt = null;
+        rafFrameCount = 0;
+        rafTotalGapMs = 0;
+        rafMaxGapMs = 0;
+        rafLastFrameAt = null;
+        rafSampleStartedAt = performance.now();
+        rafLongFrameCount = 0;
+        rafVeryLongFrameCount = 0;
+        activeRenderTickCount = 0;
+        activeRenderTotalGapMs = 0;
+        activeRenderMaxGapMs = 0;
+        activeRenderLastAt = null;
+        resetLongTaskStats();
+    };
+
+    const startRenderWarmup = (frames?: number) => {
+        const scene = window.scene as any;
+        if (!scene) {
+            return;
+        }
+
+        if (renderWarmupFrame !== null) {
+            window.cancelAnimationFrame(renderWarmupFrame);
+            renderWarmupFrame = null;
+        }
+
+        let remaining = Math.max(1, Math.min(240, Math.round(frames ?? 30)));
+        const tick = () => {
+            scene.forceRender = true;
+            remaining -= 1;
+            renderWarmupFrame = remaining > 0 ? window.requestAnimationFrame(tick) : null;
+        };
+        tick();
+    };
 
     events.on('scene.clear', () => {
         activeCollisionMeshSrc = null;
     });
 
+    const hasWalkInput = (input?: WalkInputMessage['keys']) => Boolean(
+        input?.forward ||
+        input?.backward ||
+        input?.left ||
+        input?.right ||
+        input?.sprint ||
+        input?.slide ||
+        input?.jump
+    );
+
+    const stopActiveRender = () => {
+        activeRenderUntil = 0;
+        activeRenderWalkHeld = false;
+        if (activeRenderFrame !== null) {
+            window.cancelAnimationFrame(activeRenderFrame);
+            activeRenderFrame = null;
+        }
+    };
+
+    const scheduleActiveRender = (leaseMs = GAME_MODE_ACTIVE_RENDER_IDLE_MS) => {
+        if (!gameModeActive) {
+            return;
+        }
+
+        activeRenderUntil = Math.max(activeRenderUntil, performance.now() + leaseMs);
+        if (activeRenderFrame !== null) {
+            return;
+        }
+
+        const tick = () => {
+            const now = performance.now();
+            const scene = window.scene as any;
+            const shouldRender = gameModeActive && (activeRenderWalkHeld || now <= activeRenderUntil);
+            if (!scene || !shouldRender) {
+                activeRenderFrame = null;
+                activeRenderLastAt = null;
+                return;
+            }
+
+            if (activeRenderLastAt !== null) {
+                const gapMs = now - activeRenderLastAt;
+                activeRenderTotalGapMs += gapMs;
+                activeRenderMaxGapMs = Math.max(activeRenderMaxGapMs, gapMs);
+            }
+            activeRenderLastAt = now;
+            activeRenderTickCount += 1;
+            scene.forceRender = true;
+            activeRenderFrame = window.requestAnimationFrame(tick);
+        };
+        tick();
+    };
+
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
-        let longTaskCount = 0;
-        let longTaskTotalMs = 0;
-        let longTaskMaxMs = 0;
-        let lastLongTaskReportAt = performance.now();
         const flushLongTasks = (reason: string) => {
             if (longTaskCount === 0 || !window.parent || window.parent === window) {
                 return;
@@ -734,18 +870,34 @@ const registerIframeApi = (events: Events) => {
                 count: longTaskCount,
                 totalMs: Number(longTaskTotalMs.toFixed(1)),
                 maxMs: Number(longTaskMaxMs.toFixed(1)),
+                samples: longTaskSamples,
                 activeTool: events.invoke('tool.active') as string | null
             });
-            longTaskCount = 0;
-            longTaskTotalMs = 0;
-            longTaskMaxMs = 0;
-            lastLongTaskReportAt = performance.now();
+            resetLongTaskStats();
         };
         const longTaskObserver = new PerformanceObserver((list) => {
             for (const entry of list.getEntries()) {
                 longTaskCount += 1;
                 longTaskTotalMs += entry.duration;
                 longTaskMaxMs = Math.max(longTaskMaxMs, entry.duration);
+                const attribution = (entry as any).attribution;
+                const sample = {
+                    durationMs: Number(entry.duration.toFixed(1)),
+                    startTimeMs: Number(entry.startTime.toFixed(1)),
+                    name: entry.name,
+                    attribution: Array.isArray(attribution) ?
+                        attribution.slice(0, 3).map((item: any) => ({
+                            name: item.name,
+                            entryType: item.entryType,
+                            containerType: item.containerType,
+                            containerName: item.containerName,
+                            containerSrc: item.containerSrc
+                        })) :
+                        undefined
+                };
+                longTaskSamples.push(sample);
+                longTaskSamples.sort((a, b) => Number(b.durationMs) - Number(a.durationMs));
+                longTaskSamples = longTaskSamples.slice(0, 5);
             }
             if (performance.now() - lastLongTaskReportAt >= LONG_TASK_REPORT_MS) {
                 flushLongTasks('interval');
@@ -801,6 +953,7 @@ const registerIframeApi = (events: Events) => {
     };
 
     const resetGameModeState = () => {
+        lastGameModeSignature = '';
         events.fire('walk.embeddedControls', false);
         resetPointerLookState();
         restoreGameModeTool();
@@ -903,6 +1056,10 @@ const registerIframeApi = (events: Events) => {
                         gapMs: Number(gapMs.toFixed(1)),
                         rafAgeMs: rafLastFrameAt === null ? null : Number((now - rafLastFrameAt).toFixed(1)),
                         gameModeActive,
+                        activeRenderLease: activeRenderFrame !== null,
+                        activeRenderWalkHeld,
+                        visibilityState: document.visibilityState,
+                        hasFocus: document.hasFocus(),
                         activeTool: events.invoke('tool.active') as string | null,
                         annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0,
                         renderNextFrame: scene?.app?.renderNextFrame ?? null,
@@ -931,6 +1088,7 @@ const registerIframeApi = (events: Events) => {
         const avgFrameMs = frameCount > 1 ? perfTotalGapMs / (frameCount - 1) : 0;
         const browserFrameCount = rafFrameCount;
         const avgBrowserFrameMs = browserFrameCount > 1 ? rafTotalGapMs / (browserFrameCount - 1) : 0;
+        const avgActiveRenderGapMs = activeRenderTickCount > 1 ? activeRenderTotalGapMs / (activeRenderTickCount - 1) : 0;
         const sinceLastPostrenderMs = lastPostRenderAt === null ? null : now - lastPostRenderAt;
         const canvas = (window.scene as any)?.canvas as HTMLCanvasElement | undefined;
         const targetSize = (window.scene as any)?.camera?.targetSize as { width?: number, height?: number } | undefined;
@@ -953,6 +1111,13 @@ const registerIframeApi = (events: Events) => {
             targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null,
             dpr: window.devicePixelRatio,
             gameModeActive,
+            activeRenderLease: activeRenderFrame !== null,
+            activeRenderWalkHeld,
+            activeRenderTicks: activeRenderTickCount,
+            activeRenderAvgGapMs: Number(avgActiveRenderGapMs.toFixed(1)),
+            activeRenderMaxGapMs: Number(activeRenderMaxGapMs.toFixed(1)),
+            visibilityState: document.visibilityState,
+            hasFocus: document.hasFocus(),
             renderNextFrame: (window.scene as any)?.app?.renderNextFrame ?? null,
             activeTool: events.invoke('tool.active') as string | null,
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
@@ -968,6 +1133,11 @@ const registerIframeApi = (events: Events) => {
             maxFrameMs: Number(rafMaxGapMs.toFixed(1)),
             longFrames: rafLongFrameCount,
             veryLongFrames: rafVeryLongFrameCount,
+            gameModeActive,
+            activeRenderLease: activeRenderFrame !== null,
+            activeRenderWalkHeld,
+            visibilityState: document.visibilityState,
+            hasFocus: document.hasFocus(),
             activeTool: events.invoke('tool.active') as string | null
         });
 
@@ -986,6 +1156,10 @@ const registerIframeApi = (events: Events) => {
         rafSampleStartedAt = performance.now();
         rafLongFrameCount = 0;
         rafVeryLongFrameCount = 0;
+        activeRenderTickCount = 0;
+        activeRenderTotalGapMs = 0;
+        activeRenderMaxGapMs = 0;
+        activeRenderLastAt = null;
     }, 2000);
 
     events.on('semanticAnnotations.activate', (annotationId: string) => {
@@ -1142,6 +1316,7 @@ const registerIframeApi = (events: Events) => {
 
         if (isPointerLookMessage(event.data)) {
             const receivedAt = performance.now();
+            scheduleActiveRender();
             if (pointerLookStats.lastAt !== null) {
                 const gapMs = receivedAt - pointerLookStats.lastAt;
                 if (gapMs > POINTER_LOOK_IDLE_RESET_MS) {
@@ -1171,6 +1346,8 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isWalkInputMessage(event.data)) {
+            activeRenderWalkHeld = hasWalkInput(event.data.keys);
+            scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);
             events.fire('walk.input', event.data.keys);
             return;
         }
@@ -1183,6 +1360,16 @@ const registerIframeApi = (events: Events) => {
                 ...(result as Record<string, unknown>),
                 handlerMs: Number(handlerMs.toFixed(1))
             }, event.data.requestId);
+        }
+
+        if (isRenderWarmupMessage(event.data)) {
+            startRenderWarmup(event.data.frames);
+            return;
+        }
+
+        if (isViewerPerfResetMessage(event.data)) {
+            resetViewerPerfStats();
+            return;
         }
 
         if (isSemanticLayerGetMessage(event.data)) {
@@ -1231,6 +1418,24 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isGameModeMessage(event.data)) {
+            if (event.data.enabled) {
+                applyCameraState(events, event.data.camera);
+            }
+            const gameModeSignature = JSON.stringify({
+                enabled: event.data.enabled,
+                objectiveIds: event.data.objectiveIds ?? [],
+                showHitboxes: event.data.showHitboxes === true,
+                hideChrome: event.data.hideChrome !== false
+            });
+            if (gameModeSignature === lastGameModeSignature) {
+                postDiagnostic(source, event.origin, 'game-mode-skip', {
+                    enabled: event.data.enabled,
+                    objectiveCount: event.data.objectiveIds?.length ?? 0,
+                    cameraReset: Boolean(event.data.camera)
+                });
+                return;
+            }
+            lastGameModeSignature = gameModeSignature;
             events.fire('walk.embeddedControls', event.data.enabled);
             events.fire('semanticAnnotations.interactionMode', event.data.enabled ? 'game' : 'edit');
             events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
@@ -1240,7 +1445,8 @@ const registerIframeApi = (events: Events) => {
                 enabled: event.data.enabled,
                 objectiveCount: event.data.objectiveIds?.length ?? 0,
                 showHitboxes: event.data.showHitboxes === true,
-                hideChrome: event.data.hideChrome !== false
+                hideChrome: event.data.hideChrome !== false,
+                cameraReset: Boolean(event.data.camera)
             });
             if (event.data.enabled) {
                 const activeTool = events.invoke('tool.active') as string | null;
@@ -1253,12 +1459,15 @@ const registerIframeApi = (events: Events) => {
                 if (startingGameMode && gameModeActivatedWalk) {
                     events.fire('tool.walk');
                 }
+                scheduleActiveRender(1000);
             } else {
+                lastGameModeSignature = '';
                 document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
                 if (document.pointerLockElement) {
                     document.exitPointerLock();
                 }
                 resetPointerLookState();
+                stopActiveRender();
                 restoreGameModeTool();
             }
         }

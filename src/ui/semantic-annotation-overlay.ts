@@ -329,6 +329,7 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerTargetScreenPos = new Vec3();
     private readonly captureViewMatrix = new Mat4();
     private readonly hitVolumes = new Map<string, MaskHitVolume>();
+    private readonly hitVolumeSourceSignatures = new Map<string, string>();
     private readonly markerRenderStates = new Map<string, MarkerRenderState>();
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
@@ -346,10 +347,8 @@ class SemanticAnnotationOverlay {
     private pointerDownPos: { x: number, y: number } | null = null;
     private hitVolumeGeneration = 0;
     private lastClickCandidates: Array<Record<string, unknown>> = [];
-    private clickPrewarmTimer: number | null = null;
-    private clickPrewarmInFlight: Promise<void> | null = null;
-    private clickPrewarmGeneration = 0;
-    private lastClickPrewarmAt = 0;
+    private sceneGeometryRevision = 0;
+    private hitVolumeRebuildTimer: number | null = null;
 
     constructor(private readonly events: Events, private readonly scene: Scene, parent: HTMLElement) {
         this.container = document.createElement('div');
@@ -363,6 +362,11 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
         events.on('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
+        events.on('scene.elementAdded', this.onSceneGeometryChanged, this);
+        events.on('scene.elementRemoved', this.onSceneGeometryChanged, this);
+        events.on('splat.positionsChanged', this.onSceneGeometryChanged, this);
+        events.on('splat.moved', this.onSceneGeometryChanged, this);
+        events.on('splat.visibility', this.onSceneGeometryChanged, this);
         events.on('update', this.onSceneUpdate, this);
         events.on('prerender', this.drawHitVolumes, this);
         events.on('postrender', this.update, this);
@@ -380,10 +384,18 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
         this.events.off('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
+        this.events.off('scene.elementAdded', this.onSceneGeometryChanged, this);
+        this.events.off('scene.elementRemoved', this.onSceneGeometryChanged, this);
+        this.events.off('splat.positionsChanged', this.onSceneGeometryChanged, this);
+        this.events.off('splat.moved', this.onSceneGeometryChanged, this);
+        this.events.off('splat.visibility', this.onSceneGeometryChanged, this);
         this.events.off('update', this.onSceneUpdate, this);
         this.events.off('prerender', this.drawHitVolumes, this);
         this.events.off('postrender', this.update, this);
-        this.cancelClickPrewarm();
+        if (this.hitVolumeRebuildTimer !== null) {
+            window.clearTimeout(this.hitVolumeRebuildTimer);
+            this.hitVolumeRebuildTimer = null;
+        }
         this.container.parentElement?.removeEventListener('pointerdown', this.onPointerDown);
         this.container.parentElement?.removeEventListener('pointerup', this.onPointerUp);
         this.container.remove();
@@ -403,15 +415,35 @@ class SemanticAnnotationOverlay {
         this.scene.forceRender = true;
     }
 
+    private onSceneGeometryChanged() {
+        this.sceneGeometryRevision += 1;
+        this.hitVolumeGeneration += 1;
+        this.hitVolumes.clear();
+        this.hitVolumeSourceSignatures.clear();
+        if (this.hitVolumeRebuildTimer !== null) {
+            window.clearTimeout(this.hitVolumeRebuildTimer);
+        }
+        this.hitVolumeRebuildTimer = window.setTimeout(() => {
+            this.hitVolumeRebuildTimer = null;
+            if (this.annotations.length === 0) {
+                return;
+            }
+            this.rebuildHitVolumes(this.annotations).catch((_error: unknown): undefined => undefined);
+        }, 0);
+        this.syncMarkerClasses();
+        this.scene.forceRender = true;
+    }
+
     private setInteractionMode(mode: 'edit' | 'game') {
+        if (this.interactionMode === mode) {
+            return;
+        }
         this.interactionMode = mode;
         this.container.classList.toggle('game-mode', mode === 'game');
         if (mode !== 'game') {
             this.setShowHitboxes(false);
-            this.cancelClickPrewarm();
         } else {
             this.preloadMultiplayerAvatarAsset({ reason: 'game-mode' });
-            this.scheduleClickPrewarm('game-mode');
         }
         this.syncMarkerClasses();
     }
@@ -469,22 +501,49 @@ class SemanticAnnotationOverlay {
     }
 
     private setGameTargets(annotationIds?: string[]) {
-        this.activeGameTargetIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
-        this.syncMarkerClasses();
+        const nextTargetIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
+        if (this.sameStringSet(this.activeGameTargetIds, nextTargetIds)) {
+            return;
+        }
+        this.activeGameTargetIds = nextTargetIds;
+        if (this.interactionMode !== 'game' || this.showHitboxes) {
+            this.syncMarkerClasses();
+        }
         this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
-        this.scheduleClickPrewarm('game-targets');
     }
 
     private setFoundTargets(annotationIds?: string[]) {
-        this.foundAnnotationIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
-        this.syncMarkerClasses();
+        const nextFoundIds = new Set(Array.isArray(annotationIds) ? annotationIds : []);
+        if (this.sameStringSet(this.foundAnnotationIds, nextFoundIds)) {
+            return;
+        }
+        this.foundAnnotationIds = nextFoundIds;
+        if (this.interactionMode !== 'game' || this.showHitboxes) {
+            this.syncMarkerClasses();
+        }
     }
 
     private setShowHitboxes(showHitboxes?: boolean) {
-        this.showHitboxes = showHitboxes === true;
+        const nextShowHitboxes = showHitboxes === true;
+        if (this.showHitboxes === nextShowHitboxes) {
+            return;
+        }
+        this.showHitboxes = nextShowHitboxes;
         this.container.classList.toggle('show-hitboxes', this.showHitboxes);
         this.syncMarkerClasses();
         this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
+    }
+
+    private sameStringSet(left: Set<string>, right: Set<string>) {
+        if (left.size !== right.size) {
+            return false;
+        }
+        for (const value of left) {
+            if (!right.has(value)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private syncMarkerClasses() {
@@ -541,73 +600,6 @@ class SemanticAnnotationOverlay {
             details,
             at: new Date().toISOString()
         }, '*');
-    }
-
-    private cancelClickPrewarm() {
-        this.clickPrewarmGeneration += 1;
-        if (this.clickPrewarmTimer !== null) {
-            window.clearTimeout(this.clickPrewarmTimer);
-            this.clickPrewarmTimer = null;
-        }
-    }
-
-    private async settleClickPrewarmBeforeClick() {
-        if (this.clickPrewarmTimer !== null) {
-            window.clearTimeout(this.clickPrewarmTimer);
-            this.clickPrewarmTimer = null;
-            this.clickPrewarmGeneration += 1;
-        }
-
-        const inFlight = this.clickPrewarmInFlight;
-        if (inFlight) {
-            await inFlight.catch((_error: unknown): undefined => undefined);
-        }
-    }
-
-    private scheduleClickPrewarm(reason: string) {
-        if (this.interactionMode !== 'game') {
-            return;
-        }
-
-        this.cancelClickPrewarm();
-        const generation = this.clickPrewarmGeneration;
-        this.clickPrewarmTimer = window.setTimeout(() => {
-            this.clickPrewarmTimer = null;
-            if (generation !== this.clickPrewarmGeneration || this.interactionMode !== 'game') {
-                return;
-            }
-
-            const startedAt = performance.now();
-            const prewarmTask = this.scene.camera.intersect(0.5, 0.5).then((hit) => {
-                if (generation !== this.clickPrewarmGeneration || this.interactionMode !== 'game') {
-                    return;
-                }
-
-                const prewarmMs = performance.now() - startedAt;
-                this.lastClickPrewarmAt = performance.now();
-                this.emitDiagnostic('crosshair-intersect-prewarm', {
-                    reason,
-                    ok: Boolean(hit?.position),
-                    prewarmMs: Number(prewarmMs.toFixed(1)),
-                    ...this.hitboxDiagnosticDetails()
-                });
-            }).catch((error: unknown) => {
-                if (generation !== this.clickPrewarmGeneration || this.interactionMode !== 'game') {
-                    return;
-                }
-                this.emitDiagnostic('crosshair-intersect-prewarm', {
-                    reason,
-                    ok: false,
-                    error: error instanceof Error ? error.message : 'prewarm failed',
-                    ...this.hitboxDiagnosticDetails()
-                });
-            }).finally(() => {
-                if (this.clickPrewarmInFlight === prewarmTask) {
-                    this.clickPrewarmInFlight = null;
-                }
-            });
-            this.clickPrewarmInFlight = prewarmTask;
-        }, 120);
     }
 
     private onSceneUpdate(deltaTime = 1 / 60) {
@@ -1000,7 +992,6 @@ class SemanticAnnotationOverlay {
 
     private shouldShowVolume(annotation: SemanticAnnotation) {
         return this.interactionMode !== 'game' ||
-            this.foundAnnotationIds.has(annotation.id) ||
             (this.showHitboxes && this.isActiveGameTarget(annotation));
     }
 
@@ -1124,6 +1115,27 @@ class SemanticAnnotationOverlay {
         }
 
         return tMax >= 0 ? Math.max(0, tMin) : null;
+    }
+
+    private rayCanReachActiveHitVolume(ray: Ray) {
+        let checkedVolumes = 0;
+        for (const annotation of this.annotations) {
+            if (!this.isActiveGameTarget(annotation)) {
+                continue;
+            }
+
+            const volume = this.hitVolumes.get(annotation.id);
+            if (!volume) {
+                return true;
+            }
+
+            checkedVolumes += 1;
+            if (this.rayVolumeDistance(ray, volume) !== null) {
+                return true;
+            }
+        }
+
+        return checkedVolumes === 0;
     }
 
     private volumeFromWorldPoints(
@@ -1341,6 +1353,10 @@ class SemanticAnnotationOverlay {
     }
 
     private drawHitVolumes() {
+        if (this.interactionMode === 'game' && !this.showHitboxes) {
+            return;
+        }
+
         for (const annotation of this.annotations) {
             const volume = this.hitVolumes.get(annotation.id);
             if (!volume || !this.shouldShowVolume(annotation)) {
@@ -1433,6 +1449,7 @@ class SemanticAnnotationOverlay {
         const generation = ++this.hitVolumeGeneration;
         const startedAt = performance.now();
         const nextHitVolumes = new Map<string, MaskHitVolume>();
+        const nextHitVolumeSourceSignatures = new Map<string, string>();
         let attempted = 0;
         let built = 0;
 
@@ -1446,13 +1463,19 @@ class SemanticAnnotationOverlay {
             }
 
             attempted += 1;
-            const volume = await this.buildMaskHitVolume(annotation, maskSrc).catch((_error: unknown): null => null);
+            const signature = this.hitVolumeSignature(annotation, maskSrc);
+            const cachedVolume = this.hitVolumes.get(annotation.id);
+            const cachedSignature = this.hitVolumeSourceSignatures.get(annotation.id);
+            const volume = cachedVolume && cachedSignature === signature ?
+                cachedVolume :
+                await this.buildMaskHitVolume(annotation, maskSrc).catch((_error: unknown): null => null);
             if (generation !== this.hitVolumeGeneration) {
                 return;
             }
             if (volume) {
                 built += 1;
                 nextHitVolumes.set(annotation.id, volume);
+                nextHitVolumeSourceSignatures.set(annotation.id, signature);
             }
         }
 
@@ -1463,6 +1486,10 @@ class SemanticAnnotationOverlay {
         for (const [id, volume] of nextHitVolumes) {
             this.hitVolumes.set(id, volume);
         }
+        this.hitVolumeSourceSignatures.clear();
+        for (const [id, signature] of nextHitVolumeSourceSignatures) {
+            this.hitVolumeSourceSignatures.set(id, signature);
+        }
         this.syncMarkerClasses();
         this.update();
         this.emitDiagnostic('semantic-hitboxes-built', {
@@ -1471,11 +1498,28 @@ class SemanticAnnotationOverlay {
             built,
             buildMs: Number((performance.now() - startedAt).toFixed(1))
         });
-        this.scheduleClickPrewarm('hitboxes-built');
     }
 
     private shouldAbortHitVolumeBuild(generation: number) {
         return generation !== this.hitVolumeGeneration;
+    }
+
+    private hitVolumeSignature(annotation: SemanticAnnotation, maskSrc: string) {
+        return JSON.stringify({
+            id: annotation.id,
+            maskSrc,
+            position: annotation.position,
+            radius: annotation.radius,
+            sceneGeometryRevision: this.sceneGeometryRevision,
+            sourceCamera: annotation.source?.camera,
+            sourceCaptureSize: annotation.source?.captureSize,
+            targetImage: {
+                width: annotation.targetImage?.width,
+                height: annotation.targetImage?.height,
+                fullWidth: annotation.targetImage?.fullWidth,
+                fullHeight: annotation.targetImage?.fullHeight
+            }
+        });
     }
 
     private sourceViewMatrix(annotation: SemanticAnnotation) {
@@ -1566,9 +1610,9 @@ class SemanticAnnotationOverlay {
         const centerRay = new Ray();
         const { width, height } = this.scene.camera.targetSize;
         this.scene.camera.getRay(width * x, height * y, centerRay);
-        await this.settleClickPrewarmBeforeClick();
         const intersectStartedAt = performance.now();
-        const hit = await this.scene.camera.intersect(x, y);
+        const canReachTarget = this.rayCanReachActiveHitVolume(centerRay);
+        const hit = canReachTarget ? await this.scene.camera.intersect(x, y) : null;
         const intersectMs = performance.now() - intersectStartedAt;
         const matchStartedAt = performance.now();
         const matched = this.findCenterHit(hit?.position ?? null, centerRay);
@@ -1578,9 +1622,9 @@ class SemanticAnnotationOverlay {
             screenPoint: [Number(x.toFixed(4)), Number(y.toFixed(4))],
             hasSurfaceHit: Boolean(hit?.position),
             intersectMs: Number(intersectMs.toFixed(1)),
+            intersectSkipped: !canReachTarget,
             matchMs: Number(matchMs.toFixed(1)),
-            clickEvalMs: Number(clickEvalMs.toFixed(1)),
-            prewarmAgeMs: this.lastClickPrewarmAt > 0 ? Number((performance.now() - this.lastClickPrewarmAt).toFixed(1)) : null
+            clickEvalMs: Number(clickEvalMs.toFixed(1))
         };
 
         if (matched) {
