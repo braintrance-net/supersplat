@@ -702,6 +702,7 @@ const POINTER_LOOK_IDLE_RESET_MS = 1000;
 const LONG_TASK_REPORT_MS = 5000;
 const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
+const GAME_MODE_ACTIVE_RENDER_IDLE_MS = 320;
 
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -738,6 +739,9 @@ const registerIframeApi = (events: Events) => {
     let activeCollisionMeshSrc: string | null = null;
     let lastGameModeSignature = '';
     let renderWarmupFrame: number | null = null;
+    let activeRenderFrame: number | null = null;
+    let activeRenderUntil = 0;
+    let activeRenderWalkHeld = false;
     let longTaskCount = 0;
     let longTaskTotalMs = 0;
     let longTaskMaxMs = 0;
@@ -795,6 +799,49 @@ const registerIframeApi = (events: Events) => {
     events.on('scene.clear', () => {
         activeCollisionMeshSrc = null;
     });
+
+    const hasWalkInput = (input?: WalkInputMessage['keys']) => Boolean(
+        input?.forward ||
+        input?.backward ||
+        input?.left ||
+        input?.right ||
+        input?.sprint ||
+        input?.slide ||
+        input?.jump
+    );
+
+    const stopActiveRender = () => {
+        activeRenderUntil = 0;
+        activeRenderWalkHeld = false;
+        if (activeRenderFrame !== null) {
+            window.cancelAnimationFrame(activeRenderFrame);
+            activeRenderFrame = null;
+        }
+    };
+
+    const scheduleActiveRender = (leaseMs = GAME_MODE_ACTIVE_RENDER_IDLE_MS) => {
+        if (!gameModeActive) {
+            return;
+        }
+
+        activeRenderUntil = Math.max(activeRenderUntil, performance.now() + leaseMs);
+        if (activeRenderFrame !== null) {
+            return;
+        }
+
+        const tick = () => {
+            const scene = window.scene as any;
+            const shouldRender = gameModeActive && (activeRenderWalkHeld || performance.now() <= activeRenderUntil);
+            if (!scene || !shouldRender) {
+                activeRenderFrame = null;
+                return;
+            }
+
+            scene.forceRender = true;
+            activeRenderFrame = window.requestAnimationFrame(tick);
+        };
+        tick();
+    };
 
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
         const flushLongTasks = (reason: string) => {
@@ -1042,6 +1089,8 @@ const registerIframeApi = (events: Events) => {
             targetSize: targetSize ? { width: targetSize.width, height: targetSize.height } : null,
             dpr: window.devicePixelRatio,
             gameModeActive,
+            activeRenderLease: activeRenderFrame !== null,
+            activeRenderWalkHeld,
             renderNextFrame: (window.scene as any)?.app?.renderNextFrame ?? null,
             activeTool: events.invoke('tool.active') as string | null,
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
@@ -1231,6 +1280,7 @@ const registerIframeApi = (events: Events) => {
 
         if (isPointerLookMessage(event.data)) {
             const receivedAt = performance.now();
+            scheduleActiveRender();
             if (pointerLookStats.lastAt !== null) {
                 const gapMs = receivedAt - pointerLookStats.lastAt;
                 if (gapMs > POINTER_LOOK_IDLE_RESET_MS) {
@@ -1260,6 +1310,8 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isWalkInputMessage(event.data)) {
+            activeRenderWalkHeld = hasWalkInput(event.data.keys);
+            scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);
             events.fire('walk.input', event.data.keys);
             return;
         }
@@ -1371,6 +1423,7 @@ const registerIframeApi = (events: Events) => {
                 if (startingGameMode && gameModeActivatedWalk) {
                     events.fire('tool.walk');
                 }
+                scheduleActiveRender(1000);
             } else {
                 lastGameModeSignature = '';
                 document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -1378,6 +1431,7 @@ const registerIframeApi = (events: Events) => {
                     document.exitPointerLock();
                 }
                 resetPointerLookState();
+                stopActiveRender();
                 restoreGameModeTool();
             }
         }
