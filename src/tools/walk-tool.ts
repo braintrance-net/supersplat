@@ -42,9 +42,16 @@ type CollisionMeshHit = {
     triangle?: number;
 };
 
+type GroundMeshHit = {
+    y: number;
+    triangle: number;
+};
+
 type PlayerCollisionBody = {
     head: Vec3;
+    eye: Vec3;
     height: number;
+    eyeHeight: number;
     radius: number;
 };
 
@@ -63,8 +70,9 @@ const COLLISION_POINTER_LOOK_DEFER_MS = 160;
 const COLLISION_POINTER_LOOK_MAX_DEFER_MS = 900;
 const COLLISION_MESH_CELL_SIZE = 0.5;
 const COLLISION_MESH_PLAYER_HEIGHT = 1.65;
+const COLLISION_MESH_EYE_HEIGHT = 1.47;
 const COLLISION_MESH_CAPSULE_RADIUS = 0.28;
-const COLLISION_MESH_STEP_HEIGHT = 0.32;
+const COLLISION_MESH_STEP_HEIGHT = 0.12;
 const COLLISION_MESH_HEAD_CLEARANCE = 0;
 const COLLISION_MESH_WALK_SPEED = 1.8;
 const COLLISION_MESH_SPRINT_MULTIPLIER = 1.65;
@@ -74,6 +82,8 @@ const COLLISION_MESH_GROUND_SNAP = 0.42;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
+const COLLISION_MESH_BLOCK_REPORT_INTERVAL_MS = 180;
+const COLLISION_MESH_STUCK_MS = 650;
 const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
 const COLLISION_MESH_SWEEP_STEP = 0.05;
 
@@ -175,7 +185,7 @@ class WalkCollisionMesh {
 
     intersectsPlayerBody(body: PlayerCollisionBody): CollisionMeshHit {
         const { head, radius } = body;
-        const minY = head.y - body.height + 0.02;
+        const minY = head.y - body.height + COLLISION_MESH_STEP_HEIGHT;
         const maxY = head.y - COLLISION_MESH_HEAD_CLEARANCE;
         const minCellX = Math.floor((head.x - radius) / COLLISION_MESH_CELL_SIZE);
         const maxCellX = Math.floor((head.x + radius) / COLLISION_MESH_CELL_SIZE);
@@ -213,10 +223,10 @@ class WalkCollisionMesh {
         return { blocked: false };
     }
 
-    groundYAt(x: number, z: number, maxY: number, minY: number) {
+    groundYAt(x: number, z: number, maxY: number, minY: number): GroundMeshHit | null {
         const cellX = Math.floor(x / COLLISION_MESH_CELL_SIZE);
         const cellZ = Math.floor(z / COLLISION_MESH_CELL_SIZE);
-        let bestY: number | null = null;
+        let best: GroundMeshHit | null = null;
         const checked = new Set<number>();
 
         for (let dx = -1; dx <= 1; dx += 1) {
@@ -243,14 +253,14 @@ class WalkCollisionMesh {
                     }
 
                     const y = WalkCollisionMesh.interpolateTriangleY(x, z, triangle);
-                    if (y !== null && y <= maxY && y >= minY && (bestY === null || y > bestY)) {
-                        bestY = y;
+                    if (y !== null && y <= maxY && y >= minY && (!best || y > best.y)) {
+                        best = { y, triangle: index };
                     }
                 }
             }
         }
 
-        return bestY;
+        return best;
     }
 
     private indexTriangles() {
@@ -600,6 +610,8 @@ class WalkTool {
     private collisionMeshBufferUrl: string | null = null;
     private collisionMeshAbort: AbortController | null = null;
     private lastCollisionMeshReportAt = 0;
+    private lastCollisionMeshBlockReportAt = 0;
+    private collisionMeshBlockedSince: number | null = null;
     private collisionMeshHeadY: number | null = null;
     private collisionProxy: CollisionProxyState = {
         pending: false,
@@ -1014,6 +1026,9 @@ class WalkTool {
         changed ||= this.applyCollisionHeadHeightLock(camera, focalPoint);
 
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
+        if (!moving) {
+            this.collisionMeshBlockedSince = null;
+        }
 
         if (this.collisionMesh) {
             changed ||= this.applyCollisionMeshVertical(input, dt, camera, focalPoint);
@@ -1144,6 +1159,8 @@ class WalkTool {
                 cellSize: COLLISION_MESH_CELL_SIZE,
                 capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
                 playerHeight: COLLISION_MESH_PLAYER_HEIGHT,
+                eyeHeight: COLLISION_MESH_EYE_HEIGHT,
+                stepHeight: COLLISION_MESH_STEP_HEIGHT,
                 walkSpeed: COLLISION_MESH_WALK_SPEED,
                 sprintSpeed: Number((COLLISION_MESH_WALK_SPEED * COLLISION_MESH_SPRINT_MULTIPLIER).toFixed(3))
             });
@@ -1172,6 +1189,7 @@ class WalkTool {
         this.collisionMeshBuffer = null;
         this.collisionMeshBufferUrl = null;
         this.collisionMeshHeadY = null;
+        this.collisionMeshBlockedSince = null;
         this.events.fire('walk.collisionMesh', {
             ok: true,
             reason: 'cleared',
@@ -1180,11 +1198,17 @@ class WalkTool {
     }
 
     private reportCollisionMesh(now: number, reason: string, details: Record<string, unknown>) {
+        if (reason === 'blocked' && now - this.lastCollisionMeshBlockReportAt < COLLISION_MESH_BLOCK_REPORT_INTERVAL_MS) {
+            return;
+        }
         if (reason !== 'blocked' && now - this.lastCollisionMeshReportAt < COLLISION_MESH_REPORT_INTERVAL_MS) {
             return;
         }
 
         this.lastCollisionMeshReportAt = now;
+        if (reason === 'blocked') {
+            this.lastCollisionMeshBlockReportAt = now;
+        }
         this.events.fire('walk.collisionMesh', {
             ok: true,
             reason,
@@ -1208,15 +1232,11 @@ class WalkTool {
 
         const hit = this.firstCollisionMeshHit(mesh, bodies, fullMove);
         if (!hit) {
+            this.collisionMeshBlockedSince = null;
             this.reportCollisionMesh(now, 'clear', {
                 blocked: false,
                 body: bodies.length,
-                headX: Number(bodies[0].head.x.toFixed(3)),
-                headY: Number(bodies[0].head.y.toFixed(3)),
-                headZ: Number(bodies[0].head.z.toFixed(3)),
-                feetY: Number((bodies[0].head.y - bodies[0].height).toFixed(3)),
-                radius: Number(bodies[0].radius.toFixed(3)),
-                playerHeight: Number(bodies[0].height.toFixed(3)),
+                ...this.collisionMeshBodyDetails(mesh, bodies[0]),
                 moveX: Number(fullMove.x.toFixed(3)),
                 moveZ: Number(fullMove.z.toFixed(3))
             });
@@ -1229,18 +1249,14 @@ class WalkTool {
         ].filter(candidate => Math.hypot(candidate.x, candidate.z) > 0.00001);
         for (const candidate of slideCandidates.sort((a, b) => Math.hypot(b.x, b.z) - Math.hypot(a.x, a.z))) {
             if (!this.firstCollisionMeshHit(mesh, bodies, candidate)) {
+                this.collisionMeshBlockedSince = null;
                 this.reportCollisionMesh(now, 'slide', {
                     blocked: false,
                     triangle: hit?.triangle ?? null,
                     anchor: hit?.anchor ?? null,
                     sweepStep: hit?.step ?? null,
                     sweepSteps: hit?.steps ?? null,
-                    headX: Number(bodies[0].head.x.toFixed(3)),
-                    headY: Number(bodies[0].head.y.toFixed(3)),
-                    headZ: Number(bodies[0].head.z.toFixed(3)),
-                    feetY: Number((bodies[0].head.y - bodies[0].height).toFixed(3)),
-                    radius: Number(bodies[0].radius.toFixed(3)),
-                    playerHeight: Number(bodies[0].height.toFixed(3)),
+                    ...this.collisionMeshBodyDetails(mesh, bodies[0]),
                     moveX: Number(candidate.x.toFixed(3)),
                     moveZ: Number(candidate.z.toFixed(3))
                 });
@@ -1250,20 +1266,21 @@ class WalkTool {
 
         const blockedBody = hit?.body ?? {
             ...bodies[0],
+            eye: bodies[0].eye.clone().add(fullMove),
             head: bodies[0].head.clone().add(fullMove)
         };
-        this.reportCollisionMesh(now, 'blocked', {
+        if (this.collisionMeshBlockedSince === null) {
+            this.collisionMeshBlockedSince = now;
+        }
+        const blockedMs = now - this.collisionMeshBlockedSince;
+        this.reportCollisionMesh(now, blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked', {
             blocked: true,
             triangle: hit?.triangle ?? null,
             anchor: hit?.anchor ?? null,
             sweepStep: hit?.step ?? null,
             sweepSteps: hit?.steps ?? null,
-            headX: Number(blockedBody.head.x.toFixed(3)),
-            headY: Number(blockedBody.head.y.toFixed(3)),
-            headZ: Number(blockedBody.head.z.toFixed(3)),
-            feetY: Number((blockedBody.head.y - blockedBody.height).toFixed(3)),
-            radius: Number(blockedBody.radius.toFixed(3)),
-            playerHeight: Number(blockedBody.height.toFixed(3)),
+            stuckMs: Number(blockedMs.toFixed(1)),
+            ...this.collisionMeshBodyDetails(mesh, blockedBody),
             moveX: Number(fullMove.x.toFixed(3)),
             moveZ: Number(fullMove.z.toFixed(3))
         });
@@ -1277,14 +1294,15 @@ class WalkTool {
         }
 
         let changed = false;
-        let head = this.playerHead(camera, focalPoint);
-        let feetY = head.y - COLLISION_MESH_PLAYER_HEIGHT;
-        const groundY = mesh.groundYAt(
-            head.x,
-            head.z,
+        let eye = this.playerHead(camera, focalPoint);
+        let feetY = eye.y - COLLISION_MESH_EYE_HEIGHT;
+        const groundHit = mesh.groundYAt(
+            eye.x,
+            eye.z,
             feetY + COLLISION_MESH_GROUND_SNAP,
             feetY - COLLISION_MESH_GROUND_SNAP * 3
         );
+        const groundY = groundHit?.y ?? null;
         const grounded = groundY !== null && feetY <= groundY + 0.04 && this.externalVerticalVelocity <= 0;
 
         if (input.jump && !this.externalJumpWasPressed && grounded) {
@@ -1297,8 +1315,8 @@ class WalkTool {
             }
             this.externalVerticalVelocity = 0;
             changed = true;
-            head = this.playerHead(camera, focalPoint);
-            feetY = head.y - COLLISION_MESH_PLAYER_HEIGHT;
+            eye = this.playerHead(camera, focalPoint);
+            feetY = eye.y - COLLISION_MESH_EYE_HEIGHT;
         }
 
         this.externalJumpWasPressed = Boolean(input.jump);
@@ -1312,14 +1330,15 @@ class WalkTool {
             }
             changed = true;
 
-            head = this.playerHead(camera, focalPoint);
-            feetY = head.y - COLLISION_MESH_PLAYER_HEIGHT;
-            const nextGroundY = mesh.groundYAt(
-                head.x,
-                head.z,
+            eye = this.playerHead(camera, focalPoint);
+            feetY = eye.y - COLLISION_MESH_EYE_HEIGHT;
+            const nextGroundHit = mesh.groundYAt(
+                eye.x,
+                eye.z,
                 feetY + COLLISION_MESH_GROUND_SNAP,
                 feetY - COLLISION_MESH_GROUND_SNAP * 4
             );
+            const nextGroundY = nextGroundHit?.y ?? null;
             if (nextGroundY !== null && feetY <= nextGroundY && this.externalVerticalVelocity <= 0) {
                 const snap = nextGroundY - feetY;
                 focalPoint.y += snap;
@@ -1331,6 +1350,18 @@ class WalkTool {
         }
 
         this.externalGroundY = groundY;
+        if (changed || this.externalVerticalVelocity !== 0) {
+            this.reportCollisionMesh(performance.now(), grounded ? 'ground' : 'air', {
+                blocked: false,
+                floorY: groundY === null ? null : Number(groundY.toFixed(3)),
+                floorTriangle: groundHit?.triangle ?? null,
+                eyeX: Number(eye.x.toFixed(3)),
+                eyeY: Number(eye.y.toFixed(3)),
+                eyeZ: Number(eye.z.toFixed(3)),
+                feetY: Number(feetY.toFixed(3)),
+                verticalVelocity: Number(this.externalVerticalVelocity.toFixed(3))
+            });
+        }
         return changed;
     }
 
@@ -1360,15 +1391,11 @@ class WalkTool {
                 }
 
                 focalPoint.add(offset);
+                this.collisionMeshBlockedSince = null;
                 this.reportCollisionMesh(performance.now(), 'depenetrate', {
                     blocked: false,
                     triangle: currentHit.triangle ?? null,
-                    headX: Number(candidate.head.x.toFixed(3)),
-                    headY: Number(candidate.head.y.toFixed(3)),
-                    headZ: Number(candidate.head.z.toFixed(3)),
-                    feetY: Number((candidate.head.y - candidate.height).toFixed(3)),
-                    radius: Number(candidate.radius.toFixed(3)),
-                    playerHeight: Number(candidate.height.toFixed(3)),
+                    ...this.collisionMeshBodyDetails(mesh, candidate),
                     moveX: Number(offset.x.toFixed(3)),
                     moveZ: Number(offset.z.toFixed(3))
                 });
@@ -1386,6 +1413,7 @@ class WalkTool {
             for (let i = 0; i < bodies.length; i += 1) {
                 const body = {
                     ...bodies[i],
+                    eye: bodies[i].eye.clone().add(tmpVec.copy(move).mulScalar(scale)),
                     head: bodies[i].head.clone().add(tmpVec.copy(move).mulScalar(scale))
                 };
                 const hit = mesh.intersectsPlayerBody(body);
@@ -1403,10 +1431,40 @@ class WalkTool {
         return null;
     }
 
+    private collisionMeshBodyDetails(mesh: WalkCollisionMesh, body: PlayerCollisionBody) {
+        const feetY = body.eye.y - body.eyeHeight;
+        const floor = mesh.groundYAt(
+            body.eye.x,
+            body.eye.z,
+            feetY + COLLISION_MESH_GROUND_SNAP,
+            feetY - COLLISION_MESH_GROUND_SNAP * 3
+        );
+        return {
+            headX: Number(body.head.x.toFixed(3)),
+            headY: Number(body.head.y.toFixed(3)),
+            headZ: Number(body.head.z.toFixed(3)),
+            eyeX: Number(body.eye.x.toFixed(3)),
+            eyeY: Number(body.eye.y.toFixed(3)),
+            eyeZ: Number(body.eye.z.toFixed(3)),
+            feetY: Number(feetY.toFixed(3)),
+            floorY: floor ? Number(floor.y.toFixed(3)) : null,
+            floorTriangle: floor?.triangle ?? null,
+            radius: Number(body.radius.toFixed(3)),
+            playerHeight: Number(body.height.toFixed(3)),
+            eyeHeight: Number(body.eyeHeight.toFixed(3)),
+            stepHeight: Number(COLLISION_MESH_STEP_HEIGHT.toFixed(3))
+        };
+    }
+
     private playerCollisionBodies(camera = this.camera): PlayerCollisionBody[] {
+        const eye = this.playerHead(camera);
+        const head = eye.clone();
+        head.y += COLLISION_MESH_PLAYER_HEIGHT - COLLISION_MESH_EYE_HEIGHT;
         return [{
-            head: this.playerHead(camera),
+            head,
+            eye,
             height: COLLISION_MESH_PLAYER_HEIGHT,
+            eyeHeight: COLLISION_MESH_EYE_HEIGHT,
             radius: COLLISION_MESH_CAPSULE_RADIUS
         }];
     }
