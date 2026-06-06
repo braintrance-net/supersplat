@@ -36,8 +36,19 @@ const MASK_OCCLUSION_FRAC_OF_DEPTH = 0.015;
 const MASK_OCCLUSION_MIN_M = 0.015;
 const MASK_OCCLUSION_MAX_M = 0.12;
 
+const PRODUCTION_BOXER_PROXY_URL = '/api/boxer';
+
 const getBoxerBackendUrl = () => {
-    return window.supersplatConfig?.boxerBackendUrl || 'https://boxer.4dream.app';
+    const configured = window.supersplatConfig?.boxerBackendUrl?.trim();
+    if (configured) {
+        return configured.replace(/\/$/, '');
+    }
+
+    if (/^board-demo-editor(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(window.location.hostname)) {
+        return PRODUCTION_BOXER_PROXY_URL;
+    }
+
+    return 'https://boxer.4dream.app';
 };
 
 const getBoxerGpuDepthEnabled = () => window.supersplatConfig?.boxerGpuDepth === true;

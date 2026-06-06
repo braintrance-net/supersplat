@@ -2,5 +2,19 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "buildCommand": "npm run build",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/boxer/api/health",
+      "destination": "http://3.19.208.185:8000/api/health"
+    },
+    {
+      "source": "/api/boxer/api/boxer-detect",
+      "destination": "http://3.19.208.185:8000/api/boxer-detect"
+    },
+    {
+      "source": "/api/boxer/api/boxer-lift-bb2d",
+      "destination": "http://3.19.208.185:8000/api/boxer-lift-bb2d"
+    }
+  ]
 }

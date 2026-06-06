@@ -74,7 +74,7 @@ npm run develop
 
 When `DEV_TOOLS=true`, a `Help -> Dev: Log Camera` action appears. It logs the current camera state to the browser console and copies the JSON payload to the clipboard.
 
-The Boxer tool reads its backend from `BOXER_BACKEND_URL`. If unset, it falls back to `https://boxer.4dream.app`.
+The Boxer tool reads its backend from `BOXER_BACKEND_URL`. If unset, board-demo editor deployments fall back to the same-origin `/api/boxer` proxy, which forwards the supported Boxer endpoints to the current EC2 Boxer backend. Other deployments fall back to `https://boxer.4dream.app`.
 The SAM tool reads its backend from `SAM3_BACKEND_URL`. If unset, it falls back to `https://sam3.4dream.app`.
 
 Current hosted API docs:
