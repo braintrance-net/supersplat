@@ -1318,6 +1318,11 @@ const registerIframeApi = (events: Events) => {
                         requestId: event.data.requestId ?? null,
                         transform: event.data.transform
                     });
+                } else {
+                    events.fire('walk.collisionMeshClear', {
+                        reason: 'disabled',
+                        requestId: event.data.requestId ?? null
+                    });
                 }
                 applyCameraState(events, event.data.camera);
                 rendered = await waitForPostRender(events);

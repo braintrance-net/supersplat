@@ -44,7 +44,8 @@ type CollisionMeshHit = {
 
 type GroundMeshHit = {
     y: number;
-    triangle: number;
+    triangle: number | null;
+    source?: 'mesh' | 'cached';
 };
 
 type PlayerCollisionBody = {
@@ -79,6 +80,9 @@ const COLLISION_MESH_SPRINT_MULTIPLIER = 1.65;
 const COLLISION_MESH_JUMP_SPEED = 2.9;
 const COLLISION_MESH_GRAVITY = 7.5;
 const COLLISION_MESH_GROUND_SNAP = 0.42;
+const COLLISION_MESH_GROUND_PROBE_RADIUS = 0.22;
+const COLLISION_MESH_GROUND_CACHE_DROP = 0.45;
+const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
@@ -254,12 +258,34 @@ class WalkCollisionMesh {
 
                     const y = WalkCollisionMesh.interpolateTriangleY(x, z, triangle);
                     if (y !== null && y <= maxY && y >= minY && (!best || y > best.y)) {
-                        best = { y, triangle: index };
+                        best = { y, triangle: index, source: 'mesh' };
                     }
                 }
             }
         }
 
+        return best;
+    }
+
+    groundYNear(x: number, z: number, maxY: number, minY: number, radius = COLLISION_MESH_GROUND_PROBE_RADIUS): GroundMeshHit | null {
+        const offsets = [
+            [0, 0],
+            [radius, 0],
+            [-radius, 0],
+            [0, radius],
+            [0, -radius],
+            [radius * 0.7, radius * 0.7],
+            [radius * 0.7, -radius * 0.7],
+            [-radius * 0.7, radius * 0.7],
+            [-radius * 0.7, -radius * 0.7]
+        ];
+        let best: GroundMeshHit | null = null;
+        for (const [dx, dz] of offsets) {
+            const hit = this.groundYAt(x + dx, z + dz, maxY, minY);
+            if (hit && (!best || hit.y > best.y)) {
+                best = hit;
+            }
+        }
         return best;
     }
 
@@ -1287,6 +1313,34 @@ class WalkTool {
         return null;
     }
 
+    private collisionMeshGroundHit(mesh: WalkCollisionMesh, x: number, z: number, feetY: number, snapUp: number, snapDown: number) {
+        const hit = mesh.groundYNear(x, z, feetY + snapUp, feetY - snapDown);
+        if (hit) {
+            if (this.externalGroundY !== null &&
+                hit.y < this.externalGroundY - COLLISION_MESH_GROUND_CACHE_DROP &&
+                feetY >= this.externalGroundY - COLLISION_MESH_GROUND_CACHE_DROP) {
+                return {
+                    y: this.externalGroundY,
+                    triangle: null,
+                    source: 'cached' as const
+                };
+            }
+            return hit;
+        }
+
+        if (this.externalGroundY !== null &&
+            feetY <= this.externalGroundY + COLLISION_MESH_GROUND_CACHE_RISE &&
+            feetY >= this.externalGroundY - COLLISION_MESH_GROUND_CACHE_DROP) {
+            return {
+                y: this.externalGroundY,
+                triangle: null,
+                source: 'cached' as const
+            };
+        }
+
+        return null;
+    }
+
     private applyCollisionMeshVertical(input: WalkInputState, dt: number, camera: Camera, focalPoint: Vec3) {
         const mesh = this.collisionMesh;
         if (!mesh) {
@@ -1296,11 +1350,12 @@ class WalkTool {
         let changed = false;
         let eye = this.playerHead(camera, focalPoint);
         let feetY = eye.y - COLLISION_MESH_EYE_HEIGHT;
-        const groundHit = mesh.groundYAt(
+        const groundHit = this.collisionMeshGroundHit(mesh,
             eye.x,
             eye.z,
-            feetY + COLLISION_MESH_GROUND_SNAP,
-            feetY - COLLISION_MESH_GROUND_SNAP * 3
+            feetY,
+            COLLISION_MESH_GROUND_SNAP,
+            COLLISION_MESH_GROUND_SNAP * 3
         );
         const groundY = groundHit?.y ?? null;
         const grounded = groundY !== null && feetY <= groundY + 0.04 && this.externalVerticalVelocity <= 0;
@@ -1332,11 +1387,12 @@ class WalkTool {
 
             eye = this.playerHead(camera, focalPoint);
             feetY = eye.y - COLLISION_MESH_EYE_HEIGHT;
-            const nextGroundHit = mesh.groundYAt(
+            const nextGroundHit = this.collisionMeshGroundHit(mesh,
                 eye.x,
                 eye.z,
-                feetY + COLLISION_MESH_GROUND_SNAP,
-                feetY - COLLISION_MESH_GROUND_SNAP * 4
+                feetY,
+                COLLISION_MESH_GROUND_SNAP,
+                COLLISION_MESH_GROUND_SNAP * 4
             );
             const nextGroundY = nextGroundHit?.y ?? null;
             if (nextGroundY !== null && feetY <= nextGroundY && this.externalVerticalVelocity <= 0) {
@@ -1355,6 +1411,7 @@ class WalkTool {
                 blocked: false,
                 floorY: groundY === null ? null : Number(groundY.toFixed(3)),
                 floorTriangle: groundHit?.triangle ?? null,
+                floorSource: groundHit?.source ?? null,
                 eyeX: Number(eye.x.toFixed(3)),
                 eyeY: Number(eye.y.toFixed(3)),
                 eyeZ: Number(eye.z.toFixed(3)),
@@ -1433,11 +1490,12 @@ class WalkTool {
 
     private collisionMeshBodyDetails(mesh: WalkCollisionMesh, body: PlayerCollisionBody) {
         const feetY = body.eye.y - body.eyeHeight;
-        const floor = mesh.groundYAt(
+        const floor = this.collisionMeshGroundHit(mesh,
             body.eye.x,
             body.eye.z,
-            feetY + COLLISION_MESH_GROUND_SNAP,
-            feetY - COLLISION_MESH_GROUND_SNAP * 3
+            feetY,
+            COLLISION_MESH_GROUND_SNAP,
+            COLLISION_MESH_GROUND_SNAP * 3
         );
         return {
             headX: Number(body.head.x.toFixed(3)),
@@ -1449,6 +1507,7 @@ class WalkTool {
             feetY: Number(feetY.toFixed(3)),
             floorY: floor ? Number(floor.y.toFixed(3)) : null,
             floorTriangle: floor?.triangle ?? null,
+            floorSource: floor?.source ?? null,
             radius: Number(body.radius.toFixed(3)),
             playerHeight: Number(body.height.toFixed(3)),
             eyeHeight: Number(body.eyeHeight.toFixed(3)),
