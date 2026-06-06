@@ -742,6 +742,10 @@ const registerIframeApi = (events: Events) => {
     let activeRenderFrame: number | null = null;
     let activeRenderUntil = 0;
     let activeRenderWalkHeld = false;
+    let activeRenderTickCount = 0;
+    let activeRenderTotalGapMs = 0;
+    let activeRenderMaxGapMs = 0;
+    let activeRenderLastAt: number | null = null;
     let longTaskCount = 0;
     let longTaskTotalMs = 0;
     let longTaskMaxMs = 0;
@@ -773,6 +777,10 @@ const registerIframeApi = (events: Events) => {
         rafSampleStartedAt = performance.now();
         rafLongFrameCount = 0;
         rafVeryLongFrameCount = 0;
+        activeRenderTickCount = 0;
+        activeRenderTotalGapMs = 0;
+        activeRenderMaxGapMs = 0;
+        activeRenderLastAt = null;
         resetLongTaskStats();
     };
 
@@ -830,13 +838,22 @@ const registerIframeApi = (events: Events) => {
         }
 
         const tick = () => {
+            const now = performance.now();
             const scene = window.scene as any;
-            const shouldRender = gameModeActive && (activeRenderWalkHeld || performance.now() <= activeRenderUntil);
+            const shouldRender = gameModeActive && (activeRenderWalkHeld || now <= activeRenderUntil);
             if (!scene || !shouldRender) {
                 activeRenderFrame = null;
+                activeRenderLastAt = null;
                 return;
             }
 
+            if (activeRenderLastAt !== null) {
+                const gapMs = now - activeRenderLastAt;
+                activeRenderTotalGapMs += gapMs;
+                activeRenderMaxGapMs = Math.max(activeRenderMaxGapMs, gapMs);
+            }
+            activeRenderLastAt = now;
+            activeRenderTickCount += 1;
             scene.forceRender = true;
             activeRenderFrame = window.requestAnimationFrame(tick);
         };
@@ -1039,6 +1056,10 @@ const registerIframeApi = (events: Events) => {
                         gapMs: Number(gapMs.toFixed(1)),
                         rafAgeMs: rafLastFrameAt === null ? null : Number((now - rafLastFrameAt).toFixed(1)),
                         gameModeActive,
+                        activeRenderLease: activeRenderFrame !== null,
+                        activeRenderWalkHeld,
+                        visibilityState: document.visibilityState,
+                        hasFocus: document.hasFocus(),
                         activeTool: events.invoke('tool.active') as string | null,
                         annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0,
                         renderNextFrame: scene?.app?.renderNextFrame ?? null,
@@ -1067,6 +1088,7 @@ const registerIframeApi = (events: Events) => {
         const avgFrameMs = frameCount > 1 ? perfTotalGapMs / (frameCount - 1) : 0;
         const browserFrameCount = rafFrameCount;
         const avgBrowserFrameMs = browserFrameCount > 1 ? rafTotalGapMs / (browserFrameCount - 1) : 0;
+        const avgActiveRenderGapMs = activeRenderTickCount > 1 ? activeRenderTotalGapMs / (activeRenderTickCount - 1) : 0;
         const sinceLastPostrenderMs = lastPostRenderAt === null ? null : now - lastPostRenderAt;
         const canvas = (window.scene as any)?.canvas as HTMLCanvasElement | undefined;
         const targetSize = (window.scene as any)?.camera?.targetSize as { width?: number, height?: number } | undefined;
@@ -1091,6 +1113,11 @@ const registerIframeApi = (events: Events) => {
             gameModeActive,
             activeRenderLease: activeRenderFrame !== null,
             activeRenderWalkHeld,
+            activeRenderTicks: activeRenderTickCount,
+            activeRenderAvgGapMs: Number(avgActiveRenderGapMs.toFixed(1)),
+            activeRenderMaxGapMs: Number(activeRenderMaxGapMs.toFixed(1)),
+            visibilityState: document.visibilityState,
+            hasFocus: document.hasFocus(),
             renderNextFrame: (window.scene as any)?.app?.renderNextFrame ?? null,
             activeTool: events.invoke('tool.active') as string | null,
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
@@ -1106,6 +1133,11 @@ const registerIframeApi = (events: Events) => {
             maxFrameMs: Number(rafMaxGapMs.toFixed(1)),
             longFrames: rafLongFrameCount,
             veryLongFrames: rafVeryLongFrameCount,
+            gameModeActive,
+            activeRenderLease: activeRenderFrame !== null,
+            activeRenderWalkHeld,
+            visibilityState: document.visibilityState,
+            hasFocus: document.hasFocus(),
             activeTool: events.invoke('tool.active') as string | null
         });
 
@@ -1124,6 +1156,10 @@ const registerIframeApi = (events: Events) => {
         rafSampleStartedAt = performance.now();
         rafLongFrameCount = 0;
         rafVeryLongFrameCount = 0;
+        activeRenderTickCount = 0;
+        activeRenderTotalGapMs = 0;
+        activeRenderMaxGapMs = 0;
+        activeRenderLastAt = null;
     }, 2000);
 
     events.on('semanticAnnotations.activate', (annotationId: string) => {
