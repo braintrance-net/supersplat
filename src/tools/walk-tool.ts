@@ -66,6 +66,8 @@ const COLLISION_MESH_PLAYER_HEIGHT = 1.65;
 const COLLISION_MESH_CAPSULE_RADIUS = 0.34;
 const COLLISION_MESH_STEP_HEIGHT = 0.32;
 const COLLISION_MESH_HEAD_CLEARANCE = 0;
+const COLLISION_MESH_WALK_SPEED = 1.8;
+const COLLISION_MESH_SPRINT_MULTIPLIER = 1.65;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
 const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
 const COLLISION_MESH_SWEEP_STEP = 0.05;
@@ -970,8 +972,9 @@ class WalkTool {
             const moveLength = Math.hypot(moveVec.x, moveVec.z);
             if (moveLength > 0) {
                 moveVec.mulScalar(1 / moveLength);
-                const speedMultiplier = input.sprint || input.slide ? 1.8 : 1;
-                moveVec.mulScalar(camera.sceneRadius * 0.22 * speedMultiplier * dt);
+                const speed = this.collisionMesh ? COLLISION_MESH_WALK_SPEED : camera.sceneRadius * 0.22;
+                const speedMultiplier = input.sprint || input.slide ? this.collisionMesh ? COLLISION_MESH_SPRINT_MULTIPLIER : 1.8 : 1;
+                moveVec.mulScalar(speed * speedMultiplier * dt);
                 const resolvedMove = this.resolveCollisionMeshMove(this.playerCollisionBodies(camera), moveVec);
                 if (resolvedMove) {
                     focalPoint.add(resolvedMove);
@@ -1065,7 +1068,9 @@ class WalkTool {
                 cells: mesh.cellCount,
                 cellSize: COLLISION_MESH_CELL_SIZE,
                 capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
-                playerHeight: COLLISION_MESH_PLAYER_HEIGHT
+                playerHeight: COLLISION_MESH_PLAYER_HEIGHT,
+                walkSpeed: COLLISION_MESH_WALK_SPEED,
+                sprintSpeed: Number((COLLISION_MESH_WALK_SPEED * COLLISION_MESH_SPRINT_MULTIPLIER).toFixed(3))
             });
         } catch (error) {
             if (abortController.signal.aborted || meshKey !== this.collisionMeshKey) {
