@@ -39,6 +39,8 @@ const POINTER_LOOK = 'supersplat:pointer-look';
 const WALK_INPUT = 'supersplat:walk-input';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
+const RENDER_WARMUP = 'supersplat:render-warmup';
+const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -227,6 +229,15 @@ interface CrosshairClickMessage {
     type: typeof CROSSHAIR_CLICK;
     screenPoint?: [number, number];
     requestId?: RequestId;
+}
+
+interface RenderWarmupMessage {
+    type: typeof RENDER_WARMUP;
+    frames?: number;
+}
+
+interface ViewerPerfResetMessage {
+    type: typeof VIEWER_PERF_RESET;
 }
 
 interface MultiplayerPlayersMessage {
@@ -419,6 +430,14 @@ const isWalkInputMessage = (data: any): data is WalkInputMessage => {
 
 const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
     return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data) && hasOptionalScreenPoint(data);
+};
+
+const isRenderWarmupMessage = (data: any): data is RenderWarmupMessage => {
+    return data && typeof data === 'object' && data.type === RENDER_WARMUP && (data.frames === undefined || typeof data.frames === 'number');
+};
+
+const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => {
+    return data && typeof data === 'object' && data.type === VIEWER_PERF_RESET;
 };
 
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
@@ -716,16 +735,66 @@ const registerIframeApi = (events: Events) => {
     let lastAutoSemanticLayerSignature = '';
     let activeCollisionMeshSrc: string | null = null;
     let lastGameModeSignature = '';
+    let renderWarmupFrame: number | null = null;
+    let longTaskCount = 0;
+    let longTaskTotalMs = 0;
+    let longTaskMaxMs = 0;
+    let longTaskSamples: Array<Record<string, unknown>> = [];
+    let lastLongTaskReportAt = performance.now();
+
+    const resetLongTaskStats = () => {
+        longTaskCount = 0;
+        longTaskTotalMs = 0;
+        longTaskMaxMs = 0;
+        longTaskSamples = [];
+        lastLongTaskReportAt = performance.now();
+    };
+
+    const resetViewerPerfStats = () => {
+        perfFrameCount = 0;
+        perfTotalGapMs = 0;
+        perfMaxGapMs = 0;
+        perfLastFrameAt = null;
+        perfSampleStartedAt = performance.now();
+        perfLongFrameCount = 0;
+        perfVeryLongFrameCount = 0;
+        perfSpikeCount = 0;
+        lastPostRenderAt = null;
+        rafFrameCount = 0;
+        rafTotalGapMs = 0;
+        rafMaxGapMs = 0;
+        rafLastFrameAt = null;
+        rafSampleStartedAt = performance.now();
+        rafLongFrameCount = 0;
+        rafVeryLongFrameCount = 0;
+        resetLongTaskStats();
+    };
+
+    const startRenderWarmup = (frames?: number) => {
+        const scene = window.scene as any;
+        if (!scene) {
+            return;
+        }
+
+        if (renderWarmupFrame !== null) {
+            window.cancelAnimationFrame(renderWarmupFrame);
+            renderWarmupFrame = null;
+        }
+
+        let remaining = Math.max(1, Math.min(240, Math.round(frames ?? 30)));
+        const tick = () => {
+            scene.forceRender = true;
+            remaining -= 1;
+            renderWarmupFrame = remaining > 0 ? window.requestAnimationFrame(tick) : null;
+        };
+        tick();
+    };
 
     events.on('scene.clear', () => {
         activeCollisionMeshSrc = null;
     });
 
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
-        let longTaskCount = 0;
-        let longTaskTotalMs = 0;
-        let longTaskMaxMs = 0;
-        let lastLongTaskReportAt = performance.now();
         const flushLongTasks = (reason: string) => {
             if (longTaskCount === 0 || !window.parent || window.parent === window) {
                 return;
@@ -735,18 +804,34 @@ const registerIframeApi = (events: Events) => {
                 count: longTaskCount,
                 totalMs: Number(longTaskTotalMs.toFixed(1)),
                 maxMs: Number(longTaskMaxMs.toFixed(1)),
+                samples: longTaskSamples,
                 activeTool: events.invoke('tool.active') as string | null
             });
-            longTaskCount = 0;
-            longTaskTotalMs = 0;
-            longTaskMaxMs = 0;
-            lastLongTaskReportAt = performance.now();
+            resetLongTaskStats();
         };
         const longTaskObserver = new PerformanceObserver((list) => {
             for (const entry of list.getEntries()) {
                 longTaskCount += 1;
                 longTaskTotalMs += entry.duration;
                 longTaskMaxMs = Math.max(longTaskMaxMs, entry.duration);
+                const attribution = (entry as any).attribution;
+                const sample = {
+                    durationMs: Number(entry.duration.toFixed(1)),
+                    startTimeMs: Number(entry.startTime.toFixed(1)),
+                    name: entry.name,
+                    attribution: Array.isArray(attribution) ?
+                        attribution.slice(0, 3).map((item: any) => ({
+                            name: item.name,
+                            entryType: item.entryType,
+                            containerType: item.containerType,
+                            containerName: item.containerName,
+                            containerSrc: item.containerSrc
+                        })) :
+                        undefined
+                };
+                longTaskSamples.push(sample);
+                longTaskSamples.sort((a, b) => Number(b.durationMs) - Number(a.durationMs));
+                longTaskSamples = longTaskSamples.slice(0, 5);
             }
             if (performance.now() - lastLongTaskReportAt >= LONG_TASK_REPORT_MS) {
                 flushLongTasks('interval');
@@ -1185,6 +1270,16 @@ const registerIframeApi = (events: Events) => {
                 ...(result as Record<string, unknown>),
                 handlerMs: Number(handlerMs.toFixed(1))
             }, event.data.requestId);
+        }
+
+        if (isRenderWarmupMessage(event.data)) {
+            startRenderWarmup(event.data.frames);
+            return;
+        }
+
+        if (isViewerPerfResetMessage(event.data)) {
+            resetViewerPerfStats();
+            return;
         }
 
         if (isSemanticLayerGetMessage(event.data)) {

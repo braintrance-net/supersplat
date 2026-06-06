@@ -506,7 +506,9 @@ class SemanticAnnotationOverlay {
             return;
         }
         this.activeGameTargetIds = nextTargetIds;
-        this.syncMarkerClasses();
+        if (this.interactionMode !== 'game' || this.showHitboxes) {
+            this.syncMarkerClasses();
+        }
         this.emitDiagnostic('semantic-hitboxes', this.hitboxDiagnosticDetails());
     }
 
@@ -516,7 +518,9 @@ class SemanticAnnotationOverlay {
             return;
         }
         this.foundAnnotationIds = nextFoundIds;
-        this.syncMarkerClasses();
+        if (this.interactionMode !== 'game' || this.showHitboxes) {
+            this.syncMarkerClasses();
+        }
     }
 
     private setShowHitboxes(showHitboxes?: boolean) {
@@ -988,7 +992,6 @@ class SemanticAnnotationOverlay {
 
     private shouldShowVolume(annotation: SemanticAnnotation) {
         return this.interactionMode !== 'game' ||
-            this.foundAnnotationIds.has(annotation.id) ||
             (this.showHitboxes && this.isActiveGameTarget(annotation));
     }
 
@@ -1112,6 +1115,27 @@ class SemanticAnnotationOverlay {
         }
 
         return tMax >= 0 ? Math.max(0, tMin) : null;
+    }
+
+    private rayCanReachActiveHitVolume(ray: Ray) {
+        let checkedVolumes = 0;
+        for (const annotation of this.annotations) {
+            if (!this.isActiveGameTarget(annotation)) {
+                continue;
+            }
+
+            const volume = this.hitVolumes.get(annotation.id);
+            if (!volume) {
+                return true;
+            }
+
+            checkedVolumes += 1;
+            if (this.rayVolumeDistance(ray, volume) !== null) {
+                return true;
+            }
+        }
+
+        return checkedVolumes === 0;
     }
 
     private volumeFromWorldPoints(
@@ -1329,6 +1353,10 @@ class SemanticAnnotationOverlay {
     }
 
     private drawHitVolumes() {
+        if (this.interactionMode === 'game' && !this.showHitboxes) {
+            return;
+        }
+
         for (const annotation of this.annotations) {
             const volume = this.hitVolumes.get(annotation.id);
             if (!volume || !this.shouldShowVolume(annotation)) {
@@ -1583,7 +1611,8 @@ class SemanticAnnotationOverlay {
         const { width, height } = this.scene.camera.targetSize;
         this.scene.camera.getRay(width * x, height * y, centerRay);
         const intersectStartedAt = performance.now();
-        const hit = await this.scene.camera.intersect(x, y);
+        const canReachTarget = this.rayCanReachActiveHitVolume(centerRay);
+        const hit = canReachTarget ? await this.scene.camera.intersect(x, y) : null;
         const intersectMs = performance.now() - intersectStartedAt;
         const matchStartedAt = performance.now();
         const matched = this.findCenterHit(hit?.position ?? null, centerRay);
@@ -1593,6 +1622,7 @@ class SemanticAnnotationOverlay {
             screenPoint: [Number(x.toFixed(4)), Number(y.toFixed(4))],
             hasSurfaceHit: Boolean(hit?.position),
             intersectMs: Number(intersectMs.toFixed(1)),
+            intersectSkipped: !canReachTarget,
             matchMs: Number(matchMs.toFixed(1)),
             clickEvalMs: Number(clickEvalMs.toFixed(1))
         };
