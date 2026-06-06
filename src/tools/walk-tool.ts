@@ -1205,7 +1205,7 @@ class WalkTool {
     private playerHead(camera = this.camera, focalPoint = camera.focalPoint) {
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        return focalPoint.add(forwardVec.clone().mulScalar(distance));
+        return focalPoint.clone().add(forwardVec.clone().mulScalar(distance));
     }
 
     private applyCollisionHeadHeightLock(camera: Camera, focalPoint: Vec3) {
