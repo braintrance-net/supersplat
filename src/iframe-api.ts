@@ -84,6 +84,7 @@ interface LoadFileMessage {
     data?: ArrayBuffer;
     camera?: CameraState;
     transform?: PresetTransform;
+    collisionMeshSrc?: string | null;
     requestId?: RequestId;
 }
 
@@ -539,6 +540,17 @@ const applyTransformState = (events: Events, transform?: PresetTransform) => {
     }
 };
 
+const collisionMeshAssetVersion = '20260605-raw-mesh-v1';
+
+const collisionMeshSrcForFilename = (filename: string, explicitSrc?: string | null) => {
+    if (explicitSrc !== undefined) {
+        return explicitSrc;
+    }
+
+    const basename = filename.split('/').pop()?.replace(/\.(ply|sog|spz|splat|ksplat|compressed\.ply)$/i, '');
+    return basename ? `/static/dev-assets/collision/${basename}.collision.glb?v=${collisionMeshAssetVersion}` : null;
+};
+
 const removeExtension = (filename: string) => {
     const dot = filename.lastIndexOf('.');
     return dot === -1 ? filename : filename.slice(0, dot);
@@ -702,6 +714,11 @@ const registerIframeApi = (events: Events) => {
     let rafVeryLongFrameCount = 0;
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
+    let activeCollisionMeshSrc: string | null = null;
+
+    events.on('scene.clear', () => {
+        activeCollisionMeshSrc = null;
+    });
 
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
         let longTaskCount = 0;
@@ -1013,6 +1030,18 @@ const registerIframeApi = (events: Events) => {
         }
     });
 
+    events.on('walk.collisionMesh', (details: Record<string, unknown>) => {
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({
+                type: DIAGNOSTIC,
+                source: 'supersplat',
+                label: 'walk-collision-mesh',
+                details,
+                at: new Date().toISOString()
+            }, '*');
+        }
+    });
+
     window.addEventListener('message', async (event: MessageEvent) => {
         const source = event.source as Window | null;
         if (!source) {
@@ -1274,7 +1303,8 @@ const registerIframeApi = (events: Events) => {
                 byteLength: event.data.data?.byteLength ?? 0
             }, event.data.requestId);
             try {
-                if (event.data.data) {
+                const hasSceneData = Boolean(event.data.data);
+                if (hasSceneData && event.data.data) {
                     events.fire('scene.clear');
                     const file = new File([event.data.data], event.data.filename);
                     await events.invoke('import', [{
@@ -1288,6 +1318,25 @@ const registerIframeApi = (events: Events) => {
                 }
 
                 applyTransformState(events, event.data.transform);
+                let collisionMeshSrc: string | null = null;
+                if (hasSceneData) {
+                    collisionMeshSrc = collisionMeshSrcForFilename(event.data.filename, event.data.collisionMeshSrc);
+                    activeCollisionMeshSrc = collisionMeshSrc;
+                } else if (event.data.transform && activeCollisionMeshSrc) {
+                    collisionMeshSrc = activeCollisionMeshSrc;
+                }
+                if (collisionMeshSrc) {
+                    events.fire('walk.collisionMeshLoad', {
+                        url: collisionMeshSrc,
+                        requestId: event.data.requestId ?? null,
+                        transform: event.data.transform
+                    });
+                } else {
+                    events.fire('walk.collisionMeshClear', {
+                        reason: 'disabled',
+                        requestId: event.data.requestId ?? null
+                    });
+                }
                 applyCameraState(events, event.data.camera);
                 rendered = await waitForPostRender(events);
                 postDiagnostic(source, event.origin, 'load-file-postrender', { rendered }, event.data.requestId);
