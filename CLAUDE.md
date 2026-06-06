@@ -45,7 +45,7 @@ Set via `cross-env` in npm scripts or shell:
 | Variable | Purpose | Default fallback |
 |----------|---------|-----------------|
 | `BUILD_TYPE` | `debug`, `profile`, or `release` | `release` |
-| `BOXER_BACKEND_URL` | Boxer AI backend | board-demo editor: `/api/boxer`; other deployments: `https://boxer.4dream.app` |
+| `BOXER_BACKEND_URL` | Boxer AI backend | Runtime config from board-demo web or `https://boxer.4dream.app` |
 | `SAM3_BACKEND_URL` | SAM3 AI backend | `https://sam3.4dream.app` |
 | `DEFAULT_SPLAT_URL` | Auto-load splat file on startup | none |
 | `DEFAULT_CAMERA_POSITION` | Comma-separated x,y,z | none |
