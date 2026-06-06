@@ -187,6 +187,7 @@ interface GameModeMessage {
     objectiveIds?: string[];
     showHitboxes?: boolean;
     hideChrome?: boolean;
+    camera?: CameraState;
 }
 
 interface AnnotationAuthoringCaptureMessage {
@@ -387,7 +388,8 @@ const isGameModeMessage = (data: any): data is GameModeMessage => {
         typeof data.enabled === 'boolean' &&
         (data.objectiveIds === undefined || Array.isArray(data.objectiveIds)) &&
         (data.showHitboxes === undefined || typeof data.showHitboxes === 'boolean') &&
-        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean')
+        (data.hideChrome === undefined || typeof data.hideChrome === 'boolean') &&
+        (data.camera === undefined || typeof data.camera === 'object')
     );
 };
 
@@ -1328,6 +1330,9 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isGameModeMessage(event.data)) {
+            if (event.data.enabled) {
+                applyCameraState(events, event.data.camera);
+            }
             const gameModeSignature = JSON.stringify({
                 enabled: event.data.enabled,
                 objectiveIds: event.data.objectiveIds ?? [],
@@ -1337,7 +1342,8 @@ const registerIframeApi = (events: Events) => {
             if (gameModeSignature === lastGameModeSignature) {
                 postDiagnostic(source, event.origin, 'game-mode-skip', {
                     enabled: event.data.enabled,
-                    objectiveCount: event.data.objectiveIds?.length ?? 0
+                    objectiveCount: event.data.objectiveIds?.length ?? 0,
+                    cameraReset: Boolean(event.data.camera)
                 });
                 return;
             }
@@ -1351,7 +1357,8 @@ const registerIframeApi = (events: Events) => {
                 enabled: event.data.enabled,
                 objectiveCount: event.data.objectiveIds?.length ?? 0,
                 showHitboxes: event.data.showHitboxes === true,
-                hideChrome: event.data.hideChrome !== false
+                hideChrome: event.data.hideChrome !== false,
+                cameraReset: Boolean(event.data.camera)
             });
             if (event.data.enabled) {
                 const activeTool = events.invoke('tool.active') as string | null;
