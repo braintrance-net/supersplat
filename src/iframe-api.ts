@@ -146,6 +146,7 @@ interface ApiConfigMessage {
     proxyBaseUrl?: string;
     sam3BackendUrl?: string;
     semanticScanUrl?: string;
+    boxerBackendUrl?: string;
     sketchfabApiToken?: string;
 }
 
@@ -333,6 +334,7 @@ const isApiConfigMessage = (data: any): data is ApiConfigMessage => {
         (data.proxyBaseUrl === undefined || typeof data.proxyBaseUrl === 'string') &&
         (data.sam3BackendUrl === undefined || typeof data.sam3BackendUrl === 'string') &&
         (data.semanticScanUrl === undefined || typeof data.semanticScanUrl === 'string') &&
+        (data.boxerBackendUrl === undefined || typeof data.boxerBackendUrl === 'string') &&
         (data.sketchfabApiToken === undefined || typeof data.sketchfabApiToken === 'string')
     );
 };
@@ -461,10 +463,11 @@ const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessa
 };
 
 const normalizeOrigin = (value: string, base: string) => new URL(value, base).origin;
+const normalizeUrl = (value: string, base: string) => new URL(value, base).href.replace(/\/$/, '');
 
 const applyApiConfig = (
     event: MessageEvent,
-    values: { proxyBaseUrl?: string, sam3BackendUrl?: string, semanticScanUrl?: string, sketchfabApiToken?: string }
+    values: { proxyBaseUrl?: string, sam3BackendUrl?: string, semanticScanUrl?: string, boxerBackendUrl?: string, sketchfabApiToken?: string }
 ) => {
     try {
         const config = (window as any).supersplatConfig ?? {};
@@ -482,6 +485,10 @@ const applyApiConfig = (
 
         if (values.semanticScanUrl) {
             nextConfig.semanticScanBackendUrl = normalizeOrigin(values.semanticScanUrl, event.origin);
+        }
+
+        if (values.boxerBackendUrl) {
+            nextConfig.boxerBackendUrl = normalizeUrl(values.boxerBackendUrl, event.origin);
         }
 
         if (values.sketchfabApiToken) {
