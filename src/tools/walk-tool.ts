@@ -841,6 +841,7 @@ class WalkTool {
             case 'KeyE':
             case 'AltLeft':
             case 'AltRight':
+                handled = false;
                 break;
             default:
                 handled = false;
@@ -1125,7 +1126,6 @@ class WalkTool {
         this.collisionMeshAbort?.abort();
         const abortController = new AbortController();
         this.collisionMeshAbort = abortController;
-        this.collisionMesh = null;
         this.collisionMeshUrl = details.url;
         this.collisionMeshKey = meshKey;
         const startedAt = performance.now();
@@ -1552,7 +1552,6 @@ class WalkTool {
         }
 
         focalPoint.y += deltaY;
-        this.externalVerticalVelocity = 0;
         return true;
     }
 
