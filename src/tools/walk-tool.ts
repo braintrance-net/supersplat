@@ -63,11 +63,16 @@ const COLLISION_POINTER_LOOK_DEFER_MS = 160;
 const COLLISION_POINTER_LOOK_MAX_DEFER_MS = 900;
 const COLLISION_MESH_CELL_SIZE = 0.5;
 const COLLISION_MESH_PLAYER_HEIGHT = 1.65;
-const COLLISION_MESH_CAPSULE_RADIUS = 0.34;
+const COLLISION_MESH_CAPSULE_RADIUS = 0.28;
 const COLLISION_MESH_STEP_HEIGHT = 0.32;
 const COLLISION_MESH_HEAD_CLEARANCE = 0;
 const COLLISION_MESH_WALK_SPEED = 1.8;
 const COLLISION_MESH_SPRINT_MULTIPLIER = 1.65;
+const COLLISION_MESH_JUMP_SPEED = 2.9;
+const COLLISION_MESH_GRAVITY = 7.5;
+const COLLISION_MESH_GROUND_SNAP = 0.42;
+const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
+const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
 const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
 const COLLISION_MESH_SWEEP_STEP = 0.05;
@@ -88,6 +93,8 @@ type CollisionTriangle = {
     maxY: number;
     minZ: number;
     maxZ: number;
+    normalY: number;
+    blocking: boolean;
 };
 
 type GltfAccessor = {
@@ -137,14 +144,15 @@ class WalkCollisionMesh {
     readonly blockingTriangleCount: number;
     readonly cellCount: number;
     private readonly triangles: CollisionTriangle[];
-    private readonly cells = new Map<string, number[]>();
+    private readonly blockingCells = new Map<string, number[]>();
+    private readonly groundCells = new Map<string, number[]>();
 
     private constructor(triangles: CollisionTriangle[]) {
         this.triangles = triangles;
         this.triangleCount = triangles.length;
-        this.blockingTriangleCount = triangles.length;
+        this.blockingTriangleCount = triangles.filter(triangle => triangle.blocking).length;
         this.indexTriangles();
-        this.cellCount = this.cells.size;
+        this.cellCount = this.blockingCells.size;
     }
 
     static fromGlb(buffer: ArrayBuffer, transform?: PresetTransform) {
@@ -167,7 +175,7 @@ class WalkCollisionMesh {
 
     intersectsPlayerBody(body: PlayerCollisionBody): CollisionMeshHit {
         const { head, radius } = body;
-        const minY = head.y - body.height + COLLISION_MESH_STEP_HEIGHT;
+        const minY = head.y - body.height + 0.02;
         const maxY = head.y - COLLISION_MESH_HEAD_CLEARANCE;
         const minCellX = Math.floor((head.x - radius) / COLLISION_MESH_CELL_SIZE);
         const maxCellX = Math.floor((head.x + radius) / COLLISION_MESH_CELL_SIZE);
@@ -177,7 +185,7 @@ class WalkCollisionMesh {
 
         for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
             for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
-                const indices = this.cells.get(`${cellX},${cellZ}`);
+                const indices = this.blockingCells.get(`${cellX},${cellZ}`);
                 if (!indices) {
                     continue;
                 }
@@ -205,20 +213,62 @@ class WalkCollisionMesh {
         return { blocked: false };
     }
 
+    groundYAt(x: number, z: number, maxY: number, minY: number) {
+        const cellX = Math.floor(x / COLLISION_MESH_CELL_SIZE);
+        const cellZ = Math.floor(z / COLLISION_MESH_CELL_SIZE);
+        let bestY: number | null = null;
+        const checked = new Set<number>();
+
+        for (let dx = -1; dx <= 1; dx += 1) {
+            for (let dz = -1; dz <= 1; dz += 1) {
+                const indices = this.groundCells.get(`${cellX + dx},${cellZ + dz}`);
+                if (!indices) {
+                    continue;
+                }
+
+                for (const index of indices) {
+                    if (checked.has(index)) {
+                        continue;
+                    }
+                    checked.add(index);
+                    const triangle = this.triangles[index];
+                    if (triangle.blocking || triangle.minY > maxY || triangle.maxY < minY) {
+                        continue;
+                    }
+                    if (triangle.maxX < x || triangle.minX > x || triangle.maxZ < z || triangle.minZ > z) {
+                        continue;
+                    }
+                    if (!WalkCollisionMesh.pointInTriangleXZ(x, z, triangle)) {
+                        continue;
+                    }
+
+                    const y = WalkCollisionMesh.interpolateTriangleY(x, z, triangle);
+                    if (y !== null && y <= maxY && y >= minY && (bestY === null || y > bestY)) {
+                        bestY = y;
+                    }
+                }
+            }
+        }
+
+        return bestY;
+    }
+
     private indexTriangles() {
         for (let i = 0; i < this.triangles.length; i += 1) {
             const triangle = this.triangles[i];
-            const minCellX = Math.floor(triangle.minX / COLLISION_MESH_CELL_SIZE);
-            const maxCellX = Math.floor(triangle.maxX / COLLISION_MESH_CELL_SIZE);
-            const minCellZ = Math.floor(triangle.minZ / COLLISION_MESH_CELL_SIZE);
-            const maxCellZ = Math.floor(triangle.maxZ / COLLISION_MESH_CELL_SIZE);
+            const radius = triangle.blocking ? COLLISION_MESH_CAPSULE_RADIUS : 0;
+            const minCellX = Math.floor((triangle.minX - radius) / COLLISION_MESH_CELL_SIZE);
+            const maxCellX = Math.floor((triangle.maxX + radius) / COLLISION_MESH_CELL_SIZE);
+            const minCellZ = Math.floor((triangle.minZ - radius) / COLLISION_MESH_CELL_SIZE);
+            const maxCellZ = Math.floor((triangle.maxZ + radius) / COLLISION_MESH_CELL_SIZE);
             for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
                 for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
                     const key = `${cellX},${cellZ}`;
-                    let list = this.cells.get(key);
+                    const cells = triangle.blocking ? this.blockingCells : this.groundCells;
+                    let list = cells.get(key);
                     if (!list) {
                         list = [];
-                        this.cells.set(key, list);
+                        cells.set(key, list);
                     }
                     list.push(i);
                 }
@@ -431,9 +481,10 @@ class WalkCollisionMesh {
         const ny = uz * vx - ux * vz;
         const nz = ux * vy - uy * vx;
         const len = Math.hypot(nx, ny, nz);
-        if (len <= 0.000001 || Math.abs(ny / len) > COLLISION_MESH_MAX_FLOOR_NORMAL_Y) {
+        if (len <= 0.000001) {
             return null;
         }
+        const normalY = ny / len;
 
         return {
             ax: a.x,
@@ -450,7 +501,9 @@ class WalkCollisionMesh {
             minY: Math.min(a.y, b.y, c.y),
             maxY: Math.max(a.y, b.y, c.y),
             minZ: Math.min(a.z, b.z, c.z) - COLLISION_MESH_CAPSULE_RADIUS,
-            maxZ: Math.max(a.z, b.z, c.z) + COLLISION_MESH_CAPSULE_RADIUS
+            maxZ: Math.max(a.z, b.z, c.z) + COLLISION_MESH_CAPSULE_RADIUS,
+            normalY,
+            blocking: Math.abs(normalY) <= COLLISION_MESH_MAX_FLOOR_NORMAL_Y
         };
     }
 
@@ -489,6 +542,29 @@ class WalkCollisionMesh {
         const closestX = ax + t * dx;
         const closestZ = az + t * dz;
         return (px - closestX) * (px - closestX) + (pz - closestZ) * (pz - closestZ);
+    }
+
+    private static interpolateTriangleY(x: number, z: number, triangle: CollisionTriangle) {
+        const v0x = triangle.bx - triangle.ax;
+        const v0z = triangle.bz - triangle.az;
+        const v1x = triangle.cx - triangle.ax;
+        const v1z = triangle.cz - triangle.az;
+        const v2x = x - triangle.ax;
+        const v2z = z - triangle.az;
+        const dot00 = v0x * v0x + v0z * v0z;
+        const dot01 = v0x * v1x + v0z * v1z;
+        const dot02 = v0x * v2x + v0z * v2z;
+        const dot11 = v1x * v1x + v1z * v1z;
+        const dot12 = v1x * v2x + v1z * v2z;
+        const denominator = dot00 * dot11 - dot01 * dot01;
+        if (Math.abs(denominator) <= 0.000001) {
+            return null;
+        }
+        const invDenominator = 1 / denominator;
+        const v = (dot11 * dot02 - dot01 * dot12) * invDenominator;
+        const w = (dot00 * dot12 - dot01 * dot02) * invDenominator;
+        const u = 1 - v - w;
+        return triangle.ay * u + triangle.by * v + triangle.cy * w;
     }
 }
 
@@ -940,9 +1016,8 @@ class WalkTool {
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
 
         if (this.collisionMesh) {
-            this.externalVerticalVelocity = 0;
-            this.externalJumpWasPressed = false;
-            this.externalGroundY = focalPoint.y;
+            changed ||= this.applyCollisionMeshVertical(input, dt, camera, focalPoint);
+            changed ||= this.resolveCollisionMeshPenetration(camera, focalPoint);
         } else {
             if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
                 this.externalGroundY = focalPoint.y;
@@ -1148,6 +1223,31 @@ class WalkTool {
             return fullMove;
         }
 
+        const slideCandidates = [
+            new Vec3(fullMove.x, 0, 0),
+            new Vec3(0, 0, fullMove.z)
+        ].filter(candidate => Math.hypot(candidate.x, candidate.z) > 0.00001);
+        for (const candidate of slideCandidates.sort((a, b) => Math.hypot(b.x, b.z) - Math.hypot(a.x, a.z))) {
+            if (!this.firstCollisionMeshHit(mesh, bodies, candidate)) {
+                this.reportCollisionMesh(now, 'slide', {
+                    blocked: false,
+                    triangle: hit?.triangle ?? null,
+                    anchor: hit?.anchor ?? null,
+                    sweepStep: hit?.step ?? null,
+                    sweepSteps: hit?.steps ?? null,
+                    headX: Number(bodies[0].head.x.toFixed(3)),
+                    headY: Number(bodies[0].head.y.toFixed(3)),
+                    headZ: Number(bodies[0].head.z.toFixed(3)),
+                    feetY: Number((bodies[0].head.y - bodies[0].height).toFixed(3)),
+                    radius: Number(bodies[0].radius.toFixed(3)),
+                    playerHeight: Number(bodies[0].height.toFixed(3)),
+                    moveX: Number(candidate.x.toFixed(3)),
+                    moveZ: Number(candidate.z.toFixed(3))
+                });
+                return candidate;
+            }
+        }
+
         const blockedBody = hit?.body ?? {
             ...bodies[0],
             head: bodies[0].head.clone().add(fullMove)
@@ -1168,6 +1268,115 @@ class WalkTool {
             moveZ: Number(fullMove.z.toFixed(3))
         });
         return null;
+    }
+
+    private applyCollisionMeshVertical(input: WalkInputState, dt: number, camera: Camera, focalPoint: Vec3) {
+        const mesh = this.collisionMesh;
+        if (!mesh) {
+            return false;
+        }
+
+        let changed = false;
+        let head = this.playerHead(camera, focalPoint);
+        let feetY = head.y - COLLISION_MESH_PLAYER_HEIGHT;
+        const groundY = mesh.groundYAt(
+            head.x,
+            head.z,
+            feetY + COLLISION_MESH_GROUND_SNAP,
+            feetY - COLLISION_MESH_GROUND_SNAP * 3
+        );
+        const grounded = groundY !== null && feetY <= groundY + 0.04 && this.externalVerticalVelocity <= 0;
+
+        if (input.jump && !this.externalJumpWasPressed && grounded) {
+            this.externalVerticalVelocity = COLLISION_MESH_JUMP_SPEED;
+        } else if (grounded && groundY !== null && Math.abs(feetY - groundY) > 0.001) {
+            const snap = groundY - feetY;
+            focalPoint.y += snap;
+            if (this.collisionMeshHeadY !== null) {
+                this.collisionMeshHeadY += snap;
+            }
+            this.externalVerticalVelocity = 0;
+            changed = true;
+            head = this.playerHead(camera, focalPoint);
+            feetY = head.y - COLLISION_MESH_PLAYER_HEIGHT;
+        }
+
+        this.externalJumpWasPressed = Boolean(input.jump);
+
+        if (this.externalVerticalVelocity !== 0 || !grounded) {
+            this.externalVerticalVelocity -= COLLISION_MESH_GRAVITY * dt;
+            const deltaY = this.externalVerticalVelocity * dt;
+            focalPoint.y += deltaY;
+            if (this.collisionMeshHeadY !== null) {
+                this.collisionMeshHeadY += deltaY;
+            }
+            changed = true;
+
+            head = this.playerHead(camera, focalPoint);
+            feetY = head.y - COLLISION_MESH_PLAYER_HEIGHT;
+            const nextGroundY = mesh.groundYAt(
+                head.x,
+                head.z,
+                feetY + COLLISION_MESH_GROUND_SNAP,
+                feetY - COLLISION_MESH_GROUND_SNAP * 4
+            );
+            if (nextGroundY !== null && feetY <= nextGroundY && this.externalVerticalVelocity <= 0) {
+                const snap = nextGroundY - feetY;
+                focalPoint.y += snap;
+                if (this.collisionMeshHeadY !== null) {
+                    this.collisionMeshHeadY += snap;
+                }
+                this.externalVerticalVelocity = 0;
+            }
+        }
+
+        this.externalGroundY = groundY;
+        return changed;
+    }
+
+    private resolveCollisionMeshPenetration(camera: Camera, focalPoint: Vec3) {
+        const mesh = this.collisionMesh;
+        if (!mesh) {
+            return false;
+        }
+
+        const body = this.playerCollisionBodies(camera)[0];
+        const currentHit = mesh.intersectsPlayerBody(body);
+        if (!currentHit.blocked) {
+            return false;
+        }
+
+        const directions = 24;
+        for (let radius = COLLISION_MESH_DEPENETRATE_STEP; radius <= COLLISION_MESH_DEPENETRATE_RADIUS; radius += COLLISION_MESH_DEPENETRATE_STEP) {
+            for (let i = 0; i < directions; i += 1) {
+                const angle = i / directions * Math.PI * 2;
+                const offset = new Vec3(Math.cos(angle) * radius, 0, Math.sin(angle) * radius);
+                const candidate = {
+                    ...body,
+                    head: body.head.clone().add(offset)
+                };
+                if (mesh.intersectsPlayerBody(candidate).blocked) {
+                    continue;
+                }
+
+                focalPoint.add(offset);
+                this.reportCollisionMesh(performance.now(), 'depenetrate', {
+                    blocked: false,
+                    triangle: currentHit.triangle ?? null,
+                    headX: Number(candidate.head.x.toFixed(3)),
+                    headY: Number(candidate.head.y.toFixed(3)),
+                    headZ: Number(candidate.head.z.toFixed(3)),
+                    feetY: Number((candidate.head.y - candidate.height).toFixed(3)),
+                    radius: Number(candidate.radius.toFixed(3)),
+                    playerHeight: Number(candidate.height.toFixed(3)),
+                    moveX: Number(offset.x.toFixed(3)),
+                    moveZ: Number(offset.z.toFixed(3))
+                });
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private firstCollisionMeshHit(mesh: WalkCollisionMesh, bodies: PlayerCollisionBody[], move: Vec3) {
