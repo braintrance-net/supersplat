@@ -522,6 +522,7 @@ class WalkTool {
     private collisionMeshBufferUrl: string | null = null;
     private collisionMeshAbort: AbortController | null = null;
     private lastCollisionMeshReportAt = 0;
+    private collisionMeshHeadY: number | null = null;
     private collisionProxy: CollisionProxyState = {
         pending: false,
         frontDistance: null,
@@ -719,6 +720,11 @@ class WalkTool {
                 break;
             case 'Space':
                 this.embeddedKeyboardInput.jump = pressed;
+                break;
+            case 'KeyQ':
+            case 'KeyE':
+            case 'AltLeft':
+            case 'AltRight':
                 break;
             default:
                 handled = false;
@@ -927,18 +933,25 @@ class WalkTool {
         const focalPoint = camera.focalPoint;
         let changed = false;
         const useCollisionProxy = !this.collisionMesh;
+        changed ||= this.applyCollisionHeadHeightLock(camera, focalPoint);
 
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
 
-        if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
+        if (this.collisionMesh) {
+            this.externalVerticalVelocity = 0;
+            this.externalJumpWasPressed = false;
             this.externalGroundY = focalPoint.y;
-        }
+        } else {
+            if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
+                this.externalGroundY = focalPoint.y;
+            }
 
-        if (input.jump && !this.externalJumpWasPressed && this.externalVerticalVelocity === 0) {
-            this.externalGroundY = focalPoint.y;
-            this.externalVerticalVelocity = camera.sceneRadius * 0.55;
+            if (input.jump && !this.externalJumpWasPressed && this.externalVerticalVelocity === 0) {
+                this.externalGroundY = focalPoint.y;
+                this.externalVerticalVelocity = camera.sceneRadius * 0.55;
+            }
+            this.externalJumpWasPressed = Boolean(input.jump);
         }
-        this.externalJumpWasPressed = Boolean(input.jump);
 
         if (moving) {
             Camera.calcForwardVec(forwardVec, camera.azim, 0);
@@ -967,7 +980,7 @@ class WalkTool {
             }
         }
 
-        if (this.externalVerticalVelocity !== 0 && this.externalGroundY !== null) {
+        if (!this.collisionMesh && this.externalVerticalVelocity !== 0 && this.externalGroundY !== null) {
             focalPoint.y += this.externalVerticalVelocity * dt;
             this.externalVerticalVelocity -= camera.sceneRadius * 1.5 * dt;
             if (focalPoint.y <= this.externalGroundY) {
@@ -1026,6 +1039,7 @@ class WalkTool {
             }
             if (mesh.blockingTriangleCount === 0) {
                 this.collisionMesh = null;
+                this.collisionMeshHeadY = null;
                 this.events.fire('walk.collisionMesh', {
                     ok: false,
                     reason: 'empty',
@@ -1037,6 +1051,7 @@ class WalkTool {
                 return;
             }
             this.collisionMesh = mesh;
+            this.collisionMeshHeadY = null;
             this.events.fire('walk.collisionMesh', {
                 ok: true,
                 reason: 'ready',
@@ -1057,6 +1072,7 @@ class WalkTool {
                 return;
             }
             this.collisionMesh = null;
+            this.collisionMeshHeadY = null;
             this.events.fire('walk.collisionMesh', {
                 ok: false,
                 reason: 'load-failed',
@@ -1075,6 +1091,7 @@ class WalkTool {
         this.collisionMeshKey = null;
         this.collisionMeshBuffer = null;
         this.collisionMeshBufferUrl = null;
+        this.collisionMeshHeadY = null;
         this.events.fire('walk.collisionMesh', {
             ok: true,
             reason: 'cleared',
@@ -1173,13 +1190,39 @@ class WalkTool {
     }
 
     private playerCollisionBodies(camera = this.camera): PlayerCollisionBody[] {
-        const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
-        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
         return [{
-            head: camera.focalPoint.add(forwardVec.clone().mulScalar(distance)),
+            head: this.playerHead(camera),
             height: COLLISION_MESH_PLAYER_HEIGHT,
             radius: COLLISION_MESH_CAPSULE_RADIUS
         }];
+    }
+
+    private playerHead(camera = this.camera, focalPoint = camera.focalPoint) {
+        const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
+        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
+        return focalPoint.add(forwardVec.clone().mulScalar(distance));
+    }
+
+    private applyCollisionHeadHeightLock(camera: Camera, focalPoint: Vec3) {
+        if (!this.collisionMesh) {
+            this.collisionMeshHeadY = null;
+            return false;
+        }
+
+        const head = this.playerHead(camera, focalPoint);
+        if (this.collisionMeshHeadY === null) {
+            this.collisionMeshHeadY = head.y;
+            return false;
+        }
+
+        const deltaY = this.collisionMeshHeadY - head.y;
+        if (Math.abs(deltaY) <= 0.0001) {
+            return false;
+        }
+
+        focalPoint.y += deltaY;
+        this.externalVerticalVelocity = 0;
+        return true;
     }
 
     private updateCollisionProxy(enabled: boolean) {
