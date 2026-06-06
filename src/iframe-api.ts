@@ -538,13 +538,15 @@ const applyTransformState = (events: Events, transform?: PresetTransform) => {
     }
 };
 
+const collisionMeshAssetVersion = '20260605-raw-mesh-v1';
+
 const collisionMeshSrcForFilename = (filename: string, explicitSrc?: string | null) => {
     if (explicitSrc !== undefined) {
         return explicitSrc;
     }
 
     const basename = filename.split('/').pop()?.replace(/\.(ply|sog|spz|splat|ksplat|compressed\.ply)$/i, '');
-    return basename ? `/static/dev-assets/collision/${basename}.collision.glb` : null;
+    return basename ? `/static/dev-assets/collision/${basename}.collision.glb?v=${collisionMeshAssetVersion}` : null;
 };
 
 const removeExtension = (filename: string) => {
