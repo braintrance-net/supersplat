@@ -717,6 +717,8 @@ const registerIframeApi = (events: Events) => {
     let gameModeActive = false;
     let gameModePreviousTool: string | null = null;
     let gameModeActivatedWalk = false;
+    let gameModePreviousRenderOverlays: boolean | null = null;
+    let gameModePreviousGizmoLayerEnabled: boolean | null = null;
     let lastPointerLookDiagnosticAt = 0;
     let pointerLookStats = emptyPointerLookStats();
     let pendingPointerLookDx = 0;
@@ -832,6 +834,39 @@ const registerIframeApi = (events: Events) => {
             window.cancelAnimationFrame(activeRenderFrame);
             activeRenderFrame = null;
         }
+    };
+
+    const setGameModeRenderChrome = (enabled: boolean) => {
+        const scene = window.scene as any;
+        if (!scene) {
+            return;
+        }
+
+        if (enabled) {
+            if (gameModePreviousRenderOverlays === null) {
+                gameModePreviousRenderOverlays = Boolean(scene.camera?.renderOverlays);
+            }
+            if (gameModePreviousGizmoLayerEnabled === null) {
+                gameModePreviousGizmoLayerEnabled = Boolean(scene.gizmoLayer?.enabled);
+            }
+            if (scene.camera) {
+                scene.camera.renderOverlays = false;
+            }
+            if (scene.gizmoLayer) {
+                scene.gizmoLayer.enabled = false;
+            }
+        } else {
+            if (scene.camera && gameModePreviousRenderOverlays !== null) {
+                scene.camera.renderOverlays = gameModePreviousRenderOverlays;
+            }
+            if (scene.gizmoLayer && gameModePreviousGizmoLayerEnabled !== null) {
+                scene.gizmoLayer.enabled = gameModePreviousGizmoLayerEnabled;
+            }
+            gameModePreviousRenderOverlays = null;
+            gameModePreviousGizmoLayerEnabled = null;
+        }
+
+        scene.forceRender = true;
     };
 
     const scheduleActiveRender = (leaseMs = GAME_MODE_ACTIVE_RENDER_IDLE_MS) => {
@@ -951,6 +986,7 @@ const registerIframeApi = (events: Events) => {
         gameModeActive = false;
         gameModePreviousTool = null;
         gameModeActivatedWalk = false;
+        setGameModeRenderChrome(false);
         const activeTool = events.invoke('tool.active') as string | null;
         if (shouldRestoreTool && restoreTool && activeTool !== restoreTool) {
             events.fire(`tool.${restoreTool}`);
@@ -1012,6 +1048,7 @@ const registerIframeApi = (events: Events) => {
 
         const applyStart = performance.now();
         events.fire('walk.pointerLook', dx, dy);
+        scheduleActiveRender();
         const applyMs = performance.now() - applyStart;
         pointerLookStats.totalApplyMs += applyMs;
         pointerLookStats.maxApplyMs = Math.max(pointerLookStats.maxApplyMs, applyMs);
@@ -1323,7 +1360,6 @@ const registerIframeApi = (events: Events) => {
 
         if (isPointerLookMessage(event.data)) {
             const receivedAt = performance.now();
-            scheduleActiveRender();
             if (pointerLookStats.lastAt !== null) {
                 const gapMs = receivedAt - pointerLookStats.lastAt;
                 if (gapMs > POINTER_LOOK_IDLE_RESET_MS) {
@@ -1354,8 +1390,8 @@ const registerIframeApi = (events: Events) => {
 
         if (isWalkInputMessage(event.data)) {
             activeRenderWalkHeld = hasWalkInput(event.data.keys);
-            scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);
             events.fire('walk.input', event.data.keys);
+            scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);
             return;
         }
 
@@ -1448,11 +1484,14 @@ const registerIframeApi = (events: Events) => {
             events.fire('semanticAnnotations.gameTargets', event.data.enabled ? event.data.objectiveIds ?? [] : []);
             events.fire('semanticAnnotations.showHitboxes', event.data.enabled && event.data.showHitboxes === true);
             document.body.classList.toggle('time-trial-game-mode', event.data.enabled && event.data.hideChrome !== false);
+            setGameModeRenderChrome(event.data.enabled);
             postDiagnostic(source, event.origin, 'game-mode', {
                 enabled: event.data.enabled,
                 objectiveCount: event.data.objectiveIds?.length ?? 0,
                 showHitboxes: event.data.showHitboxes === true,
                 hideChrome: event.data.hideChrome !== false,
+                renderOverlays: (window.scene as any)?.camera?.renderOverlays ?? null,
+                gizmoLayerEnabled: (window.scene as any)?.gizmoLayer?.enabled ?? null,
                 cameraReset: Boolean(event.data.camera)
             });
             if (event.data.enabled) {
