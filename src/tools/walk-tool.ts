@@ -1144,6 +1144,7 @@ class WalkTool {
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
         if (!moving) {
             this.collisionMeshBlockedSince = null;
+            this.resetCollisionDebugMove();
         }
 
         if (this.collisionMesh) {
@@ -1305,11 +1306,20 @@ class WalkTool {
         this.collisionMeshBufferUrl = null;
         this.collisionMeshHeadY = null;
         this.collisionMeshBlockedSince = null;
+        this.resetCollisionDebugMove();
+        this.lastCollisionFloorTriangle = null;
         this.events.fire('walk.collisionMesh', {
             ok: true,
             reason: 'cleared',
             ...details
         });
+    }
+
+    private resetCollisionDebugMove() {
+        this.lastCollisionDebugReason = 'idle';
+        this.lastCollisionDesiredMove.set(0, 0, 0);
+        this.lastCollisionResolvedMove = null;
+        this.lastCollisionHitTriangle = null;
     }
 
     private reportCollisionMesh(now: number, reason: string, details: Record<string, unknown>) {
@@ -1661,6 +1671,7 @@ class WalkTool {
 
     private drawDebugTriangles(mesh: WalkCollisionMesh, body: PlayerCollisionBody, floor: GroundMeshHit | null) {
         const triangles = mesh.debugTrianglesNear(body.eye.x, body.eye.z);
+        const drawn = new Set<number>();
         for (const { index, triangle } of triangles) {
             const color = index === this.lastCollisionHitTriangle ?
                 COLLISION_DEBUG_HIT_COLOR :
@@ -1668,7 +1679,22 @@ class WalkTool {
                     COLLISION_DEBUG_RAY_COLOR :
                     triangle.blocking ? COLLISION_DEBUG_WALL_COLOR : COLLISION_DEBUG_FLOOR_COLOR;
             this.drawDebugTriangle(triangle, color);
+            drawn.add(index);
         }
+        this.drawDebugTriangleByIndex(mesh, drawn, floor?.triangle ?? this.lastCollisionFloorTriangle, COLLISION_DEBUG_RAY_COLOR);
+        this.drawDebugTriangleByIndex(mesh, drawn, this.lastCollisionHitTriangle, COLLISION_DEBUG_HIT_COLOR);
+    }
+
+    private drawDebugTriangleByIndex(mesh: WalkCollisionMesh, drawn: Set<number>, index: number | null, color: Color) {
+        if (index === null || drawn.has(index)) {
+            return;
+        }
+        const triangle = mesh.triangleAt(index);
+        if (!triangle) {
+            return;
+        }
+        this.drawDebugTriangle(triangle, color);
+        drawn.add(index);
     }
 
     private drawDebugTriangle(triangle: CollisionTriangle, color: Color) {
