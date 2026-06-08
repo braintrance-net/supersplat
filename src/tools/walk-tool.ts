@@ -93,8 +93,8 @@ const COLLISION_MESH_JUMP_SPEED = 2.9;
 const COLLISION_MESH_GRAVITY = 7.5;
 const COLLISION_MESH_GROUND_SNAP = 0.42;
 const COLLISION_MESH_GROUND_PROBE_RADIUS = 0.22;
-const COLLISION_MESH_GROUND_CACHE_DROP = 0.45;
-const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
+const COLLISION_MESH_GROUND_CACHE_DROP = 0.9;
+const COLLISION_MESH_GROUND_CACHE_RISE = 0.75;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
@@ -1626,7 +1626,9 @@ class WalkTool {
             }
         }
 
-        this.externalGroundY = groundY;
+        if (groundY !== null) {
+            this.externalGroundY = groundY;
+        }
         if (changed || this.externalVerticalVelocity !== 0) {
             this.reportCollisionMesh(performance.now(), grounded ? 'ground' : 'air', {
                 blocked: false,
