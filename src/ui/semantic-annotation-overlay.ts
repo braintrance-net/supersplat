@@ -1377,6 +1377,10 @@ class SemanticAnnotationOverlay {
             return;
         }
 
+        if (this.collisionDebugEnabled) {
+            this.scene.forceRender = true;
+        }
+
         for (const annotation of this.annotations) {
             const volume = this.hitVolumes.get(annotation.id);
             if (volume && (this.collisionDebugEnabled || this.shouldShowVolume(annotation))) {
