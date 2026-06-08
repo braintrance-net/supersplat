@@ -1338,6 +1338,14 @@ class WalkTool {
             };
         }
 
+        if (this.embeddedControls && this.externalGroundY !== null) {
+            return {
+                y: this.externalGroundY,
+                triangle: null,
+                source: 'cached' as const
+            };
+        }
+
         return null;
     }
 
@@ -1557,10 +1565,14 @@ class WalkTool {
 
     private updateCollisionProxy(enabled: boolean) {
         const now = performance.now();
-        if (!enabled) {
+        if (!enabled || this.embeddedControls) {
             if (this.collisionProxy.blocked) {
                 this.collisionProxy.blocked = false;
-                this.reportCollisionProxy(now, 'released');
+                this.reportCollisionProxy(now, this.embeddedControls ? 'embedded-disabled' : 'released');
+            } else if (enabled && this.embeddedControls && now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS) {
+                this.collisionProxy.frontDistance = null;
+                this.collisionProxy.sampleMs = null;
+                this.reportCollisionProxy(now, 'embedded-disabled');
             } else if (now - this.collisionProxy.lastReportAt >= COLLISION_REPORT_INTERVAL_MS && this.collisionProxy.frontDistance !== null) {
                 this.collisionProxy.frontDistance = null;
                 this.collisionProxy.sampleMs = null;
