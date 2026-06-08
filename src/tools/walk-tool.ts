@@ -718,6 +718,7 @@ class WalkTool {
     private lastCollisionResolvedMove: Vec3 | null = null;
     private lastCollisionHitTriangle: number | null = null;
     private lastCollisionFloorTriangle: number | null = null;
+    private lastCollisionBlockedBody: PlayerCollisionBody | null = null;
     private readonly collisionDebugSamples: CollisionDebugSample[] = [];
     private collisionProxy: CollisionProxyState = {
         pending: false,
@@ -795,6 +796,28 @@ class WalkTool {
         };
     }
 
+    private static cloneCollisionBody(body: PlayerCollisionBody) {
+        return {
+            ...body,
+            head: body.head.clone(),
+            eye: body.eye.clone()
+        };
+    }
+
+    private static debugBody(body: PlayerCollisionBody | null) {
+        if (!body) {
+            return null;
+        }
+        return {
+            head: WalkTool.debugVec3(body.head),
+            eye: WalkTool.debugVec3(body.eye),
+            feetY: Number((body.eye.y - body.eyeHeight).toFixed(4)),
+            radius: Number(body.radius.toFixed(4)),
+            height: Number(body.height.toFixed(4)),
+            eyeHeight: Number(body.eyeHeight.toFixed(4))
+        };
+    }
+
     private collisionDebugBundle() {
         const mesh = this.collisionMesh;
         return {
@@ -828,7 +851,8 @@ class WalkTool {
                 desiredMove: WalkTool.debugVec3(this.lastCollisionDesiredMove),
                 resolvedMove: WalkTool.debugVec3(this.lastCollisionResolvedMove),
                 hitTriangle: this.lastCollisionHitTriangle,
-                floorTriangle: this.lastCollisionFloorTriangle
+                floorTriangle: this.lastCollisionFloorTriangle,
+                blockedBody: WalkTool.debugBody(this.lastCollisionBlockedBody)
             },
             samples: this.collisionDebugSamples
         };
@@ -1426,12 +1450,14 @@ class WalkTool {
         this.lastCollisionDesiredMove.set(0, 0, 0);
         this.lastCollisionResolvedMove = null;
         this.lastCollisionHitTriangle = null;
+        this.lastCollisionBlockedBody = null;
     }
 
     private reportCollisionMesh(now: number, reason: string, details: Record<string, unknown>) {
         this.pushCollisionDebugSample('move', {
             reason,
             embeddedControls: this.embeddedControls,
+            input: this.collisionDebugInput(this.walkInputState),
             ...details
         });
         if (reason === 'blocked' && now - this.lastCollisionMeshBlockReportAt < COLLISION_MESH_BLOCK_REPORT_INTERVAL_MS) {
@@ -1464,6 +1490,7 @@ class WalkTool {
         this.lastCollisionDesiredMove.copy(fullMove);
         this.lastCollisionResolvedMove = null;
         this.lastCollisionHitTriangle = null;
+        this.lastCollisionBlockedBody = null;
 
         if (Math.hypot(fullMove.x, fullMove.z) <= 0.00001) {
             this.lastCollisionDebugReason = 'idle';
@@ -1486,6 +1513,28 @@ class WalkTool {
         }
 
         this.lastCollisionHitTriangle = hit.triangle ?? null;
+        this.lastCollisionBlockedBody = WalkTool.cloneCollisionBody(hit.body);
+        const airborne = Math.abs(this.externalVerticalVelocity) > 0.001;
+        if (airborne) {
+            if (this.collisionMeshBlockedSince === null) {
+                this.collisionMeshBlockedSince = now;
+            }
+            const blockedMs = now - this.collisionMeshBlockedSince;
+            this.lastCollisionDebugReason = blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked';
+            this.reportCollisionMesh(now, blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked', {
+                blocked: true,
+                airborne: true,
+                triangle: hit?.triangle ?? null,
+                anchor: hit?.anchor ?? null,
+                sweepStep: hit?.step ?? null,
+                sweepSteps: hit?.steps ?? null,
+                stuckMs: Number(blockedMs.toFixed(1)),
+                ...this.collisionMeshBodyDetails(mesh, hit.body),
+                moveX: Number(fullMove.x.toFixed(3)),
+                moveZ: Number(fullMove.z.toFixed(3))
+            });
+            return null;
+        }
         const slideCandidates = [
             new Vec3(fullMove.x, 0, 0),
             new Vec3(0, 0, fullMove.z)
@@ -1777,6 +1826,7 @@ class WalkTool {
 
         this.drawDebugTriangles(mesh, body, floor);
         this.drawDebugPlayerCapsule(body);
+        this.drawDebugBlockedBody(body);
         this.drawDebugFloorProbe(body, feetY, floor);
         this.drawDebugMoveVectors(body);
 
@@ -1797,6 +1847,7 @@ class WalkTool {
         }
         this.drawDebugTriangleByIndex(mesh, drawn, floor?.triangle ?? this.lastCollisionFloorTriangle, COLLISION_DEBUG_RAY_COLOR);
         this.drawDebugTriangleByIndex(mesh, drawn, this.lastCollisionHitTriangle, COLLISION_DEBUG_HIT_COLOR);
+        this.drawDebugTriangleMarkerByIndex(mesh, this.lastCollisionHitTriangle, COLLISION_DEBUG_HIT_COLOR);
     }
 
     private drawDebugTriangleByIndex(mesh: WalkCollisionMesh, drawn: Set<number>, index: number | null, color: Color) {
@@ -1811,6 +1862,25 @@ class WalkTool {
         drawn.add(index);
     }
 
+    private drawDebugTriangleMarkerByIndex(mesh: WalkCollisionMesh, index: number | null, color: Color) {
+        if (index === null) {
+            return;
+        }
+        const triangle = mesh.triangleAt(index);
+        if (!triangle) {
+            return;
+        }
+        const center = new Vec3(
+            (triangle.ax + triangle.bx + triangle.cx) / 3,
+            (triangle.ay + triangle.by + triangle.cy) / 3,
+            (triangle.az + triangle.bz + triangle.cz) / 3
+        );
+        const size = 0.18;
+        this.drawDebugLine(new Vec3(center.x - size, center.y, center.z), new Vec3(center.x + size, center.y, center.z), color);
+        this.drawDebugLine(new Vec3(center.x, center.y - size, center.z), new Vec3(center.x, center.y + size, center.z), color);
+        this.drawDebugLine(new Vec3(center.x, center.y, center.z - size), new Vec3(center.x, center.y, center.z + size), color);
+    }
+
     private drawDebugTriangle(triangle: CollisionTriangle, color: Color) {
         const a = new Vec3(triangle.ax, triangle.ay, triangle.az);
         const b = new Vec3(triangle.bx, triangle.by, triangle.bz);
@@ -1820,20 +1890,30 @@ class WalkTool {
         this.drawDebugLine(c, a, color);
     }
 
-    private drawDebugPlayerCapsule(body: PlayerCollisionBody) {
+    private drawDebugPlayerCapsule(body: PlayerCollisionBody, color = COLLISION_DEBUG_PLAYER_COLOR, eyeColor = COLLISION_DEBUG_EYE_COLOR) {
         const feetY = body.eye.y - body.eyeHeight;
         const headY = body.head.y;
-        this.drawDebugCircleXZ(new Vec3(body.eye.x, feetY, body.eye.z), body.radius, COLLISION_DEBUG_PLAYER_COLOR);
-        this.drawDebugCircleXZ(new Vec3(body.eye.x, body.eye.y, body.eye.z), body.radius, COLLISION_DEBUG_EYE_COLOR);
-        this.drawDebugCircleXZ(new Vec3(body.head.x, headY, body.head.z), body.radius, COLLISION_DEBUG_PLAYER_COLOR);
+        this.drawDebugCircleXZ(new Vec3(body.eye.x, feetY, body.eye.z), body.radius, color);
+        this.drawDebugCircleXZ(new Vec3(body.eye.x, body.eye.y, body.eye.z), body.radius, eyeColor);
+        this.drawDebugCircleXZ(new Vec3(body.head.x, headY, body.head.z), body.radius, color);
 
         for (const [dx, dz] of [[body.radius, 0], [-body.radius, 0], [0, body.radius], [0, -body.radius]]) {
             this.drawDebugLine(
                 new Vec3(body.eye.x + dx, feetY, body.eye.z + dz),
                 new Vec3(body.head.x + dx, headY, body.head.z + dz),
-                COLLISION_DEBUG_PLAYER_COLOR
+                color
             );
         }
+    }
+
+    private drawDebugBlockedBody(currentBody: PlayerCollisionBody) {
+        const blockedBody = this.lastCollisionBlockedBody;
+        if (!blockedBody) {
+            return;
+        }
+        this.drawDebugPlayerCapsule(blockedBody, COLLISION_DEBUG_HIT_COLOR, COLLISION_DEBUG_HIT_COLOR);
+        this.drawDebugLine(currentBody.eye, blockedBody.eye, COLLISION_DEBUG_HIT_COLOR);
+        this.drawDebugCircleXZ(blockedBody.eye, blockedBody.radius * 1.45, COLLISION_DEBUG_HIT_COLOR);
     }
 
     private drawDebugFloorProbe(body: PlayerCollisionBody, feetY: number, floor: GroundMeshHit | null) {
