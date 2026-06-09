@@ -58,6 +58,21 @@ const SHADER_EFFECTS = ['Glow', 'Bloom', 'Blur', 'Outline', 'Pixelate', 'Scanlin
 
 type Effect = { label: string; type: 'preset' | 'effect'; strength: number };
 
+// Asset browser catalogue (hardcoded, per spec §7.10) + thumbnail gradients.
+const ASSETS: Record<string, string[]> = {
+    Gaussians: ['Potted plant', 'Armchair', 'Marble bust', 'Vase', 'Sneaker', 'Toy car'],
+    Props: ['Cube', 'Sphere', 'Cylinder', 'Cone', 'Torus', 'Plane'],
+    Sounds: ['Ambient pad', 'Footsteps', 'Birdsong', 'Rain', 'Wind', 'Chime']
+};
+const ASSET_GRADS = [
+    'linear-gradient(135deg,#f6d365,#fda085)',
+    'linear-gradient(135deg,#a1c4fd,#c2e9fb)',
+    'linear-gradient(135deg,#d4fc79,#96e6a1)',
+    'linear-gradient(135deg,#ffecd2,#fcb69f)',
+    'linear-gradient(135deg,#e0c3fc,#8ec5fc)',
+    'linear-gradient(135deg,#f5576c,#f093fb)'
+];
+
 const el = (tag: string, cls?: string, html?: string): HTMLElement => {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -114,6 +129,11 @@ class BraintranceUI {
     private recordingMode = false;
     private recordBorder: HTMLElement | null = null;
     private recordBar: HTMLElement | null = null;
+
+    // asset-browser state
+    private assetsPanel: HTMLElement | null = null;
+    private assetTab = 'Gaussians';
+    private placingAsset: string | null = null;
 
     constructor() {
         document.body.classList.add('bt-mode');
@@ -295,12 +315,17 @@ class BraintranceUI {
 
     private selectTool(tool: RailTool) {
         if (tool !== 'audio') this.exitAudio();
+        if (tool !== 'assets') this.closeAssets();
         if (tool === 'sam') {
             this.selectObject(true);
         } else if (tool === 'audio') {
             this.selectObject(false);
             this.setActiveTool('audio');
             this.enterAudio();
+        } else if (tool === 'assets') {
+            this.selectObject(false);
+            this.setActiveTool('assets');
+            this.openAssets();
         } else {
             this.selectObject(false);
             this.setActiveTool(tool);
@@ -597,6 +622,79 @@ class BraintranceUI {
         this.refreshBottom(); // restore context bar with updated count
     }
 
+    // ── asset browser (revealable) ──
+    private openAssets() {
+        this.assetsPanel?.remove();
+        this.assetsPanel = this.buildAssetsPanel();
+        this.root.appendChild(this.assetsPanel);
+    }
+
+    private closeAssets() {
+        this.placingAsset = null;
+        this.assetsPanel?.remove();
+        this.assetsPanel = null;
+    }
+
+    private buildAssetsPanel(): HTMLElement {
+        const panel = el('div', 'bt-assets-panel');
+        const head = el('div', 'bt-as-head');
+        head.appendChild(el('div', 'bt-as-title', 'Assets'));
+        const close = el('div', 'bt-as-close', ICON.x);
+        close.addEventListener('click', () => { this.closeAssets(); this.setActiveTool('explore'); });
+        head.appendChild(close);
+        panel.appendChild(head);
+
+        const tabs = el('div', 'bt-as-tabs');
+        ['Gaussians', 'Props', 'Sounds'].forEach((t) => {
+            const tab = el('div', `bt-as-tab${this.assetTab === t ? ' is-active' : ''}`, t);
+            tab.addEventListener('click', () => { this.assetTab = t; this.openAssets(); });
+            tabs.appendChild(tab);
+        });
+        panel.appendChild(tabs);
+
+        const grid = el('div', 'bt-as-grid');
+        ASSETS[this.assetTab].forEach((name, i) => {
+            const tile = el('div', `bt-as-tile${this.placingAsset === name ? ' is-armed' : ''}`);
+            const thumb = el('div', 'bt-as-thumb');
+            thumb.style.background = ASSET_GRADS[i % ASSET_GRADS.length];
+            tile.appendChild(thumb);
+            tile.appendChild(el('div', 'bt-as-label', name));
+            tile.addEventListener('click', () => this.armAsset(name));
+            grid.appendChild(tile);
+        });
+        panel.appendChild(grid);
+        panel.appendChild(el('div', 'bt-as-foot', 'Click a tile, then click in the scene to place it.'));
+        return panel;
+    }
+
+    private armAsset(name: string) {
+        this.placingAsset = name;
+        this.openAssets(); // re-render with the armed tile highlighted
+    }
+
+    private placeAssetAt(clientX: number, clientY: number) {
+        const scene = this.scene;
+        const cam = this.cameraComponent();
+        if (scene?.contentRoot && cam && this.canvas) {
+            const rect = this.canvas.getBoundingClientRect();
+            const dist = scene.camera?.distance ?? 2;
+            const out = new Vec3();
+            cam.screenToWorld(clientX - rect.left, clientY - rect.top, dist, out);
+            const mat = new StandardMaterial();
+            mat.useLighting = false; mat.diffuse.set(0, 0, 0); mat.emissive.set(0.55, 0.6, 0.72); mat.update();
+            const asset = new Entity('bt-asset');
+            asset.addComponent('render', { type: 'box' });
+            if (asset.render) asset.render.material = mat;
+            asset.setLocalScale(0.22, 0.22, 0.22);
+            asset.setPosition(out);
+            scene.contentRoot.addChild(asset);
+            scene.forceRender = true;
+        }
+        this.placingAsset = null;
+        this.closeAssets();      // browser closes after a placement (spec §7.10)
+        this.setActiveTool('explore');
+    }
+
     // Re-render the header center cluster (camera hints vs transform tools). Also
     // called when the gizmo mode changes so the active Q/E/R highlight updates.
     private refreshHeaderCenter() {
@@ -654,6 +752,7 @@ class BraintranceUI {
             const wasDown = down; down = false;
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
+            if (this.placingAsset) { this.placeAssetAt(e.clientX, e.clientY); return; }
             if (this.audioMode) return; // audio mode: clicks are for placement only
             if (this.recordingMode) return; // recording: keep the source selected (move it = a change)
             this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));
