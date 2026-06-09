@@ -847,7 +847,9 @@ class BraintranceUI {
         panel.appendChild(el('div', 'bt-ep-strength',
             '<span>Strength</span><input type="range" min="0" max="100" value="60">'));
 
-        panel.appendChild(el('div', 'bt-ep-section', 'SHADER EFFECTS'));
+        const shaderCount = this.selection.effects.filter(e => e.type === 'effect').length;
+        panel.appendChild(el('div', 'bt-ep-section',
+            `<span>SHADER EFFECTS</span>${shaderCount ? `<span class="bt-ep-count">${shaderCount} selected</span>` : ''}`));
         const grid = el('div', 'bt-ep-grid');
         SHADER_EFFECTS.forEach(name => grid.appendChild(this.effectTile(name, 'effect')));
         panel.appendChild(grid);
@@ -856,20 +858,44 @@ class BraintranceUI {
 
     private effectTile(name: string, type: 'preset' | 'effect'): HTMLElement {
         const swCls = name === 'None' ? 'is-none' : name === 'Cool' ? 'is-cool' : '';
-        const tile = el('div', 'bt-tile',
+        const selected = this.isEffectSelected(name, type);
+        const tile = el('div', `bt-tile${selected ? ' is-selected' : ''}`,
             `<div class="bt-tile-sw ${swCls}"></div><span class="bt-tile-label">${name}</span>`);
         tile.addEventListener('click', () => this.applyEffect(name, type));
         return tile;
     }
 
-    private applyEffect(label: string, type: 'preset' | 'effect') {
-        if (label === 'None') {
-            this.selection.effects = this.selection.effects.filter(e => e.type !== 'preset');
-        } else {
-            if (type === 'preset') this.selection.effects = this.selection.effects.filter(e => e.type !== 'preset');
-            this.selection.effects.push({ label, type, strength: 50 });
+    // is this library tile currently applied to the selection?
+    private isEffectSelected(label: string, type: 'preset' | 'effect'): boolean {
+        if (type === 'preset') {
+            // the "None" tile reads as selected when no colour preset is active
+            const hasPreset = this.selection.effects.some(e => e.type === 'preset');
+            return label === 'None' ? !hasPreset : this.selection.effects.some(e => e.type === 'preset' && e.label === label);
         }
-        this.refreshBottom(); // re-render chip list
+        return this.selection.effects.some(e => e.type === 'effect' && e.label === label);
+    }
+
+    private applyEffect(label: string, type: 'preset' | 'effect') {
+        if (type === 'preset') {
+            // presets are single-select: pick one (replacing any active preset); None clears
+            this.selection.effects = this.selection.effects.filter(e => e.type !== 'preset');
+            if (label !== 'None') this.selection.effects.push({ label, type, strength: 50 });
+        } else {
+            // shader effects toggle: click to add, click again to remove
+            const idx = this.selection.effects.findIndex(e => e.type === 'effect' && e.label === label);
+            if (idx >= 0) this.selection.effects.splice(idx, 1);
+            else this.selection.effects.push({ label, type, strength: 50 });
+        }
+        this.refreshEffectsPanel(); // update tile borders + shader-effects count in place
+        this.refreshBottom();       // update the chip list / Effects badge
+    }
+
+    // rebuild the open library so selected borders + the count reflect the new state
+    private refreshEffectsPanel() {
+        if (!this.effectsPanel) return;
+        const next = this.buildEffectsPanel();
+        this.effectsPanel.replaceWith(next);
+        this.effectsPanel = next;
     }
 
     private toggleChip(i: number) {

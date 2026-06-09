@@ -513,8 +513,15 @@ body.bt-mode {
         color: var(--bt-ink-3); font-size: 14px; margin-bottom: 4px;
     }
     .bt-ep-section {
+        display: flex; align-items: center; justify-content: space-between;
         font-size: 11px; letter-spacing: 0.07em; font-weight: 600;
         color: var(--bt-ink-3); margin: 16px 0 10px;
+
+        .bt-ep-count {
+            letter-spacing: 0; color: var(--bt-effect);
+            background: rgba(245, 166, 35, 0.14);
+            border-radius: 999px; padding: 2px 9px; font-size: 11px;
+        }
     }
     .bt-ep-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
     .bt-ep-grid {
@@ -534,7 +541,8 @@ body.bt-mode {
         .bt-tile-sw.is-audio { background: var(--bt-audio); display: flex; align-items: center; justify-content: center; color: #fff;
             svg { width: 22px; height: 22px; } }
         .bt-tile-label { font-size: 11px; color: var(--bt-ink-2); white-space: nowrap; }
-        &.is-selected .bt-tile-sw { box-shadow: 0 0 0 2px var(--bt-ink); }
+        &.is-selected .bt-tile-sw { box-shadow: 0 0 0 2px var(--bt-effect); }
+        &.is-selected .bt-tile-label { color: var(--bt-ink); font-weight: 600; }
     }
     .bt-ep-strength {
         display: flex; align-items: center; gap: 10px;
