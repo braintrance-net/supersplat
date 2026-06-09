@@ -1334,13 +1334,38 @@ class BraintranceUI {
             }
             if (this.audioMode) return;
             if (this.recordingMode) return;
-            // selection-first: a click selects whatever's under it (any tool but a draw mode)
-            if (!drawMode()) {
+            if (drawMode()) return; // lasso/crop draws are handled above
+            if (this.selectMode === 'sam') {
+                // Select mode: a click picks/selects the object under it.
                 const obj = this.pickObjectAt(e.clientX, e.clientY);
                 if (obj) this.selectSceneObject(obj);
                 else this.selectObject(false);
+            } else {
+                // Explore mode: a click glides the camera toward the point, the way the
+                // braintrance viewer's explore mode navigates (no selection).
+                this.exploreNavigate(e.clientX, e.clientY);
             }
         });
+    }
+
+    // Explore-mode click-to-navigate: ease the camera toward the clicked point like the
+    // viewer's explore mode. Real splat scenes use SuperSplat's surface pick; the
+    // prototype's placeholder objects fall back to focusing the object under the cursor.
+    private exploreNavigate(clientX: number, clientY: number) {
+        const cam = this.scene?.camera;
+        const canvas = this.canvas;
+        if (!cam || !canvas) return;
+        const obj = this.pickObjectAt(clientX, clientY);
+        if (obj && obj.entity.enabled !== false) {
+            const r = Math.max(obj.entity.getLocalScale().x, 0.2) * 2.2;
+            cam.focus?.({ focalPoint: obj.entity.getPosition(), radius: r, speed: 1 });
+            this.pumpRender(700);
+            return;
+        }
+        // Nothing under the cursor → try a real splat-surface pick (no-op on empty grid).
+        const rect = canvas.getBoundingClientRect();
+        cam.pickFocalPoint?.((clientX - rect.left) / rect.width, (clientY - rect.top) / rect.height);
+        this.pumpRender(700);
     }
 
     // ── lasso (Shape) selection: draw a region, then choose its depth ──
@@ -1674,7 +1699,9 @@ class BraintranceUI {
             this.boxMat.update();
             if (this.scene) this.scene.forceRender = true;
         }
-        this.setActiveTool(sel ? 'sam' : 'explore');
+        // Active tab follows the mode: selecting implies Select; on deselect, stay on
+        // whichever mode is live (Select if a select sub-tool is active, else Explore).
+        this.setActiveTool(sel || this.selectMode ? 'sam' : 'explore');
         this.setState(sel ? 'selected' : 'explore');
         // Selection shows the highlight only — no gizmo until a transform tool
         // (Q/E/R) is chosen. Matches "Selected - best" (no gizmo) vs "W - Move - best"
