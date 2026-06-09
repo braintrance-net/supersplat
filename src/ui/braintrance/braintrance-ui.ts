@@ -110,6 +110,11 @@ class BraintranceUI {
         { name: 'Footsteps', kind: 'Spatial', volume: 23, range: 8, loop: false, placed: false }
     ];
 
+    // interaction-recording state
+    private recordingMode = false;
+    private recordBorder: HTMLElement | null = null;
+    private recordBar: HTMLElement | null = null;
+
     constructor() {
         document.body.classList.add('bt-mode');
         this.root = el('div');
@@ -228,6 +233,7 @@ class BraintranceUI {
         eff.addEventListener('click', () => this.openEffects());
         const inter = el('button', 'bt-cb-btn bt-interaction',
             `<span>Add interaction</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
+        inter.addEventListener('click', () => this.startRecording());
         actions.appendChild(eff);
         actions.appendChild(inter);
         actions.appendChild(el('button', 'bt-icon-btn', ICON.reset));
@@ -314,7 +320,8 @@ class BraintranceUI {
     // Re-render the bottom-center panel (audio bar vs context bar / chips vs snapshot).
     private refreshBottom() {
         let next: HTMLElement;
-        if (this.audioMode) next = this.buildAudioBar();
+        if (this.recordingMode) next = el('div'); // center panel hidden; record bar is full-width
+        else if (this.audioMode) next = this.buildAudioBar();
         else if (this.state === 'selected') next = this.contextBar();
         else next = this.snapshotPanel();
         this.bottomCenter.replaceWith(next);
@@ -553,6 +560,43 @@ class BraintranceUI {
         this.rebuildAudio();
     }
 
+    // ── interaction recording (cyan border + record bar) ──
+    private startRecording() {
+        if (this.state !== 'selected') return;
+        this.recordingMode = true;
+        this.recordBorder = el('div', 'bt-recording');
+        this.root.appendChild(this.recordBorder);
+        this.recordBar = this.buildRecordBar();
+        this.root.appendChild(this.recordBar);
+        this.refreshBottom(); // hide the context bar while recording
+    }
+
+    private buildRecordBar(): HTMLElement {
+        const bar = el('div', 'bt-record-bar');
+        const when = el('div', 'bt-rb-when',
+            `When <strong>${this.selection.name}</strong> is <select>
+                <option>Clicked</option><option>Hovered</option><option>Looked at</option><option>Nearby</option>
+            </select>`);
+        bar.appendChild(when);
+        bar.appendChild(el('div', 'bt-rb-rec', 'Recording changes'));
+        bar.appendChild(el('div', 'bt-rb-spacer'));
+        const reset = el('div', 'bt-rb-reset', ICON.reset);
+        reset.addEventListener('click', () => this.finishRecording(false)); // discard
+        const finish = el('button', 'bt-rb-finish', 'Finish Changes');
+        finish.addEventListener('click', () => this.finishRecording(true));
+        bar.appendChild(reset);
+        bar.appendChild(finish);
+        return bar;
+    }
+
+    private finishRecording(commit: boolean) {
+        this.recordingMode = false;
+        this.recordBorder?.remove(); this.recordBorder = null;
+        this.recordBar?.remove(); this.recordBar = null;
+        if (commit) this.selection.interactions.push('On click → changes'); // bumps the badge
+        this.refreshBottom(); // restore context bar with updated count
+    }
+
     // Re-render the header center cluster (camera hints vs transform tools). Also
     // called when the gizmo mode changes so the active Q/E/R highlight updates.
     private refreshHeaderCenter() {
@@ -611,6 +655,7 @@ class BraintranceUI {
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
             if (this.audioMode) return; // audio mode: clicks are for placement only
+            if (this.recordingMode) return; // recording: keep the source selected (move it = a change)
             this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));
         });
     }
@@ -621,7 +666,8 @@ class BraintranceUI {
             const tag = (e.target as HTMLElement)?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
             if (e.key === 'Escape') {
-                if (this.effectsMode) this.closeEffects(); // close the library first
+                if (this.recordingMode) this.finishRecording(false); // cancel recording
+                else if (this.effectsMode) this.closeEffects();      // close the library first
                 else this.selectObject(false);
                 return;
             }
@@ -653,11 +699,14 @@ class BraintranceUI {
     }
 
     private selectObject(sel: boolean) {
-        // reset any open effects UI on selection change
+        // reset any open effects / recording UI on selection change
         this.effectsMode = false;
         this.openChip = null;
         this.effectsPanel?.remove(); this.effectsPanel = null;
         this.hideStrengthPop();
+        this.recordingMode = false;
+        this.recordBorder?.remove(); this.recordBorder = null;
+        this.recordBar?.remove(); this.recordBar = null;
         if (this.boxMat && this.box?.enabled !== false) {
             const c = sel ? SEL_DIFFUSE : IDLE_DIFFUSE;
             this.boxMat.diffuse.copy(c);
