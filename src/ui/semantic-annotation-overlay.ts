@@ -1407,7 +1407,11 @@ class SemanticAnnotationOverlay {
         }
 
         for (const player of this.multiplayerPlayers) {
-            const height = this.multiplayerHeightCalibrations.get(player.id)?.height ?? MULTIPLAYER_DEFAULT_HEIGHT;
+            const calibration = this.multiplayerHeightCalibrations.get(player.id);
+            if (!calibration) {
+                continue;
+            }
+            const height = calibration.height;
             const radius = Math.max(0.18, Math.min(0.46, height * 0.18));
             const top = player.position[1];
             const bottom = top - height;

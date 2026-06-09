@@ -1255,7 +1255,7 @@ class WalkTool {
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
         if (!moving) {
             this.collisionMeshBlockedSince = null;
-            this.resetCollisionDebugMove();
+            this.resetCollisionDebugMove({ preserveBlock: this.collisionDebugEnabled });
         }
 
         if (this.collisionMesh) {
@@ -1448,10 +1448,13 @@ class WalkTool {
         });
     }
 
-    private resetCollisionDebugMove() {
-        this.lastCollisionDebugReason = 'idle';
+    private resetCollisionDebugMove(options: { preserveBlock?: boolean } = {}) {
         this.lastCollisionDesiredMove.set(0, 0, 0);
         this.lastCollisionResolvedMove = null;
+        if (options.preserveBlock && (this.lastCollisionHitTriangle !== null || this.lastCollisionBlockedBody)) {
+            return;
+        }
+        this.lastCollisionDebugReason = 'idle';
         this.lastCollisionHitTriangle = null;
         this.lastCollisionBlockedBody = null;
     }
