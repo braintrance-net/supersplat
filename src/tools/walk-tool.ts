@@ -1394,7 +1394,6 @@ class WalkTool {
         this.collisionMeshAbort = abortController;
         this.collisionMeshUrl = details.url;
         this.collisionMeshKey = meshKey;
-        this.resetCollisionMeshFloorLock();
         const startedAt = performance.now();
         this.pushCollisionDebugSample('mesh-load-start', {
             url: details.url,
@@ -1573,6 +1572,7 @@ class WalkTool {
 
         const floorY = this.currentPlayerFeetY(camera, focalPoint);
         this.externalVerticalVelocity = 0;
+        this.externalJumpWasPressed = Boolean(input.jump);
         this.externalGroundY = floorY;
         if (this.collisionMesh) {
             this.collisionMeshLockedFloorY = floorY;
