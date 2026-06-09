@@ -53,7 +53,8 @@ const ICON = {
     diamond: stroke('<path d="M12 3l9 9-9 9-9-9z"/>', 15),
     type: stroke('<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>', 18),
     lasso: stroke('<path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><circle cx="5" cy="16" r="2"/>'),
-    frame: stroke('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="2.5"/>')
+    frame: stroke('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="2.5"/>'),
+    crop: stroke('<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>')
 };
 
 const DURATION = 151; // 2:31 timeline (seconds)
@@ -108,10 +109,12 @@ class BraintranceUI {
     private railItems: Partial<Record<RailTool, HTMLElement>> = {};
     private toolTabs: Partial<Record<RailTool, HTMLElement>> = {}; // top Explore/Select toggle
 
-    // selection mode: null = Explore (camera only), else clicking/drawing selects
-    private selectMode: 'sam' | 'lasso' | null = null;
+    // selection mode: null/sam = click-select, lasso = draw region, crop = volume box
+    private selectMode: 'sam' | 'lasso' | 'crop' | null = null;
     private selectMenu: HTMLElement | null = null;          // the Select dropdown
     private lasso: { pts: { x: number; y: number }[]; el: HTMLElement } | null = null;
+    private cropBox: { x0: number; y0: number; x1: number; y1: number; el: HTMLElement } | null = null;
+    private cropConfirm: HTMLElement | null = null;
     private depthPop: HTMLElement | null = null;            // lasso depth prompt
     private captures: number[] = [0.14, 0.60];              // snapshot marker positions (0..1)
     private scrubberEl: HTMLElement | null = null;
@@ -257,7 +260,7 @@ class BraintranceUI {
     private openSelectMenu() {
         if (this.selectMenu) return;
         const menu = el('div', 'bt-select-menu bt-interactive');
-        const item = (icon: string, name: string, sub: string, mode: 'sam' | 'lasso') => {
+        const item = (icon: string, name: string, sub: string, mode: 'sam' | 'lasso' | 'crop') => {
             const it = el('div', `bt-select-item${this.selectMode === mode ? ' is-active' : ''}`,
                 `${icon}<div class="bt-si-text"><div class="bt-si-name">${name}</div><div class="bt-si-sub">${sub}</div></div>`);
             it.addEventListener('click', () => this.enableSelectMode(mode));
@@ -265,6 +268,7 @@ class BraintranceUI {
         };
         menu.appendChild(item(ICON.sam, 'SAM', 'AI click-to-segment', 'sam'));
         menu.appendChild(item(ICON.lasso, 'Shape', 'Draw a lasso region', 'lasso'));
+        menu.appendChild(item(ICON.crop, 'Crop', 'Drag a volume box', 'crop'));
         const tab = this.toolTabs.sam!;
         const r = tab.getBoundingClientRect();
         menu.style.left = `${r.left}px`;
@@ -289,16 +293,17 @@ class BraintranceUI {
     }
 
     // enabling a select mode does NOT auto-select — it just turns selection on
-    private enableSelectMode(mode: 'sam' | 'lasso') {
+    private enableSelectMode(mode: 'sam' | 'lasso' | 'crop') {
         this.selectMode = mode;
         this.exitAudio();
         this.closeAssets();
         this.endLasso();
+        this.endCrop();
         this.setActiveTool('sam');       // highlight the Select tab
         this.closeSelectMenu();
         this.updateSelectTabLabel();
         if (this.canvas) this.canvas.style.cursor = 'crosshair';
-        // SAM re-selects the last object; lasso waits for a drawn region
+        // SAM re-selects the last object; lasso/crop wait for a drawn region
         if (mode === 'sam' && this.selection?.entity && this.selection.entity.enabled !== false) {
             this.selectSceneObject(this.selection);
         }
@@ -306,7 +311,8 @@ class BraintranceUI {
 
     private updateSelectTabLabel() {
         const label = this.toolTabs.sam?.querySelector('.bt-tt-label');
-        if (label) label.textContent = this.selectMode === 'lasso' ? 'Lasso' : this.selectMode === 'sam' ? 'SAM' : 'Select';
+        const name = this.selectMode === 'lasso' ? 'Lasso' : this.selectMode === 'crop' ? 'Crop' : this.selectMode === 'sam' ? 'SAM' : 'Select';
+        if (label) label.textContent = name;
     }
 
     // camera hints (Explore state)
@@ -633,6 +639,7 @@ class BraintranceUI {
         this.closeSelectMenu();
         this.selectMode = null;          // leaving Select mode
         this.endLasso();
+        this.endCrop();
         this.updateSelectTabLabel();
         if (tool === 'audio') {
             this.selectObject(false);
@@ -1127,30 +1134,35 @@ class BraintranceUI {
         const canvas = this.canvas;
         if (!canvas) return;
         let down = false, downX = 0, downY = 0, moved = false;
+        const drawMode = () => this.selectMode === 'lasso' || this.selectMode === 'crop';
         canvas.addEventListener('pointerdown', (e) => {
             down = true; downX = e.clientX; downY = e.clientY; moved = false;
-            if (this.selectMode === 'lasso' && e.button === 0) this.startLasso(e.clientX, e.clientY);
+            if (e.button !== 0) return;
+            if (this.selectMode === 'lasso') this.startLasso(e.clientX, e.clientY);
+            else if (this.selectMode === 'crop') this.startCrop(e.clientX, e.clientY);
         });
         canvas.addEventListener('pointermove', (e) => {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
             if (this.gizmo && this.scene) this.scene.forceRender = true;
             if (this.lasso && down) { this.addLassoPoint(e.clientX, e.clientY); return; }
-            // hover affordance: pointer cursor over a selectable (selection-first)
-            if (!down && this.selectMode !== 'lasso' && !this.audioMode && !this.placingAudio) {
+            if (this.cropBox && down) { this.updateCrop(e.clientX, e.clientY); return; }
+            // hover affordance
+            if (!down && !drawMode() && !this.audioMode && !this.placingAudio) {
                 canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : '';
-            } else if (this.selectMode === 'lasso' && !down) {
+            } else if (drawMode() && !down) {
                 canvas.style.cursor = 'crosshair';
             }
         });
         canvas.addEventListener('pointerup', (e) => {
             const wasDown = down; down = false;
-            if (this.lasso) { this.finishLasso(); return; } // close the lasso → depth prompt
+            if (this.lasso) { this.finishLasso(); return; } // → depth prompt
+            if (this.cropBox) { this.finishCrop(); return; } // → crop confirm
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
             if (this.audioMode) return;
             if (this.recordingMode) return;
-            // selection-first: a click selects whatever's under it (any tool but lasso-draw)
-            if (this.selectMode !== 'lasso') {
+            // selection-first: a click selects whatever's under it (any tool but a draw mode)
+            if (!drawMode()) {
                 const obj = this.pickObjectAt(e.clientX, e.clientY);
                 if (obj) this.selectSceneObject(obj);
                 else this.selectObject(false);
@@ -1232,6 +1244,75 @@ class BraintranceUI {
         if (obj) this.selectSceneObject(obj);
     }
 
+    // ── crop / volume (bounding-box) selection — the interview's #1 tool ──
+    private startCrop(x: number, y: number) {
+        this.endCrop();
+        if (this.scene?.camera) this.scene.camera.inputDisabled = true;
+        const box = el('div', 'bt-crop-box');
+        ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach(h => box.appendChild(el('span', `bt-crop-h bt-crop-${h}`)));
+        this.root.appendChild(box);
+        this.cropBox = { x0: x, y0: y, x1: x, y1: y, el: box };
+        this.drawCrop();
+    }
+
+    private updateCrop(x: number, y: number) {
+        if (!this.cropBox) return;
+        this.cropBox.x1 = x; this.cropBox.y1 = y;
+        this.drawCrop();
+    }
+
+    private drawCrop() {
+        const b = this.cropBox; if (!b) return;
+        b.el.style.left = `${Math.min(b.x0, b.x1)}px`;
+        b.el.style.top = `${Math.min(b.y0, b.y1)}px`;
+        b.el.style.width = `${Math.abs(b.x1 - b.x0)}px`;
+        b.el.style.height = `${Math.abs(b.y1 - b.y0)}px`;
+    }
+
+    private endCrop() {
+        if (this.scene?.camera) this.scene.camera.inputDisabled = false;
+        this.cropBox?.el.remove(); this.cropBox = null;
+        this.cropConfirm?.remove(); this.cropConfirm = null;
+    }
+
+    private finishCrop() {
+        if (this.scene?.camera) this.scene.camera.inputDisabled = false; // camera ok again; box stays
+        const b = this.cropBox;
+        if (!b || Math.abs(b.x1 - b.x0) < 12 || Math.abs(b.y1 - b.y0) < 12) { this.endCrop(); return; }
+        this.showCropConfirm();
+    }
+
+    private showCropConfirm() {
+        const b = this.cropBox; if (!b) return;
+        this.cropConfirm?.remove();
+        const bar = el('div', 'bt-crop-confirm bt-interactive');
+        bar.appendChild(el('div', 'bt-crop-title', `${ICON.crop}<span>Crop to volume</span>`));
+        const depth = el('div', 'bt-crop-depth', '<span>Depth</span><input type="range" min="0.2" max="5" step="0.1" value="2"><span class="bt-crop-val">2.0 m</span>');
+        const slider = depth.querySelector('input') as HTMLInputElement;
+        const val = depth.querySelector('.bt-crop-val') as HTMLElement;
+        slider.addEventListener('input', () => { val.textContent = `${(+slider.value).toFixed(1)} m`; });
+        bar.appendChild(depth);
+        const acts = el('div', 'bt-crop-acts');
+        const cancel = el('button', 'bt-crop-cancel', 'Cancel');
+        cancel.addEventListener('click', () => this.endCrop());
+        const apply = el('button', 'bt-crop-apply', 'Apply crop');
+        apply.addEventListener('click', () => this.applyCrop());
+        acts.appendChild(cancel); acts.appendChild(apply);
+        bar.appendChild(acts);
+        const l = Math.min(b.x0, b.x1), t = Math.min(b.y0, b.y1), w = Math.abs(b.x1 - b.x0);
+        bar.style.left = `${Math.min(Math.max(l + w / 2 - 152, 12), window.innerWidth - 316)}px`;
+        bar.style.top = `${Math.min(Math.max(t - 8, 100), window.innerHeight - 150)}px`;
+        this.cropConfirm = bar;
+        this.root.appendChild(bar);
+    }
+
+    private applyCrop() {
+        const b = this.cropBox;
+        const hit = b ? this.pickObjectAt((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2) : null;
+        this.endCrop();
+        if (hit) this.selectSceneObject(hit); // faked: the cropped volume's content becomes the selection
+    }
+
     // ── frame-all / fly-to-content (the interview's main pain point) ──
     private frameAll() {
         const cam = this.scene?.camera;
@@ -1259,6 +1340,7 @@ class BraintranceUI {
             if (e.key === 'Escape') {
                 // one layer per press: lasso/menus → popover → recording → library/list → deselect
                 if (this.depthPop) { this.cancelLasso(); return; }
+                if (this.cropConfirm || this.cropBox) { this.endCrop(); return; }
                 if (this.selectMenu) { this.closeSelectMenu(); return; }
                 if (this.lasso) { this.endLasso(); return; }
                 if (this.strengthPop) { this.hideStrengthPop(); this.openChip = null; this.refreshBottom(); }

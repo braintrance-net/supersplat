@@ -890,3 +890,32 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
     svg { width: 17px; height: 17px; }
     &:hover { background: var(--bt-hover); }
 }
+
+// ── Crop / volume (bounding-box) selection ──────────────────────────────────
+#bt-overlay .bt-crop-box {
+    position: fixed; z-index: 89; pointer-events: none;
+    border: 2px solid var(--bt-selection);
+    background: rgba(245, 230, 0, 0.07);
+    .bt-crop-h {
+        position: absolute; width: 9px; height: 9px;
+        background: #fff; border: 2px solid var(--bt-selection); border-radius: 2px;
+    }
+    .bt-crop-nw { left: -5px; top: -5px; }   .bt-crop-n { left: calc(50% - 4px); top: -5px; }
+    .bt-crop-ne { right: -5px; top: -5px; }  .bt-crop-e { right: -5px; top: calc(50% - 4px); }
+    .bt-crop-se { right: -5px; bottom: -5px; } .bt-crop-s { left: calc(50% - 4px); bottom: -5px; }
+    .bt-crop-sw { left: -5px; bottom: -5px; } .bt-crop-w { left: -5px; top: calc(50% - 4px); }
+}
+
+#bt-overlay .bt-crop-confirm {
+    position: fixed; z-index: 200; width: 304px;
+    background: var(--bt-panel); border-radius: 12px; box-shadow: var(--bt-shadow); padding: 14px 16px;
+    .bt-crop-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin-bottom: 12px;
+        svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
+    .bt-crop-depth { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--bt-ink-3); margin-bottom: 14px;
+        input[type='range'] { flex: 1; accent-color: var(--bt-ink); }
+        .bt-crop-val { color: var(--bt-ink); font-weight: 600; min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; } }
+    .bt-crop-acts { display: flex; gap: 8px;
+        button { flex: 1; height: 36px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .bt-crop-cancel { background: #f1f1f1; color: var(--bt-ink); &:hover { background: #e6e6e6; } }
+        .bt-crop-apply { background: var(--bt-ink); color: #fff; &:hover { background: #222; } } }
+}
