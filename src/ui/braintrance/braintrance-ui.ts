@@ -58,6 +58,9 @@ const SHADER_EFFECTS = ['Glow', 'Bloom', 'Blur', 'Outline', 'Pixelate', 'Scanlin
 
 type Effect = { label: string; type: 'preset' | 'effect'; strength: number };
 
+// A selectable world object — each carries its own effects / interactions.
+type SceneObject = { entity: Entity; mat: StandardMaterial; name: string; effects: Effect[]; interactions: string[] };
+
 // Asset browser catalogue (hardcoded, per spec §7.10) + thumbnail gradients.
 const ASSETS: Record<string, string[]> = {
     Gaussians: ['Potted plant', 'Armchair', 'Marble bust', 'Vase', 'Sneaker', 'Toy car'],
@@ -104,14 +107,8 @@ class BraintranceUI {
 
     // the current selection's model — badges/counts read from here (the effects &
     // interactions already on it, per the fixture cube: 2 effects + 1 interaction)
-    private selection: { name: string; effects: Effect[]; interactions: string[] } = {
-        name: 'Cuboid',
-        effects: [
-            { label: 'Vivid', type: 'preset', strength: 60 },
-            { label: 'Bloom', type: 'effect', strength: 50 }
-        ],
-        interactions: ['On click → moves + glows']
-    };
+    private objects: SceneObject[] = [];   // all selectable world objects
+    private selection!: SceneObject;        // the active selection (set when the cube is created)
 
     // effects-library state
     private effectsMode = false;            // context bar in chip view + library open
@@ -255,9 +252,11 @@ class BraintranceUI {
         back.addEventListener('click', () => this.closeInteractions());
         chips.appendChild(back);
         chips.appendChild(el('div', 'bt-cb-name', this.selection.name));
-        this.selection.interactions.forEach((it) => {
-            chips.appendChild(el('div', 'bt-chip bt-chip-int',
-                `<span class="bt-chip-dot"></span><span>${it}</span><span class="bt-chip-caret">${ICON.chevronRight}</span>`));
+        this.selection.interactions.forEach((it, i) => {
+            const chip = el('button', `bt-chip bt-chip-int${this.openChip === i ? ' is-open' : ''}`,
+                `<span class="bt-chip-dot"></span><span>${it}</span><span class="bt-chip-caret">${ICON.chevronRight}</span>`);
+            chip.addEventListener('click', () => this.toggleInteractionChip(i));
+            chips.appendChild(chip);
         });
         const add = el('button', 'bt-chip bt-chip-add', `${ICON.plus}<span>Add</span>`);
         add.addEventListener('click', () => this.startRecording());
@@ -503,6 +502,42 @@ class BraintranceUI {
         this.strengthPop = null;
     }
 
+    // clicking an interaction chip reopens its detail (toggle); single open panel
+    private toggleInteractionChip(i: number) {
+        if (this.openChip === i && this.strengthPop) {
+            this.openChip = null;
+            this.hideStrengthPop();
+            this.refreshBottom();
+        } else {
+            this.showInteractionDetail(i);
+        }
+    }
+
+    private showInteractionDetail(i: number) {
+        this.hideStrengthPop(); // single open panel
+        const it = this.selection.interactions[i];
+        if (!it) return;
+        const pop = el('div', 'bt-strength-pop bt-interactive');
+        pop.appendChild(el('div', 'bt-sp-title', 'Interaction'));
+        pop.appendChild(el('div', 'bt-sp-trigger', `When <strong>${this.selection.name}</strong> is <strong>clicked</strong>`));
+        pop.appendChild(el('div', 'bt-sp-note', it)); // the recorded change(s)
+        const edit = el('div', 'bt-sp-action', `${ICON.zap}<span>Edit changes</span>`);
+        edit.addEventListener('click', () => { this.hideStrengthPop(); this.openChip = null; this.startRecording(); });
+        const remove = el('div', 'bt-sp-action is-danger', `${ICON.trash}<span>Remove</span>`);
+        remove.addEventListener('click', () => {
+            this.selection.interactions.splice(i, 1);
+            this.openChip = null;
+            this.hideStrengthPop();
+            this.refreshBottom();
+        });
+        pop.appendChild(edit);
+        pop.appendChild(remove);
+        this.strengthPop = pop;
+        this.root.appendChild(pop);
+        this.openChip = i;
+        this.refreshBottom(); // highlight the open chip
+    }
+
     // ── audio mode (Objects panel + audio contextual bar + placed pins) ──
     private enterAudio() {
         this.audioMode = true;
@@ -730,13 +765,14 @@ class BraintranceUI {
             const k = this.placedCount++;
             asset.setLocalPosition(0.55 + k * 0.12, 0.3, 0.25 - k * 0.12);
             scene.contentRoot.addChild(asset);
-            this.box = asset;                 // make it the selectable object
-            this.boxMat = mat;
-            this.selection = { name, effects: [], interactions: [] };
+            const obj: SceneObject = { entity: asset, mat, name, effects: [], interactions: [] };
+            this.objects.push(obj);
             scene.forceRender = true;
+            this.closeAssets();
+            this.selectSceneObject(obj);       // select it: yellow + selected chrome + gizmo
+            return;
         }
         this.closeAssets();
-        this.selectObject(true);              // select it: yellow + selected chrome + gizmo
     }
 
     // Re-render the header center cluster (camera hints vs transform tools). Also
@@ -775,6 +811,14 @@ class BraintranceUI {
         box.setLocalPosition(0, 0.3, 0);
         scene.contentRoot.addChild(box);
 
+        // the cube is the first selectable object, with the seeded fixtures
+        const cube: SceneObject = {
+            entity: box, mat, name: 'Cuboid',
+            effects: [{ label: 'Vivid', type: 'preset', strength: 60 }, { label: 'Bloom', type: 'effect', strength: 50 }],
+            interactions: ['On click → moves + glows']
+        };
+        this.objects.push(cube);
+        this.selection = cube;
         this.box = box;
         this.boxMat = mat;
         scene.forceRender = true;
@@ -788,8 +832,11 @@ class BraintranceUI {
         canvas.addEventListener('pointermove', (e) => {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
             // keep rendering while a gizmo is up so its hover/drag feedback is live
-            // (SuperSplat renders on demand; the gizmo otherwise wouldn't animate)
             if (this.gizmo && this.scene) this.scene.forceRender = true;
+            // hover affordance: pointer cursor when over a selectable object
+            if (!down && !this.audioMode && !this.placingAudio) {
+                canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : '';
+            }
         });
         // observe only (no preventDefault) so SuperSplat's camera drag still works
         canvas.addEventListener('pointerup', (e) => {
@@ -798,7 +845,9 @@ class BraintranceUI {
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
             if (this.audioMode) return; // audio mode: clicks are for placement only
             if (this.recordingMode) return; // recording: keep the source selected (move it = a change)
-            this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));
+            const obj = this.pickObjectAt(e.clientX, e.clientY);
+            if (obj) this.selectSceneObject(obj);
+            else this.selectObject(false);
         });
     }
 
@@ -808,8 +857,10 @@ class BraintranceUI {
             const tag = (e.target as HTMLElement)?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
             if (e.key === 'Escape') {
-                if (this.recordingMode) this.finishRecording(false); // cancel recording
-                else if (this.effectsMode) this.closeEffects();      // close the library first
+                // one layer per press: popover → recording → library/list → deselect
+                if (this.strengthPop) { this.hideStrengthPop(); this.openChip = null; this.refreshBottom(); }
+                else if (this.recordingMode) this.finishRecording(false);
+                else if (this.effectsMode) this.closeEffects();
                 else if (this.interactionsMode) this.closeInteractions();
                 else this.selectObject(false);
                 return;
@@ -826,19 +877,37 @@ class BraintranceUI {
         });
     }
 
-    // Faked SAM: a click within a screen-space radius of the placeholder selects it.
-    private hitsPlaceholder(clientX: number, clientY: number): boolean {
-        const scene = this.scene;
+    // Faked SAM: pick the selectable object nearest the cursor (screen-space), or null.
+    private pickObjectAt(clientX: number, clientY: number): SceneObject | null {
+        const cam = this.cameraComponent();
         const canvas = this.canvas;
-        if (!scene || !canvas || !this.box) return true;
-        const cam = scene.app?.root?.findByName?.('Camera');
-        if (!cam?.camera) return true;
-        const sp = new Vec3();
-        cam.camera.worldToScreen(this.box.getPosition(), sp);
+        if (!cam || !canvas) return this.objects[0] ?? null;
         const rect = canvas.getBoundingClientRect();
-        const sx = sp.x * (rect.width / canvas.width);   // device px → css px
-        const sy = sp.y * (rect.height / canvas.height);
-        return Math.hypot((clientX - rect.left) - sx, (clientY - rect.top) - sy) < 150;
+        const sp = new Vec3();
+        let best: SceneObject | null = null;
+        let bestD = 150; // px threshold
+        for (const obj of this.objects) {
+            if (obj.entity.enabled === false) continue;
+            cam.worldToScreen(obj.entity.getPosition(), sp);
+            const sx = sp.x * (rect.width / canvas.width);
+            const sy = sp.y * (rect.height / canvas.height);
+            const d = Math.hypot((clientX - rect.left) - sx, (clientY - rect.top) - sy);
+            if (d < bestD) { bestD = d; best = obj; }
+        }
+        return best;
+    }
+
+    // switch the active selection to a different world object
+    private selectSceneObject(obj: SceneObject) {
+        if (this.boxMat && this.boxMat !== obj.mat) { // revert the old object's colour
+            this.boxMat.diffuse.copy(IDLE_DIFFUSE);
+            this.boxMat.emissive.copy(IDLE_DIFFUSE);
+            this.boxMat.update();
+        }
+        this.box = obj.entity;
+        this.boxMat = obj.mat;
+        this.selection = obj;
+        this.selectObject(true); // yellow + selected chrome + gizmo
     }
 
     private selectObject(sel: boolean) {
@@ -851,6 +920,7 @@ class BraintranceUI {
         this.recordingMode = false;
         this.recordBorder?.remove(); this.recordBorder = null;
         this.recordBar?.remove(); this.recordBar = null;
+        this.clearGizmo(); // drop any gizmo from the previously-selected object so it re-attaches to this one
         if (this.boxMat && this.box?.enabled !== false) {
             const c = sel ? SEL_DIFFUSE : IDLE_DIFFUSE;
             this.boxMat.diffuse.copy(c);
@@ -905,18 +975,31 @@ class BraintranceUI {
     private frameSelection() {
         const cam = this.scene?.camera; // Camera element
         if (cam?.focus && this.box && this.box.enabled !== false) {
-            // focus() sets focal point + the right distance to fit `radius`; speed 0 = instant.
-            const r = Math.max(this.box.getLocalScale().x, 0.2) * 1.6;
-            cam.focus({ focalPoint: this.box.getPosition(), radius: r, speed: 0 });
-            if (this.scene) this.scene.forceRender = true;
+            const r = Math.max(this.box.getLocalScale().x, 0.2) * 1.8;
+            cam.focus({ focalPoint: this.box.getPosition(), radius: r, speed: 1 });
+            // SuperSplat renders on demand; pump forceRender so the focus animation is drawn.
+            this.pumpRender(650);
         } else {
             this.events?.fire?.('camera.focus');
         }
     }
 
+    // keep the scene rendering for `ms` so an on-demand camera animation is visible
+    private pumpRender(ms: number) {
+        const start = performance.now();
+        const tick = () => {
+            if (this.scene) this.scene.forceRender = true;
+            if (performance.now() - start < ms) requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+    }
+
     private deleteSelection() {
         this.clearGizmo();
-        if (this.box) this.box.enabled = false; // placeholder: hide it
+        if (this.box) {
+            this.box.enabled = false;                                  // hide it
+            this.objects = this.objects.filter(o => o.entity !== this.box); // and drop it from selectables
+        }
         if (this.scene) this.scene.forceRender = true;
         this.selectObject(false);
     }

@@ -672,6 +672,8 @@ body.bt-mode {
     padding: 16px;
 
     .bt-sp-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+    .bt-sp-trigger { font-size: 13px; color: var(--bt-ink-2); margin-bottom: 8px;
+        strong { color: var(--bt-ink); font-weight: 600; } }
     .bt-sp-row { display: flex; align-items: center; justify-content: space-between;
         font-size: 13px; color: var(--bt-ink-3); margin-bottom: 6px;
         .bt-sp-val { color: var(--bt-ink); font-weight: 600; } }
