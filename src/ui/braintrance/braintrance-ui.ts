@@ -1275,6 +1275,10 @@ class BraintranceUI {
         const canvas = this.canvas;
         if (!canvas) return;
         let down = false, downX = 0, downY = 0, moved = false;
+        // Click-vs-drag slop: a real mouse/trackpad jitters several px during a click,
+        // so anything under this still counts as a click-to-select. Above it is a
+        // deliberate camera orbit. (Lasso/crop draw on every move regardless.)
+        const CLICK_SLOP = 10;
         const drawMode = () => this.selectMode === 'lasso' || this.selectMode === 'crop';
         canvas.addEventListener('pointerdown', (e) => {
             down = true; downX = e.clientX; downY = e.clientY; moved = false;
@@ -1283,7 +1287,7 @@ class BraintranceUI {
             else if (this.selectMode === 'crop') this.startCrop(e.clientX, e.clientY);
         });
         canvas.addEventListener('pointermove', (e) => {
-            if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
+            if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_SLOP) moved = true;
             if (this.gizmo && this.scene) this.scene.forceRender = true;
             if (this.lasso && down) {
                 this.addLassoPoint(e.clientX, e.clientY); return;
