@@ -118,6 +118,9 @@ const COLLISION_DEBUG_RAY_COLOR = new Color(1, 0.86, 0.18, 1);
 const COLLISION_DEBUG_DESIRED_MOVE_COLOR = new Color(1, 0.62, 0.12, 1);
 const COLLISION_DEBUG_RESOLVED_MOVE_COLOR = new Color(0.35, 1, 0.95, 1);
 const COLLISION_MESH_FLOOR_STORAGE_PREFIX = 'supersplat:walk-floor-height:v1';
+const COLLISION_MESH_DEFAULT_FLOOR_HEIGHTS = new Map<string, number>([
+    ['/static/dev-assets/collision/elegant-kitchen-living-room-1.collision.glb?v=20260605-raw-mesh-v1|{"position":{"x":0,"y":0,"z":0},"rotationEuler":{"x":178.5392,"y":6.3398,"z":178.4648},"scale":{"x":1,"y":1,"z":1}}', -0.6559780054854247]
+]);
 
 type CollisionTriangle = {
     ax: number;
@@ -1584,19 +1587,20 @@ class WalkTool {
     }
 
     private readSavedCollisionMeshFloorY(meshKey: string) {
+        const defaultFloorY = COLLISION_MESH_DEFAULT_FLOOR_HEIGHTS.get(meshKey) ?? null;
         if (typeof window === 'undefined') {
-            return null;
+            return defaultFloorY;
         }
         try {
             const storageKey = this.collisionMeshFloorStorageKey(meshKey);
             const value = storageKey ? window.localStorage.getItem(storageKey) : null;
             if (value === null) {
-                return null;
+                return defaultFloorY;
             }
             const parsed = Number(value);
-            return Number.isFinite(parsed) ? parsed : null;
+            return Number.isFinite(parsed) ? parsed : defaultFloorY;
         } catch {
-            return null;
+            return defaultFloorY;
         }
     }
 
