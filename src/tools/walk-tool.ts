@@ -773,6 +773,9 @@ class WalkTool {
     }
 
     private pushCollisionDebugSample(kind: string, details: Record<string, unknown>) {
+        if (!this.collisionDebugEnabled) {
+            return;
+        }
         this.collisionDebugSamples.push({
             at: new Date().toISOString(),
             perfNow: Number(performance.now().toFixed(1)),
@@ -1514,27 +1517,6 @@ class WalkTool {
 
         this.lastCollisionHitTriangle = hit.triangle ?? null;
         this.lastCollisionBlockedBody = WalkTool.cloneCollisionBody(hit.body);
-        const airborne = Math.abs(this.externalVerticalVelocity) > 0.001;
-        if (airborne) {
-            if (this.collisionMeshBlockedSince === null) {
-                this.collisionMeshBlockedSince = now;
-            }
-            const blockedMs = now - this.collisionMeshBlockedSince;
-            this.lastCollisionDebugReason = blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked';
-            this.reportCollisionMesh(now, blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked', {
-                blocked: true,
-                airborne: true,
-                triangle: hit?.triangle ?? null,
-                anchor: hit?.anchor ?? null,
-                sweepStep: hit?.step ?? null,
-                sweepSteps: hit?.steps ?? null,
-                stuckMs: Number(blockedMs.toFixed(1)),
-                ...this.collisionMeshBodyDetails(mesh, hit.body),
-                moveX: Number(fullMove.x.toFixed(3)),
-                moveZ: Number(fullMove.z.toFixed(3))
-            });
-            return null;
-        }
         const slideCandidates = [
             new Vec3(fullMove.x, 0, 0),
             new Vec3(0, 0, fullMove.z)
@@ -1627,7 +1609,9 @@ class WalkTool {
             COLLISION_MESH_GROUND_SNAP * 3
         );
         const groundY = groundHit?.y ?? null;
-        this.lastCollisionFloorTriangle = groundHit?.triangle ?? null;
+        let reportGroundHit = groundHit ?? null;
+        let reportGroundY = groundY;
+        this.lastCollisionFloorTriangle = reportGroundHit?.triangle ?? null;
         const grounded = groundY !== null && feetY <= groundY + 0.04 && this.externalVerticalVelocity <= 0;
 
         if (input.jump && !this.externalJumpWasPressed && grounded) {
@@ -1665,6 +1649,11 @@ class WalkTool {
                 COLLISION_MESH_GROUND_SNAP * 4
             );
             const nextGroundY = nextGroundHit?.y ?? null;
+            if (nextGroundHit) {
+                reportGroundHit = nextGroundHit;
+                reportGroundY = nextGroundY;
+                this.lastCollisionFloorTriangle = nextGroundHit.triangle ?? null;
+            }
             if (nextGroundY !== null && feetY <= nextGroundY && this.externalVerticalVelocity <= 0) {
                 const snap = nextGroundY - feetY;
                 focalPoint.y += snap;
@@ -1675,15 +1664,15 @@ class WalkTool {
             }
         }
 
-        if (groundY !== null) {
-            this.externalGroundY = groundY;
+        if (reportGroundY !== null) {
+            this.externalGroundY = reportGroundY;
         }
         if (changed || this.externalVerticalVelocity !== 0) {
             this.reportCollisionMesh(performance.now(), grounded ? 'ground' : 'air', {
                 blocked: false,
-                floorY: groundY === null ? null : Number(groundY.toFixed(3)),
-                floorTriangle: groundHit?.triangle ?? null,
-                floorSource: groundHit?.source ?? null,
+                floorY: reportGroundY === null ? null : Number(reportGroundY.toFixed(3)),
+                floorTriangle: reportGroundHit?.triangle ?? null,
+                floorSource: reportGroundHit?.source ?? null,
                 eyeX: Number(eye.x.toFixed(3)),
                 eyeY: Number(eye.y.toFixed(3)),
                 eyeZ: Number(eye.z.toFixed(3)),
@@ -1822,7 +1811,7 @@ class WalkTool {
             COLLISION_MESH_GROUND_SNAP,
             COLLISION_MESH_GROUND_SNAP * 3
         );
-        this.lastCollisionFloorTriangle = floor?.triangle ?? this.lastCollisionFloorTriangle;
+        this.lastCollisionFloorTriangle = floor?.triangle ?? null;
 
         this.drawDebugTriangles(mesh, body, floor);
         this.drawDebugPlayerCapsule(body);
