@@ -38,12 +38,13 @@ class BoxSelection {
         const setButton = new Button({ text: 'Set', class: 'select-toolbar-button' });
         const addButton = new Button({ text: 'Add', class: 'select-toolbar-button' });
         const removeButton = new Button({ text: 'Remove', class: 'select-toolbar-button' });
-        const copyEvalButton = new Button({ text: 'Copy Eval', class: 'select-toolbar-button' });
+        const saveTargetButton = new Button({ text: 'Save Target', class: 'select-toolbar-button' });
+        const copyEvalButton = new Button({ text: 'Copy Click Eval', class: 'select-toolbar-button' });
 
         const lenX = new NumericInput({
             precision: 2,
             value: box.lenX,
-            placeholder: 'LenX',
+            placeholder: 'Width',
             width: 80,
             min: 0.01
         });
@@ -51,7 +52,7 @@ class BoxSelection {
         const lenY = new NumericInput({
             precision: 2,
             value: box.lenY,
-            placeholder: 'LenY',
+            placeholder: 'Height',
             width: 80,
             min: 0.01
         });
@@ -59,7 +60,7 @@ class BoxSelection {
         const lenZ = new NumericInput({
             precision: 2,
             value: box.lenZ,
-            placeholder: 'LenZ',
+            placeholder: 'Depth',
             width: 80,
             min: 0.01
         });
@@ -67,6 +68,7 @@ class BoxSelection {
         selectToolbar.append(setButton);
         selectToolbar.append(addButton);
         selectToolbar.append(removeButton);
+        selectToolbar.append(saveTargetButton);
         selectToolbar.append(copyEvalButton);
         selectToolbar.append(lenX);
         selectToolbar.append(lenY);
@@ -105,18 +107,39 @@ class BoxSelection {
             e.stopPropagation();
             apply('remove');
         });
+        saveTargetButton.dom.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            events.invoke('boxer.setStickyEvalTarget', currentBox());
+        });
         copyEvalButton.dom.addEventListener('pointerdown', async (e) => {
             e.stopPropagation();
             await events.invoke('boxer.copyEvalCase', currentBox());
         });
+        const resizeFromLowSide = (axis: 'x' | 'y' | 'z', nextLength: number) => {
+            const previousLength = axis === 'x' ? box.lenX : (axis === 'y' ? box.lenY : box.lenZ);
+            const delta = nextLength - previousLength;
+            const position = box.pivot.getPosition().clone();
+            position[axis] += delta * 0.5;
+            box.pivot.setPosition(position);
+            if (axis === 'x') {
+                box.lenX = nextLength;
+            } else if (axis === 'y') {
+                box.lenY = nextLength;
+            } else {
+                box.lenZ = nextLength;
+            }
+            box.moved();
+            scene.forceRender = true;
+        };
+
         lenX.on('change', () => {
-            box.lenX = lenX.value;
+            resizeFromLowSide('x', lenX.value);
         });
         lenY.on('change', () => {
-            box.lenY = lenY.value;
+            resizeFromLowSide('y', lenY.value);
         });
         lenZ.on('change', () => {
-            box.lenZ = lenZ.value;
+            resizeFromLowSide('z', lenZ.value);
         });
 
         events.on('camera.focalPointPicked', (details: { splat: Splat, position: Vec3 }) => {
