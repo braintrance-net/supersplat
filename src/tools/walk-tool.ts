@@ -13,6 +13,8 @@ type WalkInputState = {
     sprint?: boolean;
     slide?: boolean;
     jump?: boolean;
+    up?: boolean;
+    down?: boolean;
 };
 
 type CollisionProxyState = {
@@ -88,6 +90,7 @@ const COLLISION_MESH_CAPSULE_RADIUS = 0.28;
 const COLLISION_MESH_STEP_HEIGHT = 0.12;
 const COLLISION_MESH_HEAD_CLEARANCE = 0;
 const COLLISION_MESH_WALK_SPEED = 1.8;
+const COLLISION_MESH_HEIGHT_ADJUST_SPEED = 0.65;
 const COLLISION_MESH_SPRINT_MULTIPLIER = 1.65;
 const COLLISION_MESH_JUMP_SPEED = 2.9;
 const COLLISION_MESH_GRAVITY = 7.5;
@@ -684,6 +687,7 @@ class WalkTool {
     private container: HTMLElement;
     private arrows: Map<ArrowDirection, HTMLElement> = new Map();
     private overlay: HTMLElement | null = null;
+    private heightControls: HTMLElement | null = null;
     private animFrame: number | null = null;
     private active = false;
 
@@ -742,11 +746,13 @@ class WalkTool {
         this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
         this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
         this.events.on('walk.collisionMeshClear', this.clearCollisionMesh, this);
+        this.events.on('walk.saveFloorHeight', this.saveCollisionMeshFloorHeight, this);
         this.events.on('scene.clear', this.clearCollisionMesh, this);
         this.events.on('walk.collisionDebug', this.onCollisionDebug, this);
         this.events.on('prerender', this.drawCollisionDebug, this);
         this.events.function('walk.collisionDebug', () => this.collisionDebugEnabled);
         this.events.function('walk.collisionDebugBundle', () => this.collisionDebugBundle());
+        this.events.function('walk.saveFloorHeight', (source?: string) => this.saveCollisionMeshFloorHeight(source));
     }
 
     private static defaultCollisionDebugEnabled() {
@@ -798,7 +804,9 @@ class WalkTool {
             right: Boolean(input.right),
             sprint: Boolean(input.sprint),
             slide: Boolean(input.slide),
-            jump: Boolean(input.jump)
+            jump: Boolean(input.jump),
+            up: Boolean(input.up),
+            down: Boolean(input.down)
         };
     }
 
@@ -874,12 +882,14 @@ class WalkTool {
         } else {
             this.createEmbeddedKeyboardControls();
         }
+        this.createHeightControls();
         this.ensureUpdateLoop();
     }
 
     deactivate() {
         this.active = false;
         this.destroyOverlay();
+        this.destroyHeightControls();
         this.destroyEmbeddedKeyboardControls();
         if (!this.hasExternalWalkInput() && this.animFrame !== null) {
             cancelAnimationFrame(this.animFrame);
@@ -924,6 +934,41 @@ class WalkTool {
         this.container.addEventListener('pointerdown', this.onPointerDownBound);
         document.addEventListener('mousemove', this.onPointerLockMouseMoveBound);
         document.addEventListener('pointerlockchange', this.onPointerLockChangeBound);
+    }
+
+    private createHeightControls() {
+        if (this.heightControls) {
+            return;
+        }
+
+        const root = document.createElement('div');
+        root.id = 'walk-height-controls';
+        root.style.cssText = 'position:absolute;right:16px;bottom:16px;z-index:14;pointer-events:auto;display:flex;align-items:center;gap:8px;';
+
+        const saveButton = document.createElement('button');
+        saveButton.type = 'button';
+        saveButton.textContent = 'Save Height';
+        saveButton.style.cssText = 'border:1px solid rgba(240,196,91,.55);background:rgba(8,9,9,.78);color:#f7f1df;padding:10px 12px;font:600 11px/1 system-ui,sans-serif;text-transform:uppercase;letter-spacing:.12em;cursor:pointer;backdrop-filter:blur(10px);';
+        saveButton.addEventListener('pointerdown', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        saveButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            this.saveCollisionMeshFloorHeight('button');
+        });
+
+        root.appendChild(saveButton);
+        this.container.appendChild(root);
+        this.heightControls = root;
+    }
+
+    private destroyHeightControls() {
+        if (this.heightControls) {
+            this.heightControls.remove();
+            this.heightControls = null;
+        }
     }
 
     private onEmbeddedControls(enabled = false) {
@@ -1044,7 +1089,11 @@ class WalkTool {
                 this.embeddedKeyboardInput.jump = pressed;
                 break;
             case 'KeyQ':
+                this.embeddedKeyboardInput.down = pressed;
+                break;
             case 'KeyE':
+                this.embeddedKeyboardInput.up = pressed;
+                break;
             case 'AltLeft':
             case 'AltRight':
                 handled = false;
@@ -1204,7 +1253,9 @@ class WalkTool {
             right: Boolean(input.right),
             sprint: Boolean(input.sprint),
             slide: Boolean(input.slide),
-            jump: Boolean(input.jump)
+            jump: Boolean(input.jump),
+            up: Boolean(input.up),
+            down: Boolean(input.down)
         };
         this.ensureUpdateLoop();
     }
@@ -1219,6 +1270,8 @@ class WalkTool {
             input.sprint ||
             input.slide ||
             input.jump ||
+            input.up ||
+            input.down ||
             Math.abs(this.externalVerticalVelocity) > 0.0001
         );
     }
@@ -1231,7 +1284,9 @@ class WalkTool {
             right: Boolean(this.externalWalkInput.right || this.embeddedKeyboardInput.right),
             sprint: Boolean(this.externalWalkInput.sprint || this.embeddedKeyboardInput.sprint),
             slide: Boolean(this.externalWalkInput.slide || this.embeddedKeyboardInput.slide),
-            jump: Boolean(this.externalWalkInput.jump || this.embeddedKeyboardInput.jump)
+            jump: Boolean(this.externalWalkInput.jump || this.embeddedKeyboardInput.jump),
+            up: Boolean(this.externalWalkInput.up || this.embeddedKeyboardInput.up),
+            down: Boolean(this.externalWalkInput.down || this.embeddedKeyboardInput.down)
         };
     }
 
@@ -1257,6 +1312,8 @@ class WalkTool {
         let changed = false;
         const useCollisionProxy = !this.collisionMesh;
         changed ||= this.applyCollisionHeadHeightLock(camera, focalPoint);
+        const adjustedHeight = this.applyManualHeightInput(input, dt, camera, focalPoint);
+        changed ||= adjustedHeight;
 
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
         if (!moving) {
@@ -1265,7 +1322,9 @@ class WalkTool {
         }
 
         if (this.collisionMesh) {
-            changed ||= this.applyCollisionMeshVertical(input, dt, camera, focalPoint);
+            if (!adjustedHeight) {
+                changed ||= this.applyCollisionMeshVertical(input, dt, camera, focalPoint);
+            }
             changed ||= this.resolveCollisionMeshPenetration(camera, focalPoint);
         } else {
             if (this.externalGroundY === null || this.externalVerticalVelocity === 0 && focalPoint.y < this.externalGroundY) {
@@ -1467,6 +1526,68 @@ class WalkTool {
         this.collisionMeshLockedFloorY = null;
         this.collisionMeshLockedFloorTriangle = null;
         this.externalGroundY = null;
+    }
+
+    private currentPlayerFeetY(camera = this.camera, focalPoint = camera.focalPoint) {
+        return this.playerHead(camera, focalPoint).y - COLLISION_MESH_EYE_HEIGHT;
+    }
+
+    private saveCollisionMeshFloorHeight(source = 'manual') {
+        const floorY = this.currentPlayerFeetY();
+        this.collisionMeshLockedFloorY = floorY;
+        this.collisionMeshLockedFloorTriangle = null;
+        this.externalGroundY = floorY;
+        this.externalVerticalVelocity = 0;
+        this.lastCollisionFloorTriangle = null;
+        this.pushCollisionDebugSample('floor-save', {
+            floorY: Number(floorY.toFixed(3)),
+            source
+        });
+        this.events.fire('walk.collisionMesh', {
+            ok: true,
+            reason: 'floor-saved',
+            embeddedControls: this.embeddedControls,
+            floorY: Number(floorY.toFixed(3)),
+            floorSource: source
+        });
+        this.scene.forceRender = true;
+        return {
+            floorY,
+            source
+        };
+    }
+
+    private applyManualHeightInput(input: WalkInputState, dt: number, camera: Camera, focalPoint: Vec3) {
+        const verticalAmount = (input.up ? 1 : 0) - (input.down ? 1 : 0);
+        if (verticalAmount === 0) {
+            return false;
+        }
+
+        const speed = this.collisionMesh ? COLLISION_MESH_HEIGHT_ADJUST_SPEED : camera.sceneRadius * 0.18;
+        const speedMultiplier = input.sprint || input.slide ? COLLISION_MESH_SPRINT_MULTIPLIER : 1;
+        const deltaY = verticalAmount * speed * speedMultiplier * dt;
+        focalPoint.y += deltaY;
+        if (this.collisionMeshHeadY !== null) {
+            this.collisionMeshHeadY += deltaY;
+        }
+
+        const floorY = this.currentPlayerFeetY(camera, focalPoint);
+        this.externalVerticalVelocity = 0;
+        this.externalGroundY = floorY;
+        if (this.collisionMesh) {
+            this.collisionMeshLockedFloorY = floorY;
+            this.collisionMeshLockedFloorTriangle = null;
+            this.lastCollisionFloorTriangle = null;
+            this.reportCollisionMesh(performance.now(), 'height-adjust', {
+                blocked: false,
+                floorY: Number(floorY.toFixed(3)),
+                floorTriangle: null,
+                floorSource: 'manual',
+                deltaY: Number(deltaY.toFixed(3)),
+                input: this.collisionDebugInput(input)
+            });
+        }
+        return true;
     }
 
     private resetCollisionDebugMove(options: { preserveBlock?: boolean } = {}) {
