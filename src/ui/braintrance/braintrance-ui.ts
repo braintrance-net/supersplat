@@ -51,7 +51,9 @@ const ICON = {
     camera: stroke('<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/>', 18),
     chevronDown: stroke('<path d="m6 9 6 6 6-6"/>', 18),
     diamond: stroke('<path d="M12 3l9 9-9 9-9-9z"/>', 15),
-    type: stroke('<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>', 18)
+    type: stroke('<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>', 18),
+    lasso: stroke('<path d="M7 22a5 5 0 0 1-2-4"/><path d="M3.3 14A6.8 6.8 0 0 1 2 10c0-4.4 4.5-8 10-8s10 3.6 10 8-4.5 8-10 8a12 12 0 0 1-5-1"/><circle cx="5" cy="16" r="2"/>'),
+    frame: stroke('<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><circle cx="12" cy="12" r="2.5"/>')
 };
 
 const DURATION = 151; // 2:31 timeline (seconds)
@@ -104,7 +106,15 @@ class BraintranceUI {
     private headerCenter!: HTMLElement;
     private bottomCenter!: HTMLElement; // hosts snapshot panel or context bar
     private railItems: Partial<Record<RailTool, HTMLElement>> = {};
-    private toolTabs: Partial<Record<RailTool, HTMLElement>> = {}; // top Explore/SAM toggle
+    private toolTabs: Partial<Record<RailTool, HTMLElement>> = {}; // top Explore/Select toggle
+
+    // selection mode: null = Explore (camera only), else clicking/drawing selects
+    private selectMode: 'sam' | 'lasso' | null = null;
+    private selectMenu: HTMLElement | null = null;          // the Select dropdown
+    private lasso: { pts: { x: number; y: number }[]; el: HTMLElement } | null = null;
+    private depthPop: HTMLElement | null = null;            // lasso depth prompt
+    private captures: number[] = [0.14, 0.60];              // snapshot marker positions (0..1)
+    private scrubberEl: HTMLElement | null = null;
 
     // playback (scrubber + sequencer share one playhead)
     private playing = false;
@@ -171,10 +181,18 @@ class BraintranceUI {
 
         this.bottomCenter = el('div');
         this.root.appendChild(this.bottomCenter);
-        this.root.appendChild(this.buildScrubber());
+        this.scrubberEl = this.buildScrubber();
+        this.root.appendChild(this.scrubberEl);
+
+        // Frame-all button (top-right) — the interview's main pain point ("fly to origin")
+        const frame = el('button', 'bt-frameall', `${ICON.frame}<span>Frame all</span>`);
+        frame.title = 'Frame all content';
+        frame.addEventListener('click', () => this.frameAll());
+        this.root.appendChild(frame);
 
         document.body.appendChild(this.root);
         this.setState('explore');
+        this.setActiveTool('explore'); // Explore is the default tool
     }
 
     // ── top menu strip ──
@@ -197,18 +215,71 @@ class BraintranceUI {
         return header;
     }
 
-    // top-of-header navigate/select toggle (moved up from the rail)
+    // top-of-header Explore (default) + Select dropdown (moved up from the rail)
     private buildToolTabs(): HTMLElement {
         const tabs = el('div', 'bt-tooltabs');
-        const tab = (tool: RailTool, icon: string, label: string) => {
-            const t = el('div', 'bt-tooltab', `${icon}<span>${label}</span>`);
-            t.addEventListener('click', () => this.selectTool(tool));
-            this.toolTabs[tool] = t;
-            return t;
-        };
-        tabs.appendChild(tab('explore', ICON.explore, 'Explore'));
-        tabs.appendChild(tab('sam', ICON.sam, 'Select'));
+        const explore = el('div', 'bt-tooltab', `${ICON.explore}<span>Explore</span>`);
+        explore.addEventListener('click', () => this.selectTool('explore'));
+        this.toolTabs.explore = explore;
+        tabs.appendChild(explore);
+
+        const select = el('div', 'bt-tooltab bt-tooltab-dd');
+        select.innerHTML = `${ICON.sam}<span class="bt-tt-label">Select</span><span class="bt-tt-caret">${ICON.chevronDown}</span>`;
+        select.addEventListener('click', (e) => { e.stopPropagation(); this.toggleSelectMenu(); });
+        this.toolTabs.sam = select;
+        tabs.appendChild(select);
         return tabs;
+    }
+
+    private toggleSelectMenu() {
+        if (this.selectMenu) { this.closeSelectMenu(); return; }
+        const menu = el('div', 'bt-select-menu bt-interactive');
+        const item = (icon: string, name: string, sub: string, mode: 'sam' | 'lasso') => {
+            const it = el('div', `bt-select-item${this.selectMode === mode ? ' is-active' : ''}`,
+                `${icon}<div class="bt-si-text"><div class="bt-si-name">${name}</div><div class="bt-si-sub">${sub}</div></div>`);
+            it.addEventListener('click', () => this.enableSelectMode(mode));
+            return it;
+        };
+        menu.appendChild(item(ICON.sam, 'SAM', 'AI click-to-segment', 'sam'));
+        menu.appendChild(item(ICON.lasso, 'Shape', 'Draw a lasso region', 'lasso'));
+        const tab = this.toolTabs.sam!;
+        const r = tab.getBoundingClientRect();
+        menu.style.left = `${r.left}px`;
+        menu.style.top = `${r.bottom + 6}px`;
+        this.selectMenu = menu;
+        this.root.appendChild(menu);
+        setTimeout(() => document.addEventListener('pointerdown', this.onDocPointerDown), 0);
+    }
+
+    private onDocPointerDown = (e: PointerEvent) => {
+        if (this.selectMenu && !this.selectMenu.contains(e.target as Node) && !this.toolTabs.sam?.contains(e.target as Node)) {
+            this.closeSelectMenu();
+        }
+    };
+
+    private closeSelectMenu() {
+        if (this.selectMenu) {
+            this.selectMenu.remove();
+            this.selectMenu = null;
+            document.removeEventListener('pointerdown', this.onDocPointerDown);
+        }
+    }
+
+    // enabling a select mode does NOT auto-select — it just turns selection on
+    private enableSelectMode(mode: 'sam' | 'lasso') {
+        this.selectMode = mode;
+        this.exitAudio();
+        this.closeAssets();
+        this.endLasso();
+        this.setActiveTool('sam');       // highlight the Select tab
+        this.closeSelectMenu();
+        this.updateSelectTabLabel();
+        if (this.canvas) this.canvas.style.cursor = 'crosshair';
+    }
+
+    private updateSelectTabLabel() {
+        const label = this.toolTabs.sam?.querySelector('.bt-tt-label');
+        if (label) label.textContent = this.selectMode === 'lasso' ? 'Lasso' : this.selectMode === 'sam' ? 'SAM' : 'Select';
     }
 
     // camera hints (Explore state)
@@ -265,10 +336,36 @@ class BraintranceUI {
     // ── snapshot panel (Explore state) ──
     private snapshotPanel(): HTMLElement {
         const p = el('div', 'bt-snapshot');
-        p.appendChild(el('button', 'bt-btn', 'Snapshot all'));
-        p.appendChild(el('button', 'bt-btn', 'Remove snapshot'));
+        const add = el('button', 'bt-btn', 'Snapshot all');
+        add.addEventListener('click', () => this.addCapture(this.playhead));
+        const rem = el('button', 'bt-btn', 'Remove snapshot');
+        rem.addEventListener('click', () => this.removeNearestCapture(this.playhead));
+        p.appendChild(add);
+        p.appendChild(rem);
         p.appendChild(el('button', 'bt-icon-btn', ICON.reset));
         return p;
+    }
+
+    // ── snapshot captures (drive scrubber + sequencer keyframes) ──
+    private addCapture(pos: number) {
+        if (!this.captures.some(c => Math.abs(c - pos) < 0.015)) {
+            this.captures.push(pos);
+            this.captures.sort((a, b) => a - b);
+            this.renderCaptures();
+        }
+    }
+
+    private removeNearestCapture(pos: number) {
+        if (!this.captures.length) return;
+        let bi = 0, bd = Infinity;
+        this.captures.forEach((c, i) => { const d = Math.abs(c - pos); if (d < bd) { bd = d; bi = i; } });
+        this.captures.splice(bi, 1);
+        this.renderCaptures();
+    }
+
+    private renderCaptures() {
+        if (this.scrubberEl) { const s = this.buildScrubber(); this.scrubberEl.replaceWith(s); this.scrubberEl = s; }
+        if (this.sequencer) { this.sequencer.remove(); this.seqPlayheadEl = null; this.sequencer = this.buildSequencer(); this.root.appendChild(this.sequencer); }
     }
 
     // ── selection contextual bar — default actions vs effect-chip view ──
@@ -358,7 +455,7 @@ class BraintranceUI {
         fill.style.width = `${this.playhead * 100}%`;
         this.scrubFill = fill;
         track.appendChild(fill);
-        [14, 60].forEach((pct) => { const m = el('div', 'bt-marker'); m.style.left = `${pct}%`; track.appendChild(m); });
+        this.captures.forEach((pos) => { const m = el('div', 'bt-marker'); m.style.left = `${pos * 100}%`; track.appendChild(m); });
         const ph = el('div', 'bt-marker is-playhead'); ph.style.left = `${this.playhead * 100}%`;
         this.scrubPlayheadEl = ph; track.appendChild(ph);
         track.addEventListener('click', (e) => {
@@ -440,7 +537,9 @@ class BraintranceUI {
         head.appendChild(play);
         head.appendChild(el('div', 'bt-seq-time', `${fmtTime(this.playhead * DURATION)} / ${fmtTime(DURATION)}`));
         head.appendChild(el('div', 'bt-seq-spacer'));
-        head.appendChild(el('button', 'bt-seq-snap', `${ICON.diamond}<span>Snapshot</span>`));
+        const snap = el('button', 'bt-seq-snap', `${ICON.diamond}<span>Snapshot</span>`);
+        snap.addEventListener('click', () => this.addCapture(this.playhead));
+        head.appendChild(snap);
         panel.appendChild(head);
 
         // body: label column + lanes column
@@ -461,9 +560,10 @@ class BraintranceUI {
 
         // tracks: each selectable object, then Camera · Music · Text (designed placeholders)
         type Track = { name: string; color: string; icon?: string; kfs?: number[]; clip?: [number, number] };
+        const capPts = this.captures.map(c => c * 100); // snapshots become keyframes
         const tracks: Track[] = [
-            ...this.objects.map(o => ({ name: o.name, color: 'var(--bt-selection)', icon: ICON.globe, kfs: [18, 52, 84] })),
-            { name: 'Camera', color: 'var(--bt-playhead)', icon: ICON.camera, kfs: [8, 40, 92] },
+            ...this.objects.map(o => ({ name: o.name, color: 'var(--bt-selection)', icon: ICON.globe, kfs: capPts })),
+            { name: 'Camera', color: 'var(--bt-playhead)', icon: ICON.camera, kfs: capPts },
             { name: 'Music', color: 'var(--bt-audio)', icon: ICON.audio, clip: [4, 74] },
             { name: 'Text', color: '#8a8a8a', icon: ICON.type, kfs: [34, 66] }
         ];
@@ -499,9 +599,11 @@ class BraintranceUI {
     private selectTool(tool: RailTool) {
         if (tool !== 'audio') this.exitAudio();
         if (tool !== 'assets') this.closeAssets();
-        if (tool === 'sam') {
-            this.selectObject(true);
-        } else if (tool === 'audio') {
+        this.closeSelectMenu();
+        this.selectMode = null;          // leaving Select mode
+        this.endLasso();
+        this.updateSelectTabLabel();
+        if (tool === 'audio') {
             this.selectObject(false);
             this.setActiveTool('audio');
             this.enterAudio();
@@ -509,9 +611,9 @@ class BraintranceUI {
             this.selectObject(false);
             this.setActiveTool('assets');
             this.openAssets();
-        } else {
+        } else { // explore (default)
             this.selectObject(false);
-            this.setActiveTool(tool);
+            this.setActiveTool('explore');
         }
     }
 
@@ -984,27 +1086,126 @@ class BraintranceUI {
         const canvas = this.canvas;
         if (!canvas) return;
         let down = false, downX = 0, downY = 0, moved = false;
-        canvas.addEventListener('pointerdown', (e) => { down = true; downX = e.clientX; downY = e.clientY; moved = false; });
+        canvas.addEventListener('pointerdown', (e) => {
+            down = true; downX = e.clientX; downY = e.clientY; moved = false;
+            if (this.selectMode === 'lasso' && e.button === 0) this.startLasso(e.clientX, e.clientY);
+        });
         canvas.addEventListener('pointermove', (e) => {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
-            // keep rendering while a gizmo is up so its hover/drag feedback is live
             if (this.gizmo && this.scene) this.scene.forceRender = true;
-            // hover affordance: pointer cursor when over a selectable object
-            if (!down && !this.audioMode && !this.placingAudio) {
-                canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : '';
+            if (this.lasso && down) { this.addLassoPoint(e.clientX, e.clientY); return; }
+            // hover affordance only in click-select (SAM) mode
+            if (!down && this.selectMode === 'sam') {
+                canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : 'crosshair';
             }
         });
-        // observe only (no preventDefault) so SuperSplat's camera drag still works
         canvas.addEventListener('pointerup', (e) => {
             const wasDown = down; down = false;
+            if (this.lasso) { this.finishLasso(); return; } // close the lasso → depth prompt
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
-            if (this.audioMode) return; // audio mode: clicks are for placement only
-            if (this.recordingMode) return; // recording: keep the source selected (move it = a change)
-            const obj = this.pickObjectAt(e.clientX, e.clientY);
-            if (obj) this.selectSceneObject(obj);
-            else this.selectObject(false);
+            if (this.audioMode) return;
+            if (this.recordingMode) return;
+            // selection only happens in SAM mode; Explore leaves clicks to the camera
+            if (this.selectMode === 'sam') {
+                const obj = this.pickObjectAt(e.clientX, e.clientY);
+                if (obj) this.selectSceneObject(obj);
+                else this.selectObject(false);
+            }
         });
+    }
+
+    // ── lasso (Shape) selection: draw a region, then choose its depth ──
+    private startLasso(x: number, y: number) {
+        this.endLasso();
+        if (this.scene?.camera) this.scene.camera.inputDisabled = true; // don't orbit while drawing
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'bt-lasso-svg');
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        poly.setAttribute('class', 'bt-lasso-path');
+        svg.appendChild(poly);
+        this.root.appendChild(svg);
+        this.lasso = { pts: [{ x, y }], el: svg as unknown as HTMLElement };
+        this.drawLasso();
+    }
+
+    private addLassoPoint(x: number, y: number) {
+        if (!this.lasso) return;
+        this.lasso.pts.push({ x, y });
+        this.drawLasso();
+    }
+
+    private drawLasso() {
+        const poly = this.lasso?.el.querySelector('.bt-lasso-path');
+        if (poly && this.lasso) poly.setAttribute('points', this.lasso.pts.map(p => `${p.x},${p.y}`).join(' '));
+    }
+
+    private endLasso() {
+        if (this.scene?.camera) this.scene.camera.inputDisabled = false;
+        this.lasso?.el.remove();
+        this.lasso = null;
+    }
+
+    private finishLasso() {
+        if (!this.lasso || this.lasso.pts.length < 3) { this.endLasso(); return; }
+        const pts = this.lasso.pts;
+        const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
+        const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
+        // close the path visually, then ask for selection depth
+        pts.push({ ...pts[0] }); this.drawLasso();
+        this.showDepthPrompt(cx, cy);
+    }
+
+    private showDepthPrompt(cx: number, cy: number) {
+        this.depthPop?.remove();
+        const pop = el('div', 'bt-depth-pop bt-interactive');
+        pop.appendChild(el('div', 'bt-dp-title', 'Selection depth'));
+        pop.appendChild(el('div', 'bt-dp-sub', 'How far into the scene the lasso selects'));
+        const row = el('div', 'bt-dp-row', '<input type="range" min="0.2" max="5" step="0.1" value="1.5"><span class="bt-dp-val">1.5 m</span>');
+        const slider = row.querySelector('input') as HTMLInputElement;
+        const valEl = row.querySelector('.bt-dp-val') as HTMLElement;
+        slider.addEventListener('input', () => { valEl.textContent = `${(+slider.value).toFixed(1)} m`; });
+        pop.appendChild(row);
+        const actions = el('div', 'bt-dp-actions');
+        const cancel = el('button', 'bt-dp-cancel', 'Cancel');
+        cancel.addEventListener('click', () => this.cancelLasso());
+        const create = el('button', 'bt-dp-create', 'Create selection');
+        create.addEventListener('click', () => this.commitLasso(cx, cy));
+        actions.appendChild(cancel); actions.appendChild(create);
+        pop.appendChild(actions);
+        pop.style.left = `${Math.min(Math.max(cx - 120, 12), window.innerWidth - 256)}px`;
+        pop.style.top = `${Math.min(cy + 14, window.innerHeight - 190)}px`;
+        this.depthPop = pop;
+        this.root.appendChild(pop);
+    }
+
+    private cancelLasso() { this.depthPop?.remove(); this.depthPop = null; this.endLasso(); }
+
+    private commitLasso(cx: number, cy: number) {
+        this.depthPop?.remove(); this.depthPop = null;
+        this.endLasso();
+        // faked SAM: select whatever object sits under the lasso's centre
+        const obj = this.pickObjectAt(cx, cy);
+        if (obj) this.selectSceneObject(obj);
+    }
+
+    // ── frame-all / fly-to-content (the interview's main pain point) ──
+    private frameAll() {
+        const cam = this.scene?.camera;
+        if (!cam?.focus) { this.events?.fire?.('camera.focus'); return; }
+        const vis = this.objects.filter(o => o.entity.enabled !== false);
+        if (vis.length === 0) { cam.focus({ focalPoint: new Vec3(0, 0.3, 0), radius: 1, speed: 1 }); this.pumpRender(650); return; }
+        const min = new Vec3(Infinity, Infinity, Infinity);
+        const max = new Vec3(-Infinity, -Infinity, -Infinity);
+        for (const o of vis) {
+            const p = o.entity.getPosition(); const s = o.entity.getLocalScale().x * 0.6;
+            min.x = Math.min(min.x, p.x - s); min.y = Math.min(min.y, p.y - s); min.z = Math.min(min.z, p.z - s);
+            max.x = Math.max(max.x, p.x + s); max.y = Math.max(max.y, p.y + s); max.z = Math.max(max.z, p.z + s);
+        }
+        const center = new Vec3((min.x + max.x) / 2, (min.y + max.y) / 2, (min.z + max.z) / 2);
+        const radius = Math.max(0.6, Math.hypot(max.x - min.x, max.y - min.y, max.z - min.z) * 0.6);
+        cam.focus({ focalPoint: center, radius, speed: 1 });
+        this.pumpRender(650);
     }
 
     // ── keyboard map (spec §8): Q/E/R transforms · F frame · ⌫ delete · Esc deselect ──
@@ -1013,7 +1214,10 @@ class BraintranceUI {
             const tag = (e.target as HTMLElement)?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
             if (e.key === 'Escape') {
-                // one layer per press: popover → recording → library/list → deselect
+                // one layer per press: lasso/menus → popover → recording → library/list → deselect
+                if (this.depthPop) { this.cancelLasso(); return; }
+                if (this.selectMenu) { this.closeSelectMenu(); return; }
+                if (this.lasso) { this.endLasso(); return; }
                 if (this.strengthPop) { this.hideStrengthPop(); this.openChip = null; this.refreshBottom(); }
                 else if (this.recordingMode) this.finishRecording(false);
                 else if (this.effectsMode) this.closeEffects();
