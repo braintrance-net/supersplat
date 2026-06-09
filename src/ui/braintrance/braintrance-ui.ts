@@ -43,8 +43,18 @@ const ICON = {
     sparkles: stroke('<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>', 15),
     zap: stroke('<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>', 15),
     pause: fill('<rect x="6" y="5" width="3.5" height="14" rx="1"/><rect x="14.5" y="5" width="3.5" height="14" rx="1"/>', 12),
-    expand: stroke('<path d="M21 21l-6-6"/><path d="M21 15v6h-6"/><path d="M3 3l6 6"/><path d="M3 9V3h6"/>', 18)
+    expand: stroke('<path d="M21 21l-6-6"/><path d="M21 15v6h-6"/><path d="M3 3l6 6"/><path d="M3 9V3h6"/>', 18),
+    x: stroke('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', 18),
+    trash: stroke('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', 15),
+    chevronRight: stroke('<path d="m9 18 6-6-6-6"/>', 16)
 };
+
+// Effect catalogue (faked — labels per spec §7.6). Presets are single-select
+// (a new one replaces the prior), shader effects stack.
+const COLOR_PRESETS = ['None', 'Warm', 'Cool', 'Vivid', 'Noir', 'Vintage', 'B&W', 'Faded'];
+const SHADER_EFFECTS = ['Glow', 'Bloom', 'Blur', 'Outline', 'Pixelate', 'Scanlines', 'Depth fade', 'Point cloud'];
+
+type Effect = { label: string; type: 'preset' | 'effect'; strength: number };
 
 const el = (tag: string, cls?: string, html?: string): HTMLElement => {
     const e = document.createElement(tag);
@@ -71,11 +81,20 @@ class BraintranceUI {
 
     // the current selection's model — badges/counts read from here (the effects &
     // interactions already on it, per the fixture cube: 2 effects + 1 interaction)
-    private selection = {
+    private selection: { name: string; effects: Effect[]; interactions: string[] } = {
         name: 'Cuboid',
-        effects: ['Vivid', 'Bloom'],
+        effects: [
+            { label: 'Vivid', type: 'preset', strength: 60 },
+            { label: 'Bloom', type: 'effect', strength: 50 }
+        ],
         interactions: ['On click → moves + glows']
     };
+
+    // effects-library state
+    private effectsMode = false;            // context bar in chip view + library open
+    private openChip: number | null = null; // index of the chip whose strength popover is open
+    private effectsPanel: HTMLElement | null = null;
+    private strengthPop: HTMLElement | null = null;
 
     constructor() {
         document.body.classList.add('bt-mode');
@@ -175,8 +194,12 @@ class BraintranceUI {
         return p;
     }
 
-    // ── selection contextual bar (Selected / Move state) ──
+    // ── selection contextual bar — default actions vs effect-chip view ──
     private contextBar(): HTMLElement {
+        return this.effectsMode ? this.contextBarChips() : this.contextBarDefault();
+    }
+
+    private contextBarDefault(): HTMLElement {
         const bar = el('div', 'bt-contextbar');
 
         const head = el('div', 'bt-cb-head');
@@ -188,6 +211,7 @@ class BraintranceUI {
         const actions = el('div', 'bt-cb-actions');
         const eff = el('button', 'bt-cb-btn bt-effect',
             `<span>Add Effect</span><span class="bt-cb-badge">${this.selection.effects.length} ${ICON.sparkles}</span>`);
+        eff.addEventListener('click', () => this.openEffects());
         const inter = el('button', 'bt-cb-btn bt-interaction',
             `<span>Add interaction</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
         actions.appendChild(eff);
@@ -196,6 +220,23 @@ class BraintranceUI {
         bar.appendChild(actions);
 
         bar.appendChild(el('div', 'bt-cb-hint', 'Shift click adds, ctrl click removes'));
+        return bar;
+    }
+
+    private contextBarChips(): HTMLElement {
+        const bar = el('div', 'bt-contextbar');
+        const chips = el('div', 'bt-cb-chips');
+        const back = el('div', 'bt-cb-back', ICON.back);
+        back.addEventListener('click', () => this.closeEffects());
+        chips.appendChild(back);
+        chips.appendChild(el('div', 'bt-cb-name', this.selection.name));
+        this.selection.effects.forEach((eff, i) => {
+            const chip = el('button', `bt-chip${this.openChip === i ? ' is-open' : ''}`,
+                `<span class="bt-chip-dot"></span><span>${eff.label}</span><span class="bt-chip-caret">${ICON.chevronRight}</span>`);
+            chip.addEventListener('click', () => this.toggleChip(i));
+            chips.appendChild(chip);
+        });
+        bar.appendChild(chips);
         return bar;
     }
 
@@ -245,14 +286,125 @@ class BraintranceUI {
     setState(state: EditorState) {
         this.state = state;
         this.refreshHeaderCenter();
-        // bottom center panel
-        const next = state === 'selected' ? this.contextBar() : this.snapshotPanel();
-        this.bottomCenter.replaceWith(next);
-        this.bottomCenter = next;
+        this.refreshBottom();
         // default active rail item matches state
         if (state === 'explore' && !Object.values(this.railItems).some(i => i?.classList.contains('is-active'))) {
             this.railItems.explore?.classList.add('is-active');
         }
+    }
+
+    // Re-render the bottom-center panel (snapshot panel vs context bar / chips).
+    private refreshBottom() {
+        const next = this.state === 'selected' ? this.contextBar() : this.snapshotPanel();
+        this.bottomCenter.replaceWith(next);
+        this.bottomCenter = next;
+    }
+
+    // ── effects library ("Enhance with effects") ──
+    private openEffects() {
+        this.effectsMode = true;
+        this.openChip = null;
+        this.refreshBottom();          // context bar → chip view
+        this.hideStrengthPop();
+        this.effectsPanel?.remove();
+        this.effectsPanel = this.buildEffectsPanel();
+        this.root.appendChild(this.effectsPanel);
+    }
+
+    private closeEffects() {
+        this.effectsMode = false;
+        this.openChip = null;
+        this.effectsPanel?.remove(); this.effectsPanel = null;
+        this.hideStrengthPop();
+        if (this.state === 'selected') this.refreshBottom();
+    }
+
+    private buildEffectsPanel(): HTMLElement {
+        const panel = el('div', 'bt-effects-panel');
+        const head = el('div', 'bt-ep-head');
+        head.appendChild(el('div', 'bt-ep-title', 'Enhance with effects'));
+        const close = el('div', 'bt-ep-close', ICON.x);
+        close.addEventListener('click', () => this.closeEffects());
+        head.appendChild(close);
+        panel.appendChild(head);
+
+        panel.appendChild(el('div', 'bt-ep-search', 'Search effects…'));
+
+        panel.appendChild(el('div', 'bt-ep-section', 'COLOR PRESETS'));
+        const row = el('div', 'bt-ep-row');
+        COLOR_PRESETS.forEach(name => row.appendChild(this.effectTile(name, 'preset')));
+        panel.appendChild(row);
+
+        panel.appendChild(el('div', 'bt-ep-strength',
+            '<span>Strength</span><input type="range" min="0" max="100" value="60">'));
+
+        panel.appendChild(el('div', 'bt-ep-section', 'SHADER EFFECTS'));
+        const grid = el('div', 'bt-ep-grid');
+        SHADER_EFFECTS.forEach(name => grid.appendChild(this.effectTile(name, 'effect')));
+        panel.appendChild(grid);
+        return panel;
+    }
+
+    private effectTile(name: string, type: 'preset' | 'effect'): HTMLElement {
+        const swCls = name === 'None' ? 'is-none' : name === 'Cool' ? 'is-cool' : '';
+        const tile = el('div', 'bt-tile',
+            `<div class="bt-tile-sw ${swCls}"></div><span class="bt-tile-label">${name}</span>`);
+        tile.addEventListener('click', () => this.applyEffect(name, type));
+        return tile;
+    }
+
+    private applyEffect(label: string, type: 'preset' | 'effect') {
+        if (label === 'None') {
+            this.selection.effects = this.selection.effects.filter(e => e.type !== 'preset');
+        } else {
+            if (type === 'preset') this.selection.effects = this.selection.effects.filter(e => e.type !== 'preset');
+            this.selection.effects.push({ label, type, strength: 50 });
+        }
+        this.refreshBottom(); // re-render chip list
+    }
+
+    private toggleChip(i: number) {
+        this.openChip = this.openChip === i ? null : i;
+        this.refreshBottom();
+        if (this.openChip === null) this.hideStrengthPop();
+        else this.showStrengthPop(i);
+    }
+
+    private removeEffect(i: number) {
+        this.selection.effects.splice(i, 1);
+        this.openChip = null;
+        this.hideStrengthPop();
+        this.refreshBottom();
+    }
+
+    private showStrengthPop(i: number) {
+        this.hideStrengthPop();
+        const eff = this.selection.effects[i];
+        if (!eff) return;
+        const pop = el('div', 'bt-strength-pop');
+        pop.appendChild(el('div', 'bt-sp-title', eff.label));
+        const row = el('div', 'bt-sp-row', `<span>Strength</span><span class="bt-sp-val">${eff.strength}%</span>`);
+        pop.appendChild(row);
+        const valEl = row.querySelector('.bt-sp-val') as HTMLElement;
+        const slider = el('input') as HTMLInputElement;
+        slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(eff.strength);
+        slider.addEventListener('input', () => { eff.strength = +slider.value; valEl.textContent = `${eff.strength}%`; });
+        pop.appendChild(slider);
+        pop.appendChild(el('div', 'bt-sp-note', 'Other shader toggles go here'));
+        const reset = el('div', 'bt-sp-action', `${ICON.reset}<span>Reset</span>`);
+        reset.addEventListener('click', () => { eff.strength = 50; slider.value = '50'; valEl.textContent = '50%'; });
+        const remove = el('div', 'bt-sp-action is-danger', `${ICON.trash}<span>Remove</span>`);
+        remove.addEventListener('click', () => this.removeEffect(i));
+        pop.appendChild(reset);
+        pop.appendChild(remove);
+        pop.classList.add('bt-interactive');
+        this.strengthPop = pop;
+        this.root.appendChild(pop);
+    }
+
+    private hideStrengthPop() {
+        this.strengthPop?.remove();
+        this.strengthPop = null;
     }
 
     // Re-render the header center cluster (camera hints vs transform tools). Also
@@ -320,7 +472,11 @@ class BraintranceUI {
         window.addEventListener('keydown', (e) => {
             const tag = (e.target as HTMLElement)?.tagName;
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-            if (e.key === 'Escape') { this.selectObject(false); return; }
+            if (e.key === 'Escape') {
+                if (this.effectsMode) this.closeEffects(); // close the library first
+                else this.selectObject(false);
+                return;
+            }
             if (this.state !== 'selected') return; // leave WASD etc. to the camera
             switch (e.key.toLowerCase()) {
                 case 'q': this.setGizmoMode('move'); break;
@@ -349,6 +505,11 @@ class BraintranceUI {
     }
 
     private selectObject(sel: boolean) {
+        // reset any open effects UI on selection change
+        this.effectsMode = false;
+        this.openChip = null;
+        this.effectsPanel?.remove(); this.effectsPanel = null;
+        this.hideStrengthPop();
         if (this.boxMat && this.box?.enabled !== false) {
             const c = sel ? SEL_DIFFUSE : IDLE_DIFFUSE;
             this.boxMat.diffuse.copy(c);

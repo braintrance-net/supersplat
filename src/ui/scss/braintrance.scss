@@ -70,6 +70,8 @@ body.bt-mode {
     .bt-snapshot,
     .bt-scrubber,
     .bt-contextbar,
+    .bt-effects-panel,
+    .bt-strength-pop,
     .bt-topbar { pointer-events: auto; }
 }
 
@@ -401,4 +403,108 @@ body.bt-mode {
         font-size: 12px;
         color: var(--bt-ink-3);
     }
+
+    // chip mode (effects applied): ‹ Cuboid · [Vivid •] [Bloom •] …
+    .bt-cb-chips {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+
+        .bt-cb-back {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; border-radius: 6px;
+            color: var(--bt-ink-2); cursor: pointer;
+            &:hover { background: var(--bt-hover); }
+            svg { width: 16px; height: 16px; }
+        }
+        .bt-cb-name { font-size: 15px; font-weight: 600; margin-right: 4px; }
+
+        .bt-chip {
+            display: inline-flex; align-items: center; gap: 8px;
+            height: 34px; padding: 0 12px;
+            background: #f1f1f1; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; color: var(--bt-ink);
+            cursor: pointer;
+            &:hover { background: #e6e6e6; }
+            &.is-open { box-shadow: 0 0 0 2px var(--bt-ink); }
+            .bt-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--bt-effect); }
+            .bt-chip-caret { color: var(--bt-ink-3); display: inline-flex; svg { width: 14px; height: 14px; } }
+        }
+    }
+}
+
+// ── Effects library ("Enhance with effects") — docked left ──────────────────
+.bt-effects-panel {
+    position: absolute;
+    top: 98px; left: 86px; bottom: 62px;   // just right of the 78px rail
+    width: 318px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    display: flex; flex-direction: column;
+    padding: 16px 16px 8px;
+
+    .bt-ep-head {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 12px;
+        .bt-ep-title { font-size: 16px; font-weight: 600; }
+        .bt-ep-close { cursor: pointer; color: var(--bt-ink-3); display: inline-flex;
+            svg { width: 18px; height: 18px; } &:hover { color: var(--bt-ink); } }
+    }
+    .bt-ep-search {
+        height: 36px; border: 1px solid var(--bt-border); border-radius: 8px;
+        display: flex; align-items: center; padding: 0 12px;
+        color: var(--bt-ink-3); font-size: 14px; margin-bottom: 4px;
+    }
+    .bt-ep-section {
+        font-size: 11px; letter-spacing: 0.07em; font-weight: 600;
+        color: var(--bt-ink-3); margin: 16px 0 10px;
+    }
+    .bt-ep-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+    .bt-ep-grid {
+        display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px 8px;
+        overflow-y: auto; padding-right: 4px;
+    }
+    .bt-tile {
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        cursor: pointer; flex-shrink: 0;
+        .bt-tile-sw {
+            width: 48px; height: 48px; border-radius: 12px;
+            background: var(--bt-effect);
+            border: 1px solid rgba(0,0,0,0.06);
+        }
+        .bt-tile-sw.is-none { background: #eee; }
+        .bt-tile-sw.is-cool { background: linear-gradient(150deg, #6db8ff, #2f7bff); }
+        .bt-tile-label { font-size: 11px; color: var(--bt-ink-2); white-space: nowrap; }
+        &.is-selected .bt-tile-sw { box-shadow: 0 0 0 2px var(--bt-ink); }
+    }
+    .bt-ep-strength {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 13px; color: var(--bt-ink-3); margin: 4px 0 2px;
+        input[type='range'] { flex: 1; accent-color: var(--bt-ink); }
+    }
+}
+
+// ── Effect strength popover (over a chip) ───────────────────────────────────
+.bt-strength-pop {
+    position: absolute;
+    left: 50%; bottom: 150px; transform: translateX(-50%);
+    width: 240px;
+    background: var(--bt-panel);
+    border-radius: 12px;
+    box-shadow: var(--bt-shadow);
+    padding: 16px;
+
+    .bt-sp-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+    .bt-sp-row { display: flex; align-items: center; justify-content: space-between;
+        font-size: 13px; color: var(--bt-ink-3); margin-bottom: 6px;
+        .bt-sp-val { color: var(--bt-ink); font-weight: 600; } }
+    input[type='range'] { width: 100%; accent-color: var(--bt-ink); }
+    .bt-sp-note { font-size: 12px; color: var(--bt-ink-3); padding: 12px 0;
+        border-bottom: 1px solid var(--bt-border); margin-bottom: 10px; }
+    .bt-sp-action { display: flex; align-items: center; gap: 8px;
+        font-size: 13px; color: var(--bt-ink-2); cursor: pointer; padding: 6px 0;
+        svg { width: 15px; height: 15px; } &:hover { color: var(--bt-ink); }
+        &.is-danger { color: #c23b3b; } }
 }
