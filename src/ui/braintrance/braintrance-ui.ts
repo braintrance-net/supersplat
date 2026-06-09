@@ -1233,33 +1233,41 @@ class BraintranceUI {
     private addPlaceholder() {
         const scene = this.scene;
         if (!scene?.contentRoot) return;
-        const mat = new StandardMaterial();
-        // Drive colour through emissive so the box reads clearly over the splat
-        // viewport even though the scene has no lights (a lit material would be black).
-        mat.diffuse.copy(IDLE_DIFFUSE);
-        mat.emissive.copy(IDLE_DIFFUSE);
-        mat.emissiveIntensity = 1;
-        mat.update();
 
-        const box = new Entity('bt-placeholder');
-        box.addComponent('render', { type: 'box' });
-        if (box.render) box.render.material = mat; // apply to all primitive mesh instances
-        box.setLocalScale(0.35, 0.35, 0.35);
-        box.setLocalPosition(0, 0.3, 0);
-        scene.contentRoot.addChild(box);
-
-        // the cube is the first selectable object, with the seeded fixtures
-        const cube: SceneObject = {
-            entity: box,
-            mat,
-            name: 'Cuboid',
-            effects: [{ label: 'Vivid', type: 'preset', strength: 60 }, { label: 'Bloom', type: 'effect', strength: 50 }],
-            interactions: ['On click → moves + glows']
+        // A few selectable stand-ins so selection can move between world objects.
+        const make = (name: string, type: 'box' | 'sphere',
+            pos: [number, number, number], scale: [number, number, number],
+            effects: Effect[], interactions: string[]): SceneObject => {
+            const mat = new StandardMaterial();
+            // Drive colour through emissive so objects read clearly over the splat
+            // viewport even though the scene has no lights (a lit material is black).
+            mat.useLighting = false;
+            mat.diffuse.copy(IDLE_DIFFUSE);
+            mat.emissive.copy(IDLE_DIFFUSE);
+            mat.emissiveIntensity = 1;
+            mat.update();
+            const ent = new Entity(`bt-obj-${name}`);
+            ent.addComponent('render', { type });
+            if (ent.render) ent.render.material = mat; // applies to every primitive mesh instance
+            ent.setLocalScale(scale[0], scale[1], scale[2]);
+            ent.setLocalPosition(pos[0], pos[1], pos[2]);
+            scene.contentRoot.addChild(ent);
+            const obj: SceneObject = { entity: ent, mat, name, effects, interactions };
+            this.objects.push(obj);
+            return obj;
         };
-        this.objects.push(cube);
+
+        // The hero Cuboid carries the seeded effect/interaction fixtures; the others
+        // start clean so the user can build them up — and select between all three.
+        const cube = make('Cuboid', 'box', [0, 0.5, 0], [0.34, 0.34, 0.34],
+            [{ label: 'Vivid', type: 'preset', strength: 60 }, { label: 'Bloom', type: 'effect', strength: 50 }],
+            ['On click → moves + glows']);
+        make('Sphere', 'sphere', [-0.66, 0.44, 0.1], [0.28, 0.28, 0.28], [], []);
+        make('Pillar', 'box', [0.66, 0.62, -0.05], [0.2, 0.56, 0.2], [], []);
+
         this.selection = cube;
-        this.box = box;
-        this.boxMat = mat;
+        this.box = cube.entity;
+        this.boxMat = cube.mat;
         scene.forceRender = true;
     }
 
