@@ -425,7 +425,7 @@ class BraintranceUI {
         bar.appendChild(tool('E', 'Scale', { mode: 'scale', onClick: () => this.setGizmoMode('scale') }));
         bar.appendChild(tool('R', 'Rotate', { mode: 'rotate', onClick: () => this.setGizmoMode('rotate') }));
         bar.appendChild(tool('F', 'Frame', { onClick: () => this.frameSelection() }));
-        bar.appendChild(tool('⌘K', 'Crop to'));
+        bar.appendChild(tool('⌘K', 'Crop to', { onClick: () => this.cropToObjects(this.selection ? [this.selection] : []) }));
         bar.appendChild(tool('⌫', 'Delete', { danger: true, onClick: () => this.deleteSelection() }));
         wrap.appendChild(bar);
         return wrap;
@@ -1495,10 +1495,46 @@ class BraintranceUI {
     }
 
     private applyCrop() {
-        const b = this.cropBox;
-        const hit = b ? this.pickObjectAt((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2) : null;
+        // Crop to the drawn volume: keep every object whose screen position falls inside
+        // the box and drop the rest. Fall back to keeping the current selection.
+        const inside = this.objectsInCropBox();
         this.endCrop();
-        if (hit) this.selectSceneObject(hit); // faked: the cropped volume's content becomes the selection
+        this.cropToObjects(inside.length ? inside : (this.selection ? [this.selection] : []));
+    }
+
+    // objects whose screen-space centre lies inside the current crop box
+    private objectsInCropBox(): SceneObject[] {
+        const b = this.cropBox;
+        const cam = this.cameraComponent();
+        const canvas = this.canvas;
+        if (!b || !cam || !canvas) return [];
+        const x0 = Math.min(b.x0, b.x1), x1 = Math.max(b.x0, b.x1);
+        const y0 = Math.min(b.y0, b.y1), y1 = Math.max(b.y0, b.y1);
+        const rect = canvas.getBoundingClientRect();
+        const sp = new Vec3();
+        const hits: SceneObject[] = [];
+        for (const o of this.objects) {
+            if (o.entity.enabled === false) continue;
+            cam.worldToScreen(o.entity.getPosition(), sp);
+            const sx = rect.left + sp.x * (rect.width / canvas.width);
+            const sy = rect.top + sp.y * (rect.height / canvas.height);
+            if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) hits.push(o);
+        }
+        return hits;
+    }
+
+    // "Crop to" / delete-all-but: keep only `keep`, hide + drop everything else
+    private cropToObjects(keep: SceneObject[]) {
+        if (!keep.length) return;
+        const keepSet = new Set(keep);
+        this.objects.forEach((o) => {
+            if (!keepSet.has(o)) o.entity.enabled = false;
+        });
+        this.objects = this.objects.filter(o => keepSet.has(o));
+        if (this.scene) this.scene.forceRender = true;
+        const sel = this.selection && keepSet.has(this.selection) ? this.selection : keep[0];
+        this.selectSceneObject(sel);
+        this.renderCaptures(); // rebuild scrubber + sequencer for the reduced object set
     }
 
     // ── frame-all / fly-to-content (the interview's main pain point) ──
@@ -1526,9 +1562,23 @@ class BraintranceUI {
 
     // ── keyboard map (spec §8): Q/E/R transforms · F frame · ⌫ delete · Esc deselect ──
     private wireKeyboard() {
+        // Capture phase: this must run BEFORE SuperSplat's own document-level keydown,
+        // which calls stopPropagation() on the keys it owns (e.g. 'f' → camera.focus).
+        // On the bubble phase our window listener fired too late and never saw them.
         window.addEventListener('keydown', (e) => {
-            const tag = (e.target as HTMLElement)?.tagName;
-            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            const t = e.target as HTMLElement;
+            if (t?.tagName === 'INPUT' || t?.tagName === 'TEXTAREA' || t?.isContentEditable) return;
+            const mod = e.metaKey || e.ctrlKey || e.altKey;
+            const k = e.key.toLowerCase();
+            // global mode shortcuts (any state): V = Select, H = Explore
+            if (!mod && !e.shiftKey) {
+                if (k === 'v') {
+                    e.preventDefault(); e.stopPropagation(); this.activateSelect(); return;
+                }
+                if (k === 'h') {
+                    e.preventDefault(); e.stopPropagation(); this.selectTool('explore'); return;
+                }
+            }
             if (e.key === 'Escape') {
                 // one layer per press: lasso/menus → popover → recording → library/list → deselect
                 if (this.menuDropdown) {
@@ -1556,18 +1606,19 @@ class BraintranceUI {
                 return;
             }
             if (e.key === ' ' || e.code === 'Space') {
-                e.preventDefault(); this.togglePlay(); return;
+                e.preventDefault(); e.stopPropagation(); this.togglePlay(); return;
             } // play/pause
             if (this.state !== 'selected') return; // leave WASD etc. to the camera
-            switch (e.key.toLowerCase()) {
-                case 'q': this.setGizmoMode('move'); break;
-                case 'e': this.setGizmoMode('scale'); break;
-                case 'r': this.setGizmoMode('rotate'); break;
-                case 'f': this.frameSelection(); break;
-                case 'delete': case 'backspace': this.deleteSelection(); break;
+            if (mod) return; // don't clobber browser / SuperSplat combos (Cmd+R, Ctrl+Z…)
+            switch (k) {
+                case 'q': e.stopPropagation(); this.setGizmoMode('move'); break;
+                case 'e': e.stopPropagation(); this.setGizmoMode('scale'); break;
+                case 'r': e.stopPropagation(); this.setGizmoMode('rotate'); break;
+                case 'f': e.preventDefault(); e.stopPropagation(); this.frameSelection(); break;
+                case 'delete': case 'backspace': e.stopPropagation(); this.deleteSelection(); break;
                 default:
             }
-        });
+        }, true);
     }
 
     // Faked SAM: pick the selectable object nearest the cursor (screen-space), or null.
