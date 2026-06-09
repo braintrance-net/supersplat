@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { createRequire } from 'node:module';
 import { readFile, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 
@@ -12,10 +12,17 @@ Options:
   --file <path>          JSON array, JSONL, or pasted back-to-back eval JSON objects
   --url <url>            Built SuperSplat URL (default: http://localhost:8010/)
   --out <path>           Write incremental JSON results after each case
+  --print-results        Print full replay JSON to stdout after the summary
+  --summary-detail       Include verbose per-case diagnostics in stdout summary
   --case-index <n|a,b|a-b>
                          Replay only selected zero-based case indexes
   --limit <n>            Replay at most this many cases after filtering
-  --prompt-type <type>   Override click prompts, e.g. client_click, direct_lift_click, detect_all_click, or client_lift_target_box
+  --prompt-type <type>   Override click prompts, e.g. client_click, client_brush, direct_lift_click, detect_all_click, or client_lift_target_box
+  --brush-shape <shape>  For client_brush: circle or rect (default: circle)
+  --brush-radius <px>    For client_brush circle prompts (default: 180)
+  --brush-width <px>     For client_brush rect prompts (default: radius * 2)
+  --brush-height <px>    For client_brush rect prompts (default: radius * 2)
+  --brush-pad <px>       Expand the client_brush region before geometry
   --preprocess-mode <m>  Override direct lift preprocessing: full_frame or square_crop
   --depth-mode <m>       Override direct lift depth source: dense or points_only
   --geometry-mode <m>    Override direct lift geometry: global or proposal_local
@@ -49,6 +56,7 @@ Options:
   --no-sam               For direct_lift_click, disable SAM proposal augmentation
   --boxer-gpu-depth      Enable the app's GPU splat-depth path during replay
   --require-sam-success  Fail unless every ok case produces a non-empty SAM mask region
+  --require-brush-points Fail client_brush cases whose prompt has no stroke points
   --verify-target-leak   Re-run target-agnostic cases with a mutated target and require identical runtime output
   --target-leak-offset <x,y,z>
                          Target center offset for --verify-target-leak (default: 13.37,-7.11,5.29)
@@ -73,9 +81,16 @@ const parseArgs = (argv) => {
         if (arg === '--file') args.file = argv[++i];
         else if (arg === '--url') args.url = argv[++i];
         else if (arg === '--out') args.out = argv[++i];
+        else if (arg === '--print-results') args.printResults = true;
+        else if (arg === '--summary-detail') args.summaryDetail = true;
         else if (arg === '--case-index') args.caseIndex = argv[++i];
         else if (arg === '--limit') args.limit = Number(argv[++i]);
         else if (arg === '--prompt-type') args.promptType = argv[++i];
+        else if (arg === '--brush-shape') args.brushShape = argv[++i];
+        else if (arg === '--brush-radius') args.brushRadius = Number(argv[++i]);
+        else if (arg === '--brush-width') args.brushWidth = Number(argv[++i]);
+        else if (arg === '--brush-height') args.brushHeight = Number(argv[++i]);
+        else if (arg === '--brush-pad') args.brushPad = Number(argv[++i]);
         else if (arg === '--preprocess-mode') args.preprocessMode = argv[++i];
         else if (arg === '--depth-mode') args.depthMode = argv[++i];
         else if (arg === '--geometry-mode') args.geometryMode = argv[++i];
@@ -96,12 +111,12 @@ const parseArgs = (argv) => {
         else if (arg === '--fusion-quantiles') {
             const [lo, hi] = argv[++i].split(',').map(Number);
             args.fusionQuantiles = [lo, hi];
-        }
-        else if (arg === '--fusion-timeout-ms') args.fusionTimeoutMs = Number(argv[++i]);
+        } else if (arg === '--fusion-timeout-ms') args.fusionTimeoutMs = Number(argv[++i]);
         else if (arg === '--aggregate-target-groups') args.aggregateTargetGroups = true;
         else if (arg === '--no-sam') args.useSam = false;
         else if (arg === '--boxer-gpu-depth') args.boxerGpuDepth = true;
         else if (arg === '--require-sam-success') args.requireSamSuccess = true;
+        else if (arg === '--require-brush-points') args.requireBrushPoints = true;
         else if (arg === '--verify-target-leak') args.verifyTargetLeak = true;
         else if (arg === '--target-leak-offset') args.targetLeakOffset = argv[++i].split(',').map(Number);
         else if (arg === '--case-timeout-ms') args.caseTimeoutMs = Number(argv[++i]);
@@ -122,6 +137,9 @@ const parseArgs = (argv) => {
     }
     if (args.targetLeakOffset && (args.targetLeakOffset.length !== 3 || args.targetLeakOffset.some(value => !Number.isFinite(value)))) {
         throw new Error('--target-leak-offset must be three comma-separated numbers');
+    }
+    if (args.brushShape && !['circle', 'rect'].includes(args.brushShape)) {
+        throw new Error('--brush-shape must be circle or rect');
     }
     return args;
 };
@@ -161,15 +179,33 @@ const filterCases = (cases, args) => {
 };
 
 const withPromptOverride = (evalCase, args) => {
-    if (!args.promptType && !args.preprocessMode && !args.depthMode && !args.geometryMode && args.boxernetWorldScale === undefined && !args.boxernetWorldScales && !args.refinementMode && !args.gravity && !args.objectCrop) return evalCase;
+    if (!args.promptType && !args.preprocessMode && !args.depthMode && !args.geometryMode && args.boxernetWorldScale === undefined && !args.boxernetWorldScales && !args.refinementMode && !args.gravity && !args.objectCrop && !args.brushShape && args.brushRadius === undefined && args.brushWidth === undefined && args.brushHeight === undefined && args.brushPad === undefined) return evalCase;
     const type = args.promptType ?? evalCase.prompt.type;
     const canOmitClick = type === 'lift_target_box' || type === 'client_lift_target_box';
     if (!evalCase.prompt?.click_xy && !canOmitClick) return evalCase;
+    const buildBrush = () => {
+        if (type !== 'client_brush') return {};
+        const click = evalCase.prompt.click_xy;
+        const shape = args.brushShape ?? 'circle';
+        const radius = Number.isFinite(args.brushRadius) ? args.brushRadius : 180;
+        return {
+            brush: {
+                shape,
+                center_xy: click,
+                ...(shape === 'circle' ? { radius } : {
+                    width: Number.isFinite(args.brushWidth) ? args.brushWidth : radius * 2,
+                    height: Number.isFinite(args.brushHeight) ? args.brushHeight : radius * 2
+                }),
+                ...(Number.isFinite(args.brushPad) ? { pad: args.brushPad } : {})
+            }
+        };
+    };
     return {
         ...evalCase,
         prompt: {
             ...evalCase.prompt,
             type,
+            ...buildBrush(),
             ...(args.preprocessMode ? { preprocess_mode: args.preprocessMode } : {}),
             ...(args.depthMode ? { depth_mode: args.depthMode } : {}),
             ...(args.geometryMode ? { geometry_mode: args.geometryMode } : {}),
@@ -270,8 +306,33 @@ const withTimeout = (promise, ms, message) => {
 
 const compactTiming = (timing) => {
     if (!timing || typeof timing !== 'object') return timing ?? null;
-    const { image, ...rest } = timing;
+    const rest = { ...timing };
+    delete rest.image;
     return rest;
+};
+
+const compactDepth = (frame, timing) => {
+    const totalPixels = finite(frame?.depth_width) && finite(frame?.depth_height) ?
+        frame.depth_width * frame.depth_height :
+        null;
+    const validRatio = finite(frame?.depth_valid_ratio) ?
+        frame.depth_valid_ratio :
+        (finite(frame?.depth_valid_pixels) && totalPixels ? frame.depth_valid_pixels / totalPixels : null);
+    return {
+        source: frame?.depth_source ?? timing?.depth_source ?? null,
+        width: frame?.depth_width ?? null,
+        height: frame?.depth_height ?? null,
+        valid_pixels: frame?.depth_valid_pixels ?? null,
+        total_pixels: totalPixels,
+        valid_ratio: validRatio,
+        min: frame?.depth_min ?? null,
+        max: frame?.depth_max ?? null,
+        visibility_index_ms: frame?.depth_visibility_index_ms ?? null,
+        visibility_view_ms: frame?.depth_visibility_view_ms ?? null,
+        visibility_view_reused: frame?.depth_visibility_view_reused ?? null,
+        visibility_tile_count: frame?.depth_visibility_tile_count ?? null,
+        visibility_visible_tiles: frame?.depth_visibility_visible_tiles ?? null
+    };
 };
 
 const compactProjectionFit = (fit) => {
@@ -298,6 +359,12 @@ const compactCandidate = (candidate) => {
         id: candidate.id,
         source: candidate.source,
         scale: candidate.scale,
+        component_index: candidate.component_index,
+        center: candidate.center,
+        dimensions: candidate.dimensions,
+        ray_variant: candidate.ray_variant,
+        preserve_client_brush_geometry: candidate.preserve_client_brush_geometry,
+        predicted_aabb: candidate.predicted_aabb,
         label: candidate.label,
         score: candidate.score ?? candidate.score2d,
         selection_score: candidate.selection_score,
@@ -309,6 +376,14 @@ const compactCandidate = (candidate) => {
         depth_consistent_point_count: candidate.depth_consistent_point_count,
         depth_support_ratio: candidate.depth_support_ratio,
         candidate_depth_band: candidate.candidate_depth_band,
+        depth_spread: candidate.depth_spread,
+        depth_axis: candidate.depth_axis,
+        inside_candidate_count: candidate.inside_candidate_count,
+        cluster_inside_count: candidate.cluster_inside_count,
+        support_inside_count: candidate.support_inside_count,
+        support_ratio: candidate.support_ratio,
+        brush_evidence_ratio: candidate.brush_evidence_ratio,
+        selected_cluster_candidate_count: candidate.selected_cluster_candidate_count,
         projected_candidate_count: candidate.projected_candidate_count,
         front_surface_candidate_count: candidate.front_surface_candidate_count,
         geometry_reason: candidate.geometry_refinement?.reason,
@@ -321,11 +396,13 @@ const compactCandidate = (candidate) => {
 const buildCandidateDebug = (replay) => {
     const geometry = replay.boxer_result?.geometry_refinement;
     const clientClick = replay.client_click_probe ?? replay.boxer_result?.client_click;
+    const clientBrush = replay.client_brush_probe ?? replay.boxer_result?.client_brush;
     const directLift = replay.direct_lift_probe ?? replay.boxer_result?.direct_lift;
     const clientLift = replay.client_lift_probe ?? replay.boxer_result?.client_lift;
     const sam3 = replay.boxer_result?.sam3_augmentation;
     const candidates = [
         ...((clientClick?.candidates ?? []) || []),
+        ...((clientBrush?.candidates ?? []) || []),
         ...((directLift?.candidates ?? []) || []),
         ...((clientLift?.candidates ?? []) || [])
     ];
@@ -355,11 +432,47 @@ const buildCandidateDebug = (replay) => {
             front_surface_candidate_count: clientClick.front_surface_candidate_count,
             cluster_point_count: clientClick.cluster_point_count,
             connected_cluster_point_count: clientClick.connected_cluster_point_count,
+            knn_cluster_point_count: clientClick.knn_cluster_point_count,
+            knn_cluster_relaxed: clientClick.knn_cluster_relaxed,
+            knn_cluster_capped: clientClick.knn_cluster_capped,
+            knn_source_candidate_count: clientClick.knn_source_candidate_count,
             depth_window_point_count: clientClick.depth_window_point_count,
             fallback_depth_band: clientClick.fallback_depth_band,
             visible_surface_prior: clientClick.visible_surface_prior,
             local_bb2d: clientClick.local_bb2d,
-            cluster_bb2d: clientClick.cluster_bb2d
+            cluster_bb2d: clientClick.cluster_bb2d,
+            knn_cluster_bb2d: clientClick.knn_cluster_bb2d,
+            depth_component_bb2d: clientClick.depth_component_bb2d,
+            depth_component_pixel_count: clientClick.depth_component_pixel_count,
+            depth_component_seed_depth: clientClick.depth_component_seed_depth,
+            depth_component_relaxed: clientClick.depth_component_relaxed,
+            selected_candidate_source: clientClick.selected_candidate_source,
+            selected_candidate_scale: clientClick.selected_candidate_scale
+        } : null,
+        client_brush: clientBrush ? {
+            backend_bypassed: clientBrush.backend_bypassed,
+            shape: clientBrush.shape,
+            center_xy: clientBrush.center_xy,
+            radius: clientBrush.radius,
+            brush_bb2d: clientBrush.brush_bb2d,
+            brush_area_ratio: clientBrush.brush_area_ratio,
+            brush_stroke_point_count: clientBrush.brush_stroke_point_count,
+            click_depth: clientBrush.click_depth,
+            base_projected_candidate_count: clientBrush.base_projected_candidate_count,
+            base_front_surface_candidate_count: clientBrush.base_front_surface_candidate_count,
+            brush_candidate_count: clientBrush.brush_candidate_count,
+            selected_point_count: clientBrush.selected_point_count,
+            connected_cluster_point_count: clientBrush.connected_cluster_point_count,
+            brush_component_count: clientBrush.brush_component_count,
+            brush_component_point_counts: clientBrush.brush_component_point_counts,
+            brush_knn_point_count: clientBrush.brush_knn_point_count,
+            brush_knn_capped: clientBrush.brush_knn_capped,
+            selected_cluster_bb2d: clientBrush.selected_cluster_bb2d,
+            selected_candidate_source: clientBrush.selected_candidate_source,
+            selected_candidate_scale: clientBrush.selected_candidate_scale,
+            candidates: Array.isArray(clientBrush.candidates) ?
+                clientBrush.candidates.slice(0, 32).map(compactCandidate).filter(Boolean) :
+                undefined
         } : null,
         sam3: sam3 ? {
             applied: sam3.applied,
@@ -386,43 +499,48 @@ const buildCandidateDebug = (replay) => {
     };
 };
 
-const compactReplay = (evalCase, replay) => ({
-    id: evalCase.id ?? evalCase.captured_at ?? `${evalCase.prompt?.click_xy?.join(',')}`,
-    replay_wall_ms: replay.replay_wall_ms,
-    input_camera_changed: !!evalCase.camera_changed_since_boxer_run,
-    source_prompt: replay.source_prompt,
-    replay_prompt: replay.replay_prompt,
-    source_canvas: replay.source_canvas,
-    replay_canvas: replay.replay_canvas,
-    label: replay.boxer_result?.label,
-    confidence: replay.boxer_result?.confidence,
-    score2d: replay.boxer_result?.score2d,
-    bb2d: replay.boxer_result?.normalized_bb2d,
-    raw_bb2d: replay.boxer_result?.bb2d,
-    bb2d_format: replay.boxer_result?.bb2d_format,
-    response_candidate_counts: {
-        candidates: replay.boxer_result?.candidates?.length ?? 0,
-        proposals: replay.boxer_result?.proposals?.length ?? 0,
-        detections: replay.boxer_result?.detections?.length ?? 0
-    },
-    dimensions: replay.boxer_result?.dimensions,
-    center: replay.boxer_result?.center,
-    raw_label: replay.raw_boxer_result?.label ?? replay.boxer_result?.raw_boxer_result?.label,
-    raw_dimensions: replay.raw_boxer_result?.dimensions ?? replay.boxer_result?.raw_boxer_result?.dimensions,
-    raw_center: replay.raw_boxer_result?.center ?? replay.boxer_result?.raw_boxer_result?.center,
-    geometry_refinement: replay.boxer_result?.geometry_refinement,
-    target_projected_bb2d: replay.boxer_result?.target_projected_bb2d ?? replay.direct_lift_probe?.target_projected_bb2d,
-    bb2d_target_metrics: replay.boxer_result?.bb2d_target_metrics ??
-        replay.direct_lift_probe?.candidates?.[0]?.bb2d_target_metrics,
-    timing: compactTiming(replay.timing ?? replay.click_debug),
-    direct_lift_probe: replay.direct_lift_probe ?? replay.boxer_result?.direct_lift,
-    client_lift_probe: replay.client_lift_probe ?? replay.boxer_result?.client_lift,
-    client_click_probe: replay.client_click_probe ?? replay.boxer_result?.client_click,
-    sam3_augmentation: replay.boxer_result?.sam3_augmentation,
-    candidate_debug: buildCandidateDebug(replay),
-    raw_metrics: replay.raw_metrics,
-    metrics: replay.metrics
-});
+const compactReplay = (evalCase, replay) => {
+    const timing = compactTiming(replay.timing ?? replay.click_debug);
+    return {
+        id: evalCase.id ?? evalCase.captured_at ?? `${evalCase.prompt?.click_xy?.join(',')}`,
+        replay_wall_ms: replay.replay_wall_ms,
+        input_camera_changed: !!evalCase.camera_changed_since_boxer_run,
+        source_prompt: replay.source_prompt,
+        replay_prompt: replay.replay_prompt,
+        source_canvas: replay.source_canvas,
+        replay_canvas: replay.replay_canvas,
+        label: replay.boxer_result?.label,
+        confidence: replay.boxer_result?.confidence,
+        score2d: replay.boxer_result?.score2d,
+        bb2d: replay.boxer_result?.normalized_bb2d,
+        raw_bb2d: replay.boxer_result?.bb2d,
+        bb2d_format: replay.boxer_result?.bb2d_format,
+        response_candidate_counts: {
+            candidates: replay.boxer_result?.candidates?.length ?? 0,
+            proposals: replay.boxer_result?.proposals?.length ?? 0,
+            detections: replay.boxer_result?.detections?.length ?? 0
+        },
+        dimensions: replay.boxer_result?.dimensions,
+        center: replay.boxer_result?.center,
+        raw_label: replay.raw_boxer_result?.label ?? replay.boxer_result?.raw_boxer_result?.label,
+        raw_dimensions: replay.raw_boxer_result?.dimensions ?? replay.boxer_result?.raw_boxer_result?.dimensions,
+        raw_center: replay.raw_boxer_result?.center ?? replay.boxer_result?.raw_boxer_result?.center,
+        geometry_refinement: replay.boxer_result?.geometry_refinement,
+        target_projected_bb2d: replay.boxer_result?.target_projected_bb2d ?? replay.direct_lift_probe?.target_projected_bb2d,
+        bb2d_target_metrics: replay.boxer_result?.bb2d_target_metrics ??
+            replay.direct_lift_probe?.candidates?.[0]?.bb2d_target_metrics,
+        timing,
+        depth: compactDepth(replay.frame, timing),
+        direct_lift_probe: replay.direct_lift_probe ?? replay.boxer_result?.direct_lift,
+        client_lift_probe: replay.client_lift_probe ?? replay.boxer_result?.client_lift,
+        client_click_probe: replay.client_click_probe ?? replay.boxer_result?.client_click,
+        client_brush_probe: replay.client_brush_probe ?? replay.boxer_result?.client_brush,
+        sam3_augmentation: replay.boxer_result?.sam3_augmentation,
+        candidate_debug: buildCandidateDebug(replay),
+        raw_metrics: replay.raw_metrics,
+        metrics: replay.metrics
+    };
+};
 
 const roundNumber = (value, decimals = 6) => (
     Number.isFinite(value) ? Number(value.toFixed(decimals)) : value
@@ -476,13 +594,13 @@ const pickRuntimeObb = (obb) => {
     });
 };
 
-const runtimeSignature = (replay) => stableValue({
+const runtimeSignature = replay => stableValue({
     replay_prompt: replay.replay_prompt,
     boxer_result: pickRuntimeObb(replay.boxer_result),
     raw_boxer_result: pickRuntimeObb(replay.raw_boxer_result ?? replay.boxer_result?.raw_boxer_result)
 });
 
-const isTargetDependentPrompt = (prompt) => (
+const isTargetDependentPrompt = prompt => (
     prompt?.type === 'lift_target_box' ||
     prompt?.type === 'client_lift_target_box'
 );
@@ -518,14 +636,192 @@ const findFirstDifference = (a, b, path = '') => {
     return null;
 };
 
-const finite = (value) => typeof value === 'number' && Number.isFinite(value);
+function finite(value) {
+    return typeof value === 'number' && Number.isFinite(value);
+}
 
 const average = (values) => {
     const good = values.filter(finite);
     return good.length ? good.reduce((sum, value) => sum + value, 0) / good.length : null;
 };
 
-const aabbVolume = (aabb) => (
+const percentile = (values, q) => {
+    const good = values.filter(finite).sort((a, b) => a - b);
+    if (!good.length) return null;
+    const pos = (good.length - 1) * q;
+    const lo = Math.floor(pos);
+    const hi = Math.ceil(pos);
+    if (lo === hi) return good[lo];
+    return good[lo] + (good[hi] - good[lo]) * (pos - lo);
+};
+
+const maxFinite = (values) => {
+    const good = values.filter(finite);
+    return good.length ? Math.max(...good) : null;
+};
+
+const minFinite = (values) => {
+    const good = values.filter(finite);
+    return good.length ? Math.min(...good) : null;
+};
+
+const countBy = (items, keyFn) => {
+    const counts = {};
+    for (const item of items) {
+        const key = keyFn(item);
+        if (!key) continue;
+        counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+};
+
+const timingStats = (results, field) => {
+    const values = results.map(result => result.timing?.[field]);
+    return {
+        avg: average(values),
+        p95: percentile(values, 0.95),
+        max: maxFinite(values)
+    };
+};
+
+const selectedCandidateSummary = (result) => {
+    const brush = result.candidate_debug?.client_brush;
+    const click = result.candidate_debug?.client_click;
+    const candidates = result.candidate_debug?.candidates ?? [];
+    const top = candidates[0];
+    const source = brush?.selected_candidate_source ??
+        click?.selected_candidate_source ??
+        top?.source ??
+        null;
+    const scale = brush?.selected_candidate_scale ??
+        click?.selected_candidate_scale ??
+        top?.scale ??
+        null;
+    return {
+        source,
+        scale,
+        score: top?.selection_score ?? top?.score ?? null,
+        point_count: top?.point_count ?? null,
+        depth_support_ratio: top?.depth_support_ratio ?? null,
+        depth_consistent_point_count: top?.depth_consistent_point_count ?? null,
+        projected_candidate_count: top?.projected_candidate_count ?? null,
+        front_surface_candidate_count: top?.front_surface_candidate_count ?? null
+    };
+};
+
+const leakStatus = (check) => {
+    if (!check) return 'not_requested';
+    if (check.skipped) return 'skipped';
+    if (!check.checked) return 'not_checked';
+    return check.passed ? 'passed' : 'failed';
+};
+
+const buildCaseReport = (result) => {
+    const selected = selectedCandidateSummary(result);
+    const brush = result.candidate_debug?.client_brush;
+    const click = result.candidate_debug?.client_click;
+    const sam3 = result.candidate_debug?.sam3;
+    const samAttempts = sam3?.debug?.attempts ?? [];
+    return {
+        id: result.id,
+        ok: result.ok,
+        prompt_type: result.replay_prompt?.type ?? result.source_prompt?.type ?? null,
+        label: result.label ?? null,
+        aabb_iou: result.metrics?.aabb_iou ?? null,
+        center_distance: result.metrics?.center_distance ?? null,
+        bb2d_target_iou: result.bb2d_target_metrics?.bb2d_iou ?? null,
+        selected_candidate: selected,
+        depth: {
+            source: result.depth?.source ?? result.timing?.depth_source ?? null,
+            valid_ratio: result.depth?.valid_ratio ?? null,
+            valid_pixels: result.depth?.valid_pixels ?? null,
+            total_pixels: result.depth?.total_pixels ?? null,
+            min: result.depth?.min ?? null,
+            max: result.depth?.max ?? null,
+            visibility_index_ms: result.depth?.visibility_index_ms ?? null,
+            visibility_view_ms: result.depth?.visibility_view_ms ?? null,
+            visibility_view_reused: result.depth?.visibility_view_reused ?? null,
+            visibility_tile_count: result.depth?.visibility_tile_count ?? null,
+            visibility_visible_tiles: result.depth?.visibility_visible_tiles ?? null
+        },
+        timing_ms: {
+            app_total: result.timing?.total_ms ?? null,
+            frame: result.timing?.frame_ms ?? null,
+            backend: result.timing?.backend_ms ?? null,
+            refine: result.timing?.refine_ms ?? null,
+            draw: result.timing?.draw_ms ?? null,
+            replay_wall: result.replay_wall_ms ?? null
+        },
+        client_click: click ? {
+            local_candidate_count: click.local_candidate_count,
+            front_surface_candidate_count: click.front_surface_candidate_count,
+            cluster_point_count: click.cluster_point_count,
+            connected_cluster_point_count: click.connected_cluster_point_count,
+            depth_window_point_count: click.depth_window_point_count,
+            click_depth: click.click_depth
+        } : undefined,
+        client_brush: brush ? {
+            shape: brush.shape,
+            brush_area_ratio: brush.brush_area_ratio,
+            brush_stroke_point_count: brush.brush_stroke_point_count,
+            brush_candidate_count: brush.brush_candidate_count,
+            selected_point_count: brush.selected_point_count,
+            connected_cluster_point_count: brush.connected_cluster_point_count,
+            brush_component_count: brush.brush_component_count,
+            brush_component_point_counts: brush.brush_component_point_counts,
+            brush_knn_point_count: brush.brush_knn_point_count,
+            brush_knn_capped: brush.brush_knn_capped,
+            selected_candidate_source: brush.selected_candidate_source,
+            selected_candidate_scale: brush.selected_candidate_scale,
+            click_depth: brush.click_depth,
+            top_candidates: (brush.candidates ?? []).slice(0, 4).map(candidate => ({
+                source: candidate.source,
+                scale: candidate.scale,
+                selection_score: candidate.selection_score,
+                point_count: candidate.point_count,
+                inside_candidate_count: candidate.inside_candidate_count,
+                depth_consistent_point_count: candidate.depth_consistent_point_count,
+                cluster_inside_count: candidate.cluster_inside_count,
+                support_inside_count: candidate.support_inside_count,
+                support_ratio: candidate.support_ratio,
+                brush_evidence_ratio: candidate.brush_evidence_ratio
+            }))
+        } : undefined,
+        knn: click ? {
+            cluster_point_count: click.knn_cluster_point_count,
+            source_candidate_count: click.knn_source_candidate_count,
+            relaxed: click.knn_cluster_relaxed,
+            capped: click.knn_cluster_capped,
+            selected: selected.source === 'knn_cluster'
+        } : undefined,
+        sam3: sam3 ? {
+            applied: sam3.applied,
+            succeeded: samSucceeded(result),
+            mask_area_ratio: sam3.mask_area_ratio ?? sam3.debug?.mask_area_ratio ?? null,
+            rejection_reason: sam3.debug?.rejection_reason ?? null,
+            error: sam3.error ?? sam3.debug?.error ?? null,
+            upload_ms: sam3.debug?.upload_ms ?? null,
+            segment_ms: sam3.debug?.segment_ms ?? null,
+            attempts: samAttempts.map(attempt => ({
+                endpoint: attempt.endpoint,
+                status: attempt.status,
+                ok: attempt.ok
+            }))
+        } : undefined,
+        target_leak: {
+            status: leakStatus(result.target_leak_check),
+            first_difference_path: result.target_leak_check?.first_difference?.path ?? null,
+            reason: result.target_leak_check?.reason ?? null
+        }
+    };
+};
+
+const attachCaseReport = (result) => {
+    result.report = buildCaseReport(result);
+    return result;
+};
+
+const aabbVolume = aabb => (
     Math.max(0, aabb.max[0] - aabb.min[0]) *
     Math.max(0, aabb.max[1] - aabb.min[1]) *
     Math.max(0, aabb.max[2] - aabb.min[2])
@@ -590,7 +886,7 @@ const addAggregateTargetGroups = (results) => {
     return aggregateGroups;
 };
 
-const summarizeResults = (results) => {
+const summarizeResults = (results, options = {}) => {
     const ok = results.filter(result => result.ok);
     const selectedIous = ok.map(result => result.metrics?.aabb_iou);
     const centers = ok.map(result => result.metrics?.center_distance);
@@ -598,6 +894,24 @@ const summarizeResults = (results) => {
     const oracleIous = ok.map(result => result.direct_lift_probe?.oracle_best?.metrics?.aabb_iou);
     const groupFusedIous = ok.map(result => result.group_fused_metrics?.aabb_iou);
     const replayWallMs = ok.map(result => result.replay_wall_ms);
+    const caseReports = ok.map(result => result.report ?? buildCaseReport(result));
+    const selectedSources = caseReports.map(report => report.selected_candidate?.source);
+    const selectedSourceBuckets = {};
+    for (const source of new Set(selectedSources.filter(Boolean))) {
+        const bucket = caseReports.filter(report => report.selected_candidate?.source === source);
+        selectedSourceBuckets[source] = {
+            count: bucket.length,
+            avg_iou: average(bucket.map(report => report.aabb_iou)),
+            avg_center_distance: average(bucket.map(report => report.center_distance)),
+            scales: countBy(bucket, (report) => {
+                const scale = report.selected_candidate?.scale;
+                return finite(scale) ? String(scale) : null;
+            })
+        };
+    }
+    const depthReports = caseReports.map(report => report.depth).filter(Boolean);
+    const brushReports = caseReports.map(report => report.client_brush).filter(Boolean);
+    const samReports = caseReports.map(report => report.sam3).filter(Boolean);
     const targetLeakChecks = ok.map(result => result.target_leak_check).filter(Boolean);
     const checkedTargetLeaks = targetLeakChecks.filter(check => check.checked);
     const failedTargetLeaks = checkedTargetLeaks.filter(check => !check.passed);
@@ -613,17 +927,86 @@ const summarizeResults = (results) => {
         avg_direct_lift_oracle_iou: average(oracleIous),
         avg_replay_wall_ms: average(replayWallMs),
         max_replay_wall_ms: replayWallMs.filter(finite).length ? Math.max(...replayWallMs.filter(finite)) : null,
+        timing_ms: {
+            replay_wall: {
+                avg: average(replayWallMs),
+                p95: percentile(replayWallMs, 0.95),
+                max: maxFinite(replayWallMs)
+            },
+            app_total: timingStats(ok, 'total_ms'),
+            frame: timingStats(ok, 'frame_ms'),
+            backend: timingStats(ok, 'backend_ms'),
+            refine: timingStats(ok, 'refine_ms'),
+            draw: timingStats(ok, 'draw_ms')
+        },
+        selected_candidates: {
+            sources: countBy(caseReports, report => report.selected_candidate?.source),
+            source_scale_pairs: countBy(caseReports, (report) => {
+                const source = report.selected_candidate?.source;
+                const scale = report.selected_candidate?.scale;
+                return source && finite(scale) ? `${source}@${scale}` : null;
+            }),
+            by_source: selectedSourceBuckets
+        },
+        depth: {
+            sources: countBy(depthReports, depth => depth.source),
+            avg_valid_ratio: average(depthReports.map(depth => depth.valid_ratio)),
+            min_valid_ratio: minFinite(depthReports.map(depth => depth.valid_ratio)),
+            max_valid_ratio: maxFinite(depthReports.map(depth => depth.valid_ratio)),
+            avg_visibility_index_ms: average(depthReports.map(depth => depth.visibility_index_ms)),
+            avg_visibility_view_ms: average(depthReports.map(depth => depth.visibility_view_ms)),
+            reused_visibility_views: depthReports.filter(depth => depth.visibility_view_reused).length,
+            avg_visibility_visible_tiles: average(depthReports.map(depth => depth.visibility_visible_tiles)),
+            avg_visibility_tile_count: average(depthReports.map(depth => depth.visibility_tile_count))
+        },
+        client_brush: brushReports.length ? {
+            cases: brushReports.length,
+            selected_sources: countBy(brushReports, brush => brush.selected_candidate_source),
+            selected_scales: countBy(brushReports, brush => (
+                finite(brush.selected_candidate_scale) ? String(brush.selected_candidate_scale) : null
+            )),
+            avg_brush_candidate_count: average(brushReports.map(brush => brush.brush_candidate_count)),
+            avg_selected_point_count: average(brushReports.map(brush => brush.selected_point_count)),
+            avg_connected_cluster_point_count: average(brushReports.map(brush => brush.connected_cluster_point_count)),
+            avg_brush_component_count: average(brushReports.map(brush => brush.brush_component_count)),
+            max_brush_component_count: maxFinite(brushReports.map(brush => brush.brush_component_count)),
+            avg_brush_knn_point_count: average(brushReports.map(brush => brush.brush_knn_point_count)),
+            brush_knn_capped_cases: brushReports.filter(brush => brush.brush_knn_capped).length,
+            avg_brush_area_ratio: average(brushReports.map(brush => brush.brush_area_ratio))
+        } : undefined,
+        sam3: samReports.length ? {
+            cases: samReports.length,
+            succeeded: samReports.filter(sam => sam.succeeded).length,
+            applied: samReports.filter(sam => sam.applied).length,
+            avg_mask_area_ratio: average(samReports.map(sam => sam.mask_area_ratio)),
+            rejection_reasons: countBy(samReports, sam => sam.rejection_reason ?? sam.error)
+        } : undefined,
         target_leak_checks: targetLeakChecks.length ? {
             total: targetLeakChecks.length,
             checked: checkedTargetLeaks.length,
             skipped: targetLeakChecks.filter(check => check.skipped).length,
             failed: failedTargetLeaks.length,
-            passed: checkedTargetLeaks.filter(check => check.passed).length
+            passed: checkedTargetLeaks.filter(check => check.passed).length,
+            failed_ids: ok
+            .filter(result => result.target_leak_check?.checked && !result.target_leak_check.passed)
+            .map(result => result.id)
         } : undefined,
+        per_case: options.detail ? caseReports : caseReports.map(report => ({
+            id: report.id,
+            ok: report.ok,
+            prompt_type: report.prompt_type,
+            aabb_iou: report.aabb_iou,
+            center_distance: report.center_distance,
+            bb2d_target_iou: report.bb2d_target_iou,
+            selected_candidate: report.selected_candidate,
+            target_leak: report.target_leak
+        })),
         min_iou: selectedIous.filter(finite).length ? Math.min(...selectedIous.filter(finite)) : null,
         max_iou: selectedIous.filter(finite).length ? Math.max(...selectedIous.filter(finite)) : null,
         buckets: ['clean', 'camera_changed'].reduce((acc, key) => {
-            const bucket = ok.filter(result => key === 'camera_changed' ? result.input_camera_changed : !result.input_camera_changed);
+            const bucket = ok.filter(result => (
+                key === 'camera_changed' ? result.input_camera_changed : !result.input_camera_changed
+            ));
             acc[key] = {
                 ok: bucket.length,
                 avg_iou: average(bucket.map(result => result.metrics?.aabb_iou)),
@@ -768,7 +1151,7 @@ const createReplayPage = async ({ chromium, url, firstCase, headless, loadTimeou
 const runReplayEnvelope = async (page, evalCase, caseTimeoutMs) => {
     const started = performance.now();
     const envelope = await withTimeout(
-        page.evaluate(async input => {
+        page.evaluate(async (input) => {
             const replay = await window.supersplatDebug.runBoxerEvalCase(input);
             return {
                 replay,
@@ -793,6 +1176,23 @@ const samSucceeded = (result) => {
         finite(region.point_count) &&
         region.point_count >= 24 &&
         attempts.some(attempt => attempt?.ok);
+};
+
+const hasRequiredBrushPoints = (result) => {
+    const replayPrompt = result.replay_prompt;
+    const sourcePrompt = result.source_prompt;
+    if (replayPrompt?.type !== 'client_brush' && sourcePrompt?.type !== 'client_brush') return true;
+    const points = replayPrompt?.brush?.points ?? sourcePrompt?.brush?.points;
+    const consumedPointCount = result.report?.client_brush?.brush_stroke_point_count ??
+        result.candidate_debug?.client_brush?.brush_stroke_point_count;
+    return (Array.isArray(points) && points.length > 0) ||
+        (Number.isFinite(consumedPointCount) && consumedPointCount > 0);
+};
+
+const evalCaseHasRequiredBrushPoints = (evalCase) => {
+    if (evalCase.prompt?.type !== 'client_brush') return true;
+    const points = evalCase.prompt?.brush?.points;
+    return Array.isArray(points) && points.length > 0;
 };
 
 const buildTargetLeakCheck = async ({ page, evalCase, baselineReplay, caseTimeoutMs, args }) => {
@@ -856,6 +1256,7 @@ const runCase = async ({ page, browserConsole, evalCase, caseTimeoutMs, args }) 
     };
     const targetLeakCheck = await buildTargetLeakCheck({ page, evalCase, baselineReplay: replay, caseTimeoutMs, args });
     if (targetLeakCheck) result.target_leak_check = targetLeakCheck;
+    attachCaseReport(result);
     return {
         ...result,
         browser_console: browserConsole.slice(consoleStart)
@@ -908,6 +1309,7 @@ const runCaseInFreshBrowser = async ({ chromium, url, evalCase, headless, loadTi
         const result = { ok: true, ...compactReplay(evalCase, replay) };
         const targetLeakCheck = await buildTargetLeakCheck({ page, evalCase, baselineReplay: replay, caseTimeoutMs, args });
         if (targetLeakCheck) result.target_leak_check = targetLeakCheck;
+        attachCaseReport(result);
         return { ...result, browser_console: browserConsole };
     } finally {
         await browser.close().catch(() => {});
@@ -924,6 +1326,12 @@ const main = async () => {
     console.log(`Replaying ${cases.length} Boxer eval case(s) against ${args.url}`);
 
     const evalCases = cases.map(evalCase => withPromptOverride(evalCase, args));
+    if (args.requireBrushPoints) {
+        const missingBrushPoints = evalCases.filter(evalCase => !evalCaseHasRequiredBrushPoints(evalCase));
+        if (missingBrushPoints.length > 0) {
+            throw new Error(`Brush point verification failed before replay for ${missingBrushPoints.length} case(s): ${missingBrushPoints.map((evalCase, index) => evalCase.id ?? evalCase.captured_at ?? `case-${index + 1}`).join(', ')}`);
+        }
+    }
     if (args.fusion) {
         console.log(`Running Boxer multi-view fusion for ${evalCases.length} case(s)`);
         const fusion = await runFusion({ chromium, url: args.url, evalCases, args });
@@ -942,7 +1350,8 @@ const main = async () => {
             }))
         };
         console.log('Fusion summary:', JSON.stringify(summary, null, 2));
-        console.log(JSON.stringify(fusion, null, 2));
+        if (args.out) console.log(`Wrote fusion results to ${args.out}`);
+        if (args.printResults) console.log(JSON.stringify(fusion, null, 2));
         return;
     }
 
@@ -1009,7 +1418,7 @@ const main = async () => {
         await writeResults(args.out, results);
     }
 
-    const summary = summarizeResults(results);
+    const summary = summarizeResults(results, { detail: args.summaryDetail });
     if (args.aggregateTargetGroups) {
         summary.aggregate_target_groups = aggregateGroups.map(group => ({
             case_count: group.case_count,
@@ -1018,7 +1427,8 @@ const main = async () => {
         }));
     }
     console.log('Summary:', JSON.stringify(summary, null, 2));
-    console.log(JSON.stringify(results, null, 2));
+    if (args.out) console.log(`Wrote replay results to ${args.out}`);
+    if (args.printResults) console.log(JSON.stringify(results, null, 2));
     if (args.verifyTargetLeak) {
         const failedLeakChecks = results.filter(result => result.target_leak_check?.checked && !result.target_leak_check.passed);
         if (failedLeakChecks.length > 0) {
@@ -1030,6 +1440,13 @@ const main = async () => {
         const failedSam = results.filter(result => result.ok && !samSucceeded(result));
         if (failedSam.length > 0) {
             console.error(`SAM success verification failed for ${failedSam.length} case(s): ${failedSam.map(result => result.id).join(', ')}`);
+            process.exitCode = 1;
+        }
+    }
+    if (args.requireBrushPoints) {
+        const failedBrush = results.filter(result => result.ok && !hasRequiredBrushPoints(result));
+        if (failedBrush.length > 0) {
+            console.error(`Brush point verification failed for ${failedBrush.length} case(s): ${failedBrush.map(result => result.id).join(', ')}`);
             process.exitCode = 1;
         }
     }
