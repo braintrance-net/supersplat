@@ -815,3 +815,6 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
 #bt-overlay .bt-as-tile:active {
     transform: scale(0.97);
 }
+
+// normalize the play/pause glyph inside the context-bar pill
+#bt-overlay .bt-pause svg { width: 12px; height: 12px; }

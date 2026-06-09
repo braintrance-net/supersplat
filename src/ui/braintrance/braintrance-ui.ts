@@ -304,7 +304,9 @@ class BraintranceUI {
 
         const head = el('div', 'bt-cb-head');
         head.appendChild(el('div', 'bt-cb-name', `${ICON.globe}<span>${this.selection.name}</span>`));
-        head.appendChild(el('div', 'bt-pause', `${ICON.pause}<span>Pause</span>`));
+        const pause = el('div', 'bt-pause', `${this.playing ? ICON.pause : ICON.play}<span>${this.playing ? 'Pause' : 'Play'}</span>`);
+        pause.addEventListener('click', () => { this.togglePlay(); this.refreshBottom(); });
+        head.appendChild(pause);
         bar.appendChild(head);
 
         // Badges = the effects / interactions already on this selection.
