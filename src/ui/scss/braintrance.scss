@@ -72,6 +72,8 @@ body.bt-mode {
     .bt-contextbar,
     .bt-effects-panel,
     .bt-strength-pop,
+    .bt-objects-panel,
+    .bt-audio-bar,
     .bt-topbar { pointer-events: auto; }
 }
 
@@ -483,6 +485,76 @@ body.bt-mode {
         display: flex; align-items: center; gap: 10px;
         font-size: 13px; color: var(--bt-ink-3); margin: 4px 0 2px;
         input[type='range'] { flex: 1; accent-color: var(--bt-ink); }
+    }
+}
+
+// ── Audio mode: Objects panel (left) + audio contextual bar ─────────────────
+.bt-objects-panel {
+    position: absolute;
+    top: 98px; left: 86px;        // right of the rail
+    width: 260px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    padding: 14px;
+
+    .bt-op-head {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 12px;
+        .bt-op-title { font-size: 16px; font-weight: 600; }
+        .bt-op-add { cursor: pointer; color: var(--bt-ink-2); display: inline-flex;
+            width: 26px; height: 26px; align-items: center; justify-content: center;
+            border-radius: 6px; &:hover { background: var(--bt-hover); } }
+    }
+    .bt-op-row {
+        display: flex; align-items: center; gap: 10px;
+        height: 42px; padding: 0 12px; margin-bottom: 8px;
+        border: 1px solid var(--bt-border); border-radius: 8px;
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        svg { width: 18px; height: 18px; color: var(--bt-ink-2); flex-shrink: 0; }
+        .bt-op-name { flex: 1; }
+        .bt-op-badge { font-size: 11px; font-weight: 500; color: var(--bt-ink-3); }
+        &:hover { background: var(--bt-hover); }
+        &.is-active { box-shadow: 0 0 0 2px var(--bt-ink); border-color: transparent; }
+    }
+}
+
+.bt-audio-bar {
+    position: absolute;
+    left: 50%; bottom: 78px; transform: translateX(-50%);
+    width: 480px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    padding: 16px;
+
+    .bt-ab-head {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
+        .bt-ab-name { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600;
+            svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
+        .bt-ab-badge { font-size: 11px; font-weight: 600; color: var(--bt-ink-2);
+            background: #eee; border-radius: 6px; padding: 2px 8px; }
+        .bt-ab-replace { margin-left: auto; font-size: 13px; color: var(--bt-ink-2); cursor: pointer;
+            padding: 4px 10px; border-radius: 6px; &:hover { background: var(--bt-hover); } }
+    }
+    .bt-ab-controls {
+        display: flex; align-items: center; gap: 18px; margin-bottom: 14px;
+        font-size: 13px; color: var(--bt-ink-3);
+        .bt-ab-vol { flex: 1; display: flex; align-items: center; gap: 8px;
+            input[type='range'] { flex: 1; accent-color: var(--bt-audio); }
+            .bt-ab-val { color: var(--bt-ink); font-weight: 600; min-width: 22px; text-align: right; } }
+        .bt-ab-range { display: inline-flex; align-items: center; gap: 8px;
+            border: 1px solid var(--bt-border); border-radius: 8px; padding: 6px 10px;
+            strong { color: var(--bt-ink); font-weight: 600; } }
+        .bt-ab-loop { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+            input { accent-color: var(--bt-audio); } }
+    }
+    .bt-ab-place {
+        width: 100%; height: 40px;
+        border: none; border-radius: 8px;
+        background: #f1f1f1; color: var(--bt-ink);
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        &:hover { background: #e6e6e6; }
     }
 }
 

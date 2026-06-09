@@ -46,7 +46,9 @@ const ICON = {
     expand: stroke('<path d="M21 21l-6-6"/><path d="M21 15v6h-6"/><path d="M3 3l6 6"/><path d="M3 9V3h6"/>', 18),
     x: stroke('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', 18),
     trash: stroke('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', 15),
-    chevronRight: stroke('<path d="m9 18 6-6-6-6"/>', 16)
+    chevronRight: stroke('<path d="m9 18 6-6-6-6"/>', 16),
+    plus: stroke('<path d="M12 5v14"/><path d="M5 12h14"/>', 18),
+    camera: stroke('<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/>', 18)
 };
 
 // Effect catalogue (faked — labels per spec §7.6). Presets are single-select
@@ -95,6 +97,18 @@ class BraintranceUI {
     private openChip: number | null = null; // index of the chip whose strength popover is open
     private effectsPanel: HTMLElement | null = null;
     private strengthPop: HTMLElement | null = null;
+
+    // audio-mode state (fixtures: one ambient bed + one unplaced spatial source)
+    private audioMode = false;
+    private audioPanel: HTMLElement | null = null;
+    private audioBar: HTMLElement | null = null;
+    private placingAudio = false;
+    private audioMarkers: Entity[] = [];
+    private activeAudio = 1;
+    private audioSources = [
+        { name: 'Cathedral tone', kind: 'Stereo', volume: 62, range: 8, loop: true, placed: true },
+        { name: 'Footsteps', kind: 'Spatial', volume: 23, range: 8, loop: false, placed: false }
+    ];
 
     constructor() {
         document.body.classList.add('bt-mode');
@@ -274,9 +288,13 @@ class BraintranceUI {
     }
 
     private selectTool(tool: RailTool) {
-        // SAM = select the placeholder; any other tool returns to explore chrome.
+        if (tool !== 'audio') this.exitAudio();
         if (tool === 'sam') {
             this.selectObject(true);
+        } else if (tool === 'audio') {
+            this.selectObject(false);
+            this.setActiveTool('audio');
+            this.enterAudio();
         } else {
             this.selectObject(false);
             this.setActiveTool(tool);
@@ -293,11 +311,15 @@ class BraintranceUI {
         }
     }
 
-    // Re-render the bottom-center panel (snapshot panel vs context bar / chips).
+    // Re-render the bottom-center panel (audio bar vs context bar / chips vs snapshot).
     private refreshBottom() {
-        const next = this.state === 'selected' ? this.contextBar() : this.snapshotPanel();
+        let next: HTMLElement;
+        if (this.audioMode) next = this.buildAudioBar();
+        else if (this.state === 'selected') next = this.contextBar();
+        else next = this.snapshotPanel();
         this.bottomCenter.replaceWith(next);
         this.bottomCenter = next;
+        this.audioBar = this.audioMode ? next : null;
     }
 
     // ── effects library ("Enhance with effects") ──
@@ -407,6 +429,130 @@ class BraintranceUI {
         this.strengthPop = null;
     }
 
+    // ── audio mode (Objects panel + audio contextual bar + placed pins) ──
+    private enterAudio() {
+        this.audioMode = true;
+        this.placingAudio = false;
+        this.audioPanel?.remove();
+        this.audioPanel = this.buildObjectsPanel();
+        this.root.appendChild(this.audioPanel);
+        this.refreshBottom(); // bottom → audio bar
+    }
+
+    private exitAudio() {
+        if (!this.audioMode && !this.audioPanel) return;
+        this.audioMode = false;
+        this.placingAudio = false;
+        this.audioPanel?.remove(); this.audioPanel = null;
+        this.audioBar = null;
+        this.refreshBottom();
+    }
+
+    private rebuildAudio() {
+        if (this.audioPanel) {
+            const p = this.buildObjectsPanel();
+            this.audioPanel.replaceWith(p);
+            this.audioPanel = p;
+        }
+        this.refreshBottom();
+    }
+
+    private buildObjectsPanel(): HTMLElement {
+        const panel = el('div', 'bt-objects-panel');
+        const head = el('div', 'bt-op-head');
+        head.appendChild(el('div', 'bt-op-title', 'Objects'));
+        const add = el('div', 'bt-op-add', ICON.plus);
+        add.addEventListener('click', () => this.addAudioSource());
+        head.appendChild(add);
+        panel.appendChild(head);
+
+        panel.appendChild(this.objectRow(ICON.globe, 'Scene', '', false, () => {}));
+        panel.appendChild(this.objectRow(ICON.camera, 'Camera', '', false, () => {}));
+        this.audioSources.forEach((s, i) => {
+            panel.appendChild(this.objectRow(ICON.audio, s.name, s.kind, this.activeAudio === i, () => this.selectAudio(i)));
+        });
+        return panel;
+    }
+
+    private objectRow(icon: string, name: string, badge: string, active: boolean, onClick: () => void): HTMLElement {
+        const row = el('div', `bt-op-row${active ? ' is-active' : ''}`,
+            `${icon}<span class="bt-op-name">${name}</span>${badge ? `<span class="bt-op-badge">${badge}</span>` : ''}`);
+        row.addEventListener('click', onClick);
+        return row;
+    }
+
+    private selectAudio(i: number) {
+        this.activeAudio = i;
+        this.placingAudio = false;
+        this.rebuildAudio();
+    }
+
+    private addAudioSource() {
+        this.audioSources.push({ name: `Audio ${this.audioSources.length + 1}`, kind: 'Spatial', volume: 50, range: 8, loop: false, placed: false });
+        this.activeAudio = this.audioSources.length - 1;
+        this.rebuildAudio();
+    }
+
+    private buildAudioBar(): HTMLElement {
+        const s = this.audioSources[this.activeAudio];
+        const bar = el('div', 'bt-audio-bar');
+
+        const head = el('div', 'bt-ab-head');
+        head.appendChild(el('div', 'bt-ab-name', `${ICON.globe}<span>${s.name}</span>`));
+        head.appendChild(el('div', 'bt-ab-badge', s.kind));
+        head.appendChild(el('div', 'bt-ab-replace', 'Replace'));
+        bar.appendChild(head);
+
+        const controls = el('div', 'bt-ab-controls');
+        const vol = el('div', 'bt-ab-vol', '<span>Volume</span>');
+        const slider = el('input') as HTMLInputElement;
+        slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(s.volume);
+        const val = el('span', 'bt-ab-val', String(s.volume));
+        slider.addEventListener('input', () => { s.volume = +slider.value; val.textContent = String(s.volume); });
+        vol.appendChild(slider); vol.appendChild(val);
+        controls.appendChild(vol);
+        controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
+        controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
+        bar.appendChild(controls);
+
+        if (s.kind === 'Spatial' && !s.placed) {
+            const place = el('button', 'bt-ab-place', this.placingAudio ? 'Click in the scene to place…' : 'Place in scene');
+            place.addEventListener('click', () => this.armPlace());
+            bar.appendChild(place);
+        }
+        return bar;
+    }
+
+    private armPlace() {
+        this.placingAudio = true;
+        this.refreshBottom(); // button label → "Click in the scene to place…"
+    }
+
+    private placeAudioAt(clientX: number, clientY: number) {
+        const s = this.audioSources[this.activeAudio];
+        const scene = this.scene;
+        const cam = this.cameraComponent();
+        if (scene?.contentRoot && cam && this.canvas) {
+            const rect = this.canvas.getBoundingClientRect();
+            const dist = scene.camera?.distance ?? 2;
+            const out = new Vec3();
+            cam.screenToWorld(clientX - rect.left, clientY - rect.top, dist, out);
+            const mat = new StandardMaterial();
+            mat.useLighting = false; mat.diffuse.set(0, 0, 0); mat.emissive.set(0.13, 0.78, 0.6); mat.update();
+            const pin = new Entity('bt-audio-pin');
+            pin.addComponent('render', { type: 'sphere' });
+            if (pin.render) pin.render.material = mat;
+            pin.setLocalScale(0.14, 0.14, 0.14);
+            pin.setPosition(out);
+            scene.contentRoot.addChild(pin);
+            this.audioMarkers.push(pin);
+            scene.forceRender = true;
+        }
+        s.placed = true;
+        this.placingAudio = false;
+        this.rebuildAudio();
+    }
+
     // Re-render the header center cluster (camera hints vs transform tools). Also
     // called when the gizmo mode changes so the active Q/E/R highlight updates.
     private refreshHeaderCenter() {
@@ -463,6 +609,8 @@ class BraintranceUI {
         canvas.addEventListener('pointerup', (e) => {
             const wasDown = down; down = false;
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
+            if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
+            if (this.audioMode) return; // audio mode: clicks are for placement only
             this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));
         });
     }
