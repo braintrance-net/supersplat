@@ -1,4 +1,4 @@
-import { Mat4, Quat, Vec3 } from 'playcanvas';
+import { Color, Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Camera } from '../camera';
 import { Events } from '../events';
@@ -48,6 +48,18 @@ type GroundMeshHit = {
     source?: 'mesh' | 'cached';
 };
 
+type CollisionDebugTriangle = {
+    index: number;
+    triangle: CollisionTriangle;
+};
+
+type CollisionDebugSample = {
+    at: string;
+    perfNow: number;
+    kind: string;
+    details: Record<string, unknown>;
+};
+
 type PlayerCollisionBody = {
     head: Vec3;
     eye: Vec3;
@@ -90,6 +102,17 @@ const COLLISION_MESH_BLOCK_REPORT_INTERVAL_MS = 180;
 const COLLISION_MESH_STUCK_MS = 650;
 const COLLISION_MESH_MAX_FLOOR_NORMAL_Y = 0.75;
 const COLLISION_MESH_SWEEP_STEP = 0.05;
+const COLLISION_DEBUG_TRIANGLE_RADIUS = 2.2;
+const COLLISION_DEBUG_TRIANGLE_LIMIT = 120;
+const COLLISION_DEBUG_HISTORY_LIMIT = 900;
+const COLLISION_DEBUG_PLAYER_COLOR = new Color(0.1, 0.72, 1, 1);
+const COLLISION_DEBUG_EYE_COLOR = new Color(0.82, 0.96, 1, 1);
+const COLLISION_DEBUG_FLOOR_COLOR = new Color(0.18, 1, 0.38, 1);
+const COLLISION_DEBUG_WALL_COLOR = new Color(1, 0.18, 0.12, 1);
+const COLLISION_DEBUG_HIT_COLOR = new Color(1, 0, 0.9, 1);
+const COLLISION_DEBUG_RAY_COLOR = new Color(1, 0.86, 0.18, 1);
+const COLLISION_DEBUG_DESIRED_MOVE_COLOR = new Color(1, 0.62, 0.12, 1);
+const COLLISION_DEBUG_RESOLVED_MOVE_COLOR = new Color(0.35, 1, 0.95, 1);
 
 type CollisionTriangle = {
     ax: number;
@@ -287,6 +310,56 @@ class WalkCollisionMesh {
             }
         }
         return best;
+    }
+
+    triangleAt(index: number) {
+        return this.triangles[index] ?? null;
+    }
+
+    debugTrianglesNear(x: number, z: number, radius = COLLISION_DEBUG_TRIANGLE_RADIUS, limit = COLLISION_DEBUG_TRIANGLE_LIMIT) {
+        const minCellX = Math.floor((x - radius) / COLLISION_MESH_CELL_SIZE);
+        const maxCellX = Math.floor((x + radius) / COLLISION_MESH_CELL_SIZE);
+        const minCellZ = Math.floor((z - radius) / COLLISION_MESH_CELL_SIZE);
+        const maxCellZ = Math.floor((z + radius) / COLLISION_MESH_CELL_SIZE);
+        const checked = new Set<number>();
+        const result: CollisionDebugTriangle[] = [];
+
+        const addCell = (indices?: number[]) => {
+            if (!indices) {
+                return;
+            }
+
+            for (const index of indices) {
+                if (checked.has(index)) {
+                    continue;
+                }
+                checked.add(index);
+                const triangle = this.triangles[index];
+                if (triangle.maxX < x - radius || triangle.minX > x + radius ||
+                    triangle.maxZ < z - radius || triangle.minZ > z + radius) {
+                    continue;
+                }
+                result.push({ index, triangle });
+            }
+        };
+
+        for (let cellX = minCellX; cellX <= maxCellX; cellX += 1) {
+            for (let cellZ = minCellZ; cellZ <= maxCellZ; cellZ += 1) {
+                const key = `${cellX},${cellZ}`;
+                addCell(this.blockingCells.get(key));
+                addCell(this.groundCells.get(key));
+            }
+        }
+
+        return result
+        .sort((a, b) => {
+            const acx = (a.triangle.ax + a.triangle.bx + a.triangle.cx) / 3;
+            const acz = (a.triangle.az + a.triangle.bz + a.triangle.cz) / 3;
+            const bcx = (b.triangle.ax + b.triangle.bx + b.triangle.cx) / 3;
+            const bcz = (b.triangle.az + b.triangle.bz + b.triangle.cz) / 3;
+            return Math.hypot(acx - x, acz - z) - Math.hypot(bcx - x, bcz - z);
+        })
+        .slice(0, limit);
     }
 
     private indexTriangles() {
@@ -639,6 +712,14 @@ class WalkTool {
     private lastCollisionMeshBlockReportAt = 0;
     private collisionMeshBlockedSince: number | null = null;
     private collisionMeshHeadY: number | null = null;
+    private collisionDebugEnabled = WalkTool.defaultCollisionDebugEnabled();
+    private lastCollisionDebugReason = 'idle';
+    private lastCollisionDesiredMove = new Vec3();
+    private lastCollisionResolvedMove: Vec3 | null = null;
+    private lastCollisionHitTriangle: number | null = null;
+    private lastCollisionFloorTriangle: number | null = null;
+    private lastCollisionBlockedBody: PlayerCollisionBody | null = null;
+    private readonly collisionDebugSamples: CollisionDebugSample[] = [];
     private collisionProxy: CollisionProxyState = {
         pending: false,
         frontDistance: null,
@@ -659,6 +740,125 @@ class WalkTool {
         this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
         this.events.on('walk.collisionMeshClear', this.clearCollisionMesh, this);
         this.events.on('scene.clear', this.clearCollisionMesh, this);
+        this.events.on('walk.collisionDebug', this.onCollisionDebug, this);
+        this.events.on('prerender', this.drawCollisionDebug, this);
+        this.events.function('walk.collisionDebug', () => this.collisionDebugEnabled);
+        this.events.function('walk.collisionDebugBundle', () => this.collisionDebugBundle());
+    }
+
+    private static defaultCollisionDebugEnabled() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        const params = new URLSearchParams(window.location.search);
+        return params.get('collisionDebug') === '1' ||
+            params.get('debugCollision') === '1' ||
+            params.get('walkDebug') === '1';
+    }
+
+    private onCollisionDebug(enabled = true) {
+        this.collisionDebugEnabled = Boolean(enabled);
+        this.scene.forceRender = true;
+    }
+
+    private static debugVec3(value: Vec3 | null) {
+        if (!value) {
+            return null;
+        }
+        return {
+            x: Number(value.x.toFixed(4)),
+            y: Number(value.y.toFixed(4)),
+            z: Number(value.z.toFixed(4))
+        };
+    }
+
+    private pushCollisionDebugSample(kind: string, details: Record<string, unknown>) {
+        if (!this.collisionDebugEnabled) {
+            return;
+        }
+        this.collisionDebugSamples.push({
+            at: new Date().toISOString(),
+            perfNow: Number(performance.now().toFixed(1)),
+            kind,
+            details
+        });
+        if (this.collisionDebugSamples.length > COLLISION_DEBUG_HISTORY_LIMIT) {
+            this.collisionDebugSamples.splice(0, this.collisionDebugSamples.length - COLLISION_DEBUG_HISTORY_LIMIT);
+        }
+    }
+
+    private collisionDebugInput(input: WalkInputState) {
+        return {
+            forward: Boolean(input.forward),
+            backward: Boolean(input.backward),
+            left: Boolean(input.left),
+            right: Boolean(input.right),
+            sprint: Boolean(input.sprint),
+            slide: Boolean(input.slide),
+            jump: Boolean(input.jump)
+        };
+    }
+
+    private static cloneCollisionBody(body: PlayerCollisionBody) {
+        return {
+            ...body,
+            head: body.head.clone(),
+            eye: body.eye.clone()
+        };
+    }
+
+    private static debugBody(body: PlayerCollisionBody | null) {
+        if (!body) {
+            return null;
+        }
+        return {
+            head: WalkTool.debugVec3(body.head),
+            eye: WalkTool.debugVec3(body.eye),
+            feetY: Number((body.eye.y - body.eyeHeight).toFixed(4)),
+            radius: Number(body.radius.toFixed(4)),
+            height: Number(body.height.toFixed(4)),
+            eyeHeight: Number(body.eyeHeight.toFixed(4))
+        };
+    }
+
+    private collisionDebugBundle() {
+        const mesh = this.collisionMesh;
+        return {
+            version: 1,
+            createdAt: new Date().toISOString(),
+            toolActive: this.active,
+            embeddedControls: this.embeddedControls,
+            collisionDebugEnabled: this.collisionDebugEnabled,
+            activeTool: this.events.invoke('tool.active') as string | null,
+            camera: this.events.invoke('camera.debugState') ?? null,
+            mesh: {
+                loaded: Boolean(mesh),
+                url: this.collisionMeshUrl,
+                key: this.collisionMeshKey,
+                triangles: mesh?.triangleCount ?? null,
+                blockingTriangles: mesh?.blockingTriangleCount ?? null,
+                cells: mesh?.cellCount ?? null,
+                cellSize: mesh ? COLLISION_MESH_CELL_SIZE : null,
+                capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
+                playerHeight: COLLISION_MESH_PLAYER_HEIGHT,
+                eyeHeight: COLLISION_MESH_EYE_HEIGHT,
+                stepHeight: COLLISION_MESH_STEP_HEIGHT,
+                walkSpeed: COLLISION_MESH_WALK_SPEED
+            },
+            state: {
+                debugReason: this.lastCollisionDebugReason,
+                blockedSinceMs: this.collisionMeshBlockedSince === null ? null : Number((performance.now() - this.collisionMeshBlockedSince).toFixed(1)),
+                headY: this.collisionMeshHeadY,
+                externalGroundY: this.externalGroundY,
+                externalVerticalVelocity: this.externalVerticalVelocity,
+                desiredMove: WalkTool.debugVec3(this.lastCollisionDesiredMove),
+                resolvedMove: WalkTool.debugVec3(this.lastCollisionResolvedMove),
+                hitTriangle: this.lastCollisionHitTriangle,
+                floorTriangle: this.lastCollisionFloorTriangle,
+                blockedBody: WalkTool.debugBody(this.lastCollisionBlockedBody)
+            },
+            samples: this.collisionDebugSamples
+        };
     }
 
     activate() {
@@ -1055,6 +1255,7 @@ class WalkTool {
         this.updateCollisionProxy(useCollisionProxy && moving && forwardAmount > 0);
         if (!moving) {
             this.collisionMeshBlockedSince = null;
+            this.resetCollisionDebugMove({ preserveBlock: this.collisionDebugEnabled });
         }
 
         if (this.collisionMesh) {
@@ -1129,6 +1330,10 @@ class WalkTool {
         this.collisionMeshUrl = details.url;
         this.collisionMeshKey = meshKey;
         const startedAt = performance.now();
+        this.pushCollisionDebugSample('mesh-load-start', {
+            url: details.url,
+            requestId: details.requestId ?? null
+        });
         this.events.fire('walk.collisionMesh', {
             ok: true,
             reason: 'load-start',
@@ -1171,6 +1376,15 @@ class WalkTool {
             }
             this.collisionMesh = mesh;
             this.collisionMeshHeadY = null;
+            this.pushCollisionDebugSample('mesh-ready', {
+                url: details.url,
+                requestId: details.requestId ?? null,
+                byteLength: buffer.byteLength,
+                parseMs,
+                triangles: mesh.triangleCount,
+                blockingTriangles: mesh.blockingTriangleCount,
+                cells: mesh.cellCount
+            });
             this.events.fire('walk.collisionMesh', {
                 ok: true,
                 reason: 'ready',
@@ -1196,6 +1410,11 @@ class WalkTool {
             }
             this.collisionMesh = null;
             this.collisionMeshHeadY = null;
+            this.pushCollisionDebugSample('mesh-load-failed', {
+                url: details.url,
+                requestId: details.requestId ?? null,
+                error: error instanceof Error ? error.message : 'collision mesh load failed'
+            });
             this.events.fire('walk.collisionMesh', {
                 ok: false,
                 reason: 'load-failed',
@@ -1216,6 +1435,12 @@ class WalkTool {
         this.collisionMeshBufferUrl = null;
         this.collisionMeshHeadY = null;
         this.collisionMeshBlockedSince = null;
+        this.resetCollisionDebugMove();
+        this.lastCollisionFloorTriangle = null;
+        this.pushCollisionDebugSample('mesh-clear', {
+            reason: details.reason ?? 'cleared',
+            requestId: details.requestId ?? null
+        });
         this.events.fire('walk.collisionMesh', {
             ok: true,
             reason: 'cleared',
@@ -1223,7 +1448,24 @@ class WalkTool {
         });
     }
 
+    private resetCollisionDebugMove(options: { preserveBlock?: boolean } = {}) {
+        this.lastCollisionDesiredMove.set(0, 0, 0);
+        this.lastCollisionResolvedMove = null;
+        if (options.preserveBlock && (this.lastCollisionHitTriangle !== null || this.lastCollisionBlockedBody)) {
+            return;
+        }
+        this.lastCollisionDebugReason = 'idle';
+        this.lastCollisionHitTriangle = null;
+        this.lastCollisionBlockedBody = null;
+    }
+
     private reportCollisionMesh(now: number, reason: string, details: Record<string, unknown>) {
+        this.pushCollisionDebugSample('move', {
+            reason,
+            embeddedControls: this.embeddedControls,
+            input: this.collisionDebugInput(this.walkInputState),
+            ...details
+        });
         if (reason === 'blocked' && now - this.lastCollisionMeshBlockReportAt < COLLISION_MESH_BLOCK_REPORT_INTERVAL_MS) {
             return;
         }
@@ -1251,14 +1493,21 @@ class WalkTool {
 
         const now = performance.now();
         const fullMove = desiredMove.clone();
+        this.lastCollisionDesiredMove.copy(fullMove);
+        this.lastCollisionResolvedMove = null;
+        this.lastCollisionHitTriangle = null;
+        this.lastCollisionBlockedBody = null;
 
         if (Math.hypot(fullMove.x, fullMove.z) <= 0.00001) {
+            this.lastCollisionDebugReason = 'idle';
             return fullMove;
         }
 
         const hit = this.firstCollisionMeshHit(mesh, bodies, fullMove);
         if (!hit) {
             this.collisionMeshBlockedSince = null;
+            this.lastCollisionDebugReason = 'clear';
+            this.lastCollisionResolvedMove = fullMove.clone();
             this.reportCollisionMesh(now, 'clear', {
                 blocked: false,
                 body: bodies.length,
@@ -1269,6 +1518,8 @@ class WalkTool {
             return fullMove;
         }
 
+        this.lastCollisionHitTriangle = hit.triangle ?? null;
+        this.lastCollisionBlockedBody = WalkTool.cloneCollisionBody(hit.body);
         const slideCandidates = [
             new Vec3(fullMove.x, 0, 0),
             new Vec3(0, 0, fullMove.z)
@@ -1276,6 +1527,8 @@ class WalkTool {
         for (const candidate of slideCandidates.sort((a, b) => Math.hypot(b.x, b.z) - Math.hypot(a.x, a.z))) {
             if (!this.firstCollisionMeshHit(mesh, bodies, candidate)) {
                 this.collisionMeshBlockedSince = null;
+                this.lastCollisionDebugReason = 'slide';
+                this.lastCollisionResolvedMove = candidate.clone();
                 this.reportCollisionMesh(now, 'slide', {
                     blocked: false,
                     triangle: hit?.triangle ?? null,
@@ -1299,6 +1552,7 @@ class WalkTool {
             this.collisionMeshBlockedSince = now;
         }
         const blockedMs = now - this.collisionMeshBlockedSince;
+        this.lastCollisionDebugReason = blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked';
         this.reportCollisionMesh(now, blockedMs >= COLLISION_MESH_STUCK_MS ? 'stuck' : 'blocked', {
             blocked: true,
             triangle: hit?.triangle ?? null,
@@ -1366,6 +1620,9 @@ class WalkTool {
             COLLISION_MESH_GROUND_SNAP * 3
         );
         const groundY = groundHit?.y ?? null;
+        let reportGroundHit = groundHit ?? null;
+        let reportGroundY = groundY;
+        this.lastCollisionFloorTriangle = reportGroundHit?.triangle ?? null;
         const grounded = groundY !== null && feetY <= groundY + 0.04 && this.externalVerticalVelocity <= 0;
 
         if (input.jump && !this.externalJumpWasPressed && grounded) {
@@ -1403,6 +1660,11 @@ class WalkTool {
                 COLLISION_MESH_GROUND_SNAP * 4
             );
             const nextGroundY = nextGroundHit?.y ?? null;
+            if (nextGroundHit) {
+                reportGroundHit = nextGroundHit;
+                reportGroundY = nextGroundY;
+                this.lastCollisionFloorTriangle = nextGroundHit.triangle ?? null;
+            }
             if (nextGroundY !== null && feetY <= nextGroundY && this.externalVerticalVelocity <= 0) {
                 const snap = nextGroundY - feetY;
                 focalPoint.y += snap;
@@ -1413,18 +1675,19 @@ class WalkTool {
             }
         }
 
-        this.externalGroundY = groundY;
+        this.externalGroundY = reportGroundY;
         if (changed || this.externalVerticalVelocity !== 0) {
             this.reportCollisionMesh(performance.now(), grounded ? 'ground' : 'air', {
                 blocked: false,
-                floorY: groundY === null ? null : Number(groundY.toFixed(3)),
-                floorTriangle: groundHit?.triangle ?? null,
-                floorSource: groundHit?.source ?? null,
+                floorY: reportGroundY === null ? null : Number(reportGroundY.toFixed(3)),
+                floorTriangle: reportGroundHit?.triangle ?? null,
+                floorSource: reportGroundHit?.source ?? null,
                 eyeX: Number(eye.x.toFixed(3)),
                 eyeY: Number(eye.y.toFixed(3)),
                 eyeZ: Number(eye.z.toFixed(3)),
                 feetY: Number(feetY.toFixed(3)),
-                verticalVelocity: Number(this.externalVerticalVelocity.toFixed(3))
+                verticalVelocity: Number(this.externalVerticalVelocity.toFixed(3)),
+                input: this.collisionDebugInput(input)
             });
         }
         return changed;
@@ -1540,6 +1803,166 @@ class WalkTool {
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
         return focalPoint.clone().add(forwardVec.clone().mulScalar(distance));
+    }
+
+    private drawCollisionDebug() {
+        if (!this.collisionDebugEnabled || !this.active || !this.collisionMesh) {
+            return;
+        }
+
+        const mesh = this.collisionMesh;
+        const body = this.playerCollisionBodies()[0];
+        const feetY = body.eye.y - body.eyeHeight;
+        const floor = this.collisionMeshGroundHit(mesh,
+            body.eye.x,
+            body.eye.z,
+            feetY,
+            COLLISION_MESH_GROUND_SNAP,
+            COLLISION_MESH_GROUND_SNAP * 3
+        );
+        this.lastCollisionFloorTriangle = floor?.triangle ?? null;
+
+        this.drawDebugTriangles(mesh, body, floor);
+        this.drawDebugPlayerCapsule(body);
+        this.drawDebugBlockedBody(body);
+        this.drawDebugFloorProbe(body, feetY, floor);
+        this.drawDebugMoveVectors(body);
+
+        this.scene.forceRender = true;
+    }
+
+    private drawDebugTriangles(mesh: WalkCollisionMesh, body: PlayerCollisionBody, floor: GroundMeshHit | null) {
+        const triangles = mesh.debugTrianglesNear(body.eye.x, body.eye.z);
+        const drawn = new Set<number>();
+        for (const { index, triangle } of triangles) {
+            const color = index === this.lastCollisionHitTriangle ?
+                COLLISION_DEBUG_HIT_COLOR :
+                index === floor?.triangle || index === this.lastCollisionFloorTriangle ?
+                    COLLISION_DEBUG_RAY_COLOR :
+                    triangle.blocking ? COLLISION_DEBUG_WALL_COLOR : COLLISION_DEBUG_FLOOR_COLOR;
+            this.drawDebugTriangle(triangle, color);
+            drawn.add(index);
+        }
+        this.drawDebugTriangleByIndex(mesh, drawn, floor?.triangle ?? this.lastCollisionFloorTriangle, COLLISION_DEBUG_RAY_COLOR);
+        this.drawDebugTriangleByIndex(mesh, drawn, this.lastCollisionHitTriangle, COLLISION_DEBUG_HIT_COLOR);
+        this.drawDebugTriangleMarkerByIndex(mesh, this.lastCollisionHitTriangle, COLLISION_DEBUG_HIT_COLOR);
+    }
+
+    private drawDebugTriangleByIndex(mesh: WalkCollisionMesh, drawn: Set<number>, index: number | null, color: Color) {
+        if (index === null || drawn.has(index)) {
+            return;
+        }
+        const triangle = mesh.triangleAt(index);
+        if (!triangle) {
+            return;
+        }
+        this.drawDebugTriangle(triangle, color);
+        drawn.add(index);
+    }
+
+    private drawDebugTriangleMarkerByIndex(mesh: WalkCollisionMesh, index: number | null, color: Color) {
+        if (index === null) {
+            return;
+        }
+        const triangle = mesh.triangleAt(index);
+        if (!triangle) {
+            return;
+        }
+        const center = new Vec3(
+            (triangle.ax + triangle.bx + triangle.cx) / 3,
+            (triangle.ay + triangle.by + triangle.cy) / 3,
+            (triangle.az + triangle.bz + triangle.cz) / 3
+        );
+        const size = 0.18;
+        this.drawDebugLine(new Vec3(center.x - size, center.y, center.z), new Vec3(center.x + size, center.y, center.z), color);
+        this.drawDebugLine(new Vec3(center.x, center.y - size, center.z), new Vec3(center.x, center.y + size, center.z), color);
+        this.drawDebugLine(new Vec3(center.x, center.y, center.z - size), new Vec3(center.x, center.y, center.z + size), color);
+    }
+
+    private drawDebugTriangle(triangle: CollisionTriangle, color: Color) {
+        const a = new Vec3(triangle.ax, triangle.ay, triangle.az);
+        const b = new Vec3(triangle.bx, triangle.by, triangle.bz);
+        const c = new Vec3(triangle.cx, triangle.cy, triangle.cz);
+        this.drawDebugLine(a, b, color);
+        this.drawDebugLine(b, c, color);
+        this.drawDebugLine(c, a, color);
+    }
+
+    private drawDebugPlayerCapsule(body: PlayerCollisionBody, color = COLLISION_DEBUG_PLAYER_COLOR, eyeColor = COLLISION_DEBUG_EYE_COLOR) {
+        const feetY = body.eye.y - body.eyeHeight;
+        const headY = body.head.y;
+        this.drawDebugCircleXZ(new Vec3(body.eye.x, feetY, body.eye.z), body.radius, color);
+        this.drawDebugCircleXZ(new Vec3(body.eye.x, body.eye.y, body.eye.z), body.radius, eyeColor);
+        this.drawDebugCircleXZ(new Vec3(body.head.x, headY, body.head.z), body.radius, color);
+
+        for (const [dx, dz] of [[body.radius, 0], [-body.radius, 0], [0, body.radius], [0, -body.radius]]) {
+            this.drawDebugLine(
+                new Vec3(body.eye.x + dx, feetY, body.eye.z + dz),
+                new Vec3(body.head.x + dx, headY, body.head.z + dz),
+                color
+            );
+        }
+    }
+
+    private drawDebugBlockedBody(currentBody: PlayerCollisionBody) {
+        const blockedBody = this.lastCollisionBlockedBody;
+        if (!blockedBody) {
+            return;
+        }
+        this.drawDebugPlayerCapsule(blockedBody, COLLISION_DEBUG_HIT_COLOR, COLLISION_DEBUG_HIT_COLOR);
+        this.drawDebugLine(currentBody.eye, blockedBody.eye, COLLISION_DEBUG_HIT_COLOR);
+        this.drawDebugCircleXZ(blockedBody.eye, blockedBody.radius * 1.45, COLLISION_DEBUG_HIT_COLOR);
+    }
+
+    private drawDebugFloorProbe(body: PlayerCollisionBody, feetY: number, floor: GroundMeshHit | null) {
+        const top = new Vec3(body.eye.x, feetY + COLLISION_MESH_GROUND_SNAP, body.eye.z);
+        const bottom = new Vec3(body.eye.x, feetY - COLLISION_MESH_GROUND_SNAP * 3, body.eye.z);
+        this.drawDebugLine(top, bottom, COLLISION_DEBUG_RAY_COLOR);
+
+        if (floor) {
+            const hit = new Vec3(body.eye.x, floor.y, body.eye.z);
+            const markerSize = Math.max(0.04, body.radius * 0.25);
+            this.drawDebugLine(
+                new Vec3(hit.x - markerSize, hit.y, hit.z),
+                new Vec3(hit.x + markerSize, hit.y, hit.z),
+                COLLISION_DEBUG_RAY_COLOR
+            );
+            this.drawDebugLine(
+                new Vec3(hit.x, hit.y, hit.z - markerSize),
+                new Vec3(hit.x, hit.y, hit.z + markerSize),
+                COLLISION_DEBUG_RAY_COLOR
+            );
+        }
+    }
+
+    private drawDebugMoveVectors(body: PlayerCollisionBody) {
+        const origin = new Vec3(body.eye.x, body.eye.y, body.eye.z);
+        if (Math.hypot(this.lastCollisionDesiredMove.x, this.lastCollisionDesiredMove.z) > 0.00001) {
+            this.drawDebugLine(origin, origin.clone().add(this.lastCollisionDesiredMove), COLLISION_DEBUG_DESIRED_MOVE_COLOR);
+        }
+        if (this.lastCollisionResolvedMove && Math.hypot(this.lastCollisionResolvedMove.x, this.lastCollisionResolvedMove.z) > 0.00001) {
+            const offsetOrigin = origin.clone();
+            offsetOrigin.y += 0.06;
+            this.drawDebugLine(offsetOrigin, offsetOrigin.clone().add(this.lastCollisionResolvedMove), COLLISION_DEBUG_RESOLVED_MOVE_COLOR);
+        }
+        if (this.lastCollisionDebugReason === 'blocked' || this.lastCollisionDebugReason === 'stuck') {
+            this.drawDebugCircleXZ(origin, body.radius * 1.18, COLLISION_DEBUG_HIT_COLOR);
+        }
+    }
+
+    private drawDebugCircleXZ(center: Vec3, radius: number, color: Color) {
+        const segments = 28;
+        let previous = new Vec3(center.x + radius, center.y, center.z);
+        for (let i = 1; i <= segments; i += 1) {
+            const angle = i / segments * Math.PI * 2;
+            const next = new Vec3(center.x + Math.cos(angle) * radius, center.y, center.z + Math.sin(angle) * radius);
+            this.drawDebugLine(previous, next, color);
+            previous = next;
+        }
+    }
+
+    private drawDebugLine(a: Vec3, b: Vec3, color: Color) {
+        this.scene.app.drawLine(a, b, color, true, this.scene.worldLayer);
     }
 
     private applyCollisionHeadHeightLock(camera: Camera, focalPoint: Vec3) {

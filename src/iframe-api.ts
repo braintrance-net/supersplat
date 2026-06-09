@@ -41,6 +41,8 @@ const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
 const RENDER_WARMUP = 'supersplat:render-warmup';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
+const COLLISION_DEBUG_BUNDLE_GET = 'supersplat:collision-debug-bundle-get';
+const COLLISION_DEBUG_BUNDLE = 'supersplat:collision-debug-bundle';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -240,6 +242,11 @@ interface RenderWarmupMessage {
 
 interface ViewerPerfResetMessage {
     type: typeof VIEWER_PERF_RESET;
+}
+
+interface CollisionDebugBundleGetMessage {
+    type: typeof COLLISION_DEBUG_BUNDLE_GET;
+    requestId?: RequestId;
 }
 
 interface MultiplayerPlayersMessage {
@@ -442,6 +449,10 @@ const isRenderWarmupMessage = (data: any): data is RenderWarmupMessage => {
 
 const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => {
     return data && typeof data === 'object' && data.type === VIEWER_PERF_RESET;
+};
+
+const isCollisionDebugBundleGetMessage = (data: any): data is CollisionDebugBundleGetMessage => {
+    return data && typeof data === 'object' && data.type === COLLISION_DEBUG_BUNDLE_GET && hasOptionalRequestId(data);
 };
 
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
@@ -1308,8 +1319,17 @@ const registerIframeApi = (events: Events) => {
                     walkInput: true,
                     thumbnailError: true,
                     multiplayerPlayers: true,
-                    version: 4
+                    collisionDebugBundle: true,
+                    version: 5
                 },
+                ...requestIdPayload(event.data.requestId)
+            }, event.origin);
+        }
+
+        if (isCollisionDebugBundleGetMessage(event.data)) {
+            source.postMessage({
+                type: COLLISION_DEBUG_BUNDLE,
+                result: events.invoke('walk.collisionDebugBundle') ?? null,
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
         }

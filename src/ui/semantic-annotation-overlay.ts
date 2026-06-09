@@ -117,6 +117,8 @@ const OCCLUSION_MIN_M = 0.015;
 const OCCLUSION_MAX_M = 0.12;
 const HIT_VOLUME_COLOR = new Color(0.66, 1, 0.47, 0.95);
 const HIT_VOLUME_FOUND_COLOR = new Color(0.3, 1, 0.46, 1);
+const COLLISION_DEBUG_OBJECT_COLOR = new Color(0.96, 0.74, 0.2, 1);
+const COLLISION_DEBUG_AVATAR_COLOR = new Color(0.2, 0.82, 1, 1);
 const MULTIPLAYER_DEFAULT_HEIGHT = 1.65;
 const MULTIPLAYER_MIN_HEIGHT = 0.95;
 const MULTIPLAYER_MAX_HEIGHT = 2.35;
@@ -344,6 +346,7 @@ class SemanticAnnotationOverlay {
     private activeGameTargetIds = new Set<string>();
     private foundAnnotationIds = new Set<string>();
     private showHitboxes = false;
+    private collisionDebugEnabled = SemanticAnnotationOverlay.defaultCollisionDebugEnabled();
     private pointerDownPos: { x: number, y: number } | null = null;
     private hitVolumeGeneration = 0;
     private lastClickCandidates: Array<Record<string, unknown>> = [];
@@ -360,6 +363,7 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.gameTargets', this.setGameTargets, this);
         events.on('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
+        events.on('walk.collisionDebug', this.onCollisionDebug, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
         events.on('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         events.on('scene.elementAdded', this.onSceneGeometryChanged, this);
@@ -382,6 +386,7 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.gameTargets', this.setGameTargets, this);
         this.events.off('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
+        this.events.off('walk.collisionDebug', this.onCollisionDebug, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
         this.events.off('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         this.events.off('scene.elementAdded', this.onSceneGeometryChanged, this);
@@ -406,6 +411,21 @@ class SemanticAnnotationOverlay {
             avatar.entity.destroy();
         }
         this.multiplayerAvatarInstances.clear();
+    }
+
+    private static defaultCollisionDebugEnabled() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        const params = new URLSearchParams(window.location.search);
+        return params.get('collisionDebug') === '1' ||
+            params.get('debugCollision') === '1' ||
+            params.get('walkDebug') === '1';
+    }
+
+    private onCollisionDebug(enabled = true) {
+        this.collisionDebugEnabled = Boolean(enabled);
+        this.scene.forceRender = true;
     }
 
     private setAnnotations(annotations: SemanticAnnotation[]) {
@@ -1353,18 +1373,57 @@ class SemanticAnnotationOverlay {
     }
 
     private drawHitVolumes() {
-        if (this.interactionMode === 'game' && !this.showHitboxes) {
+        if (!this.collisionDebugEnabled && this.interactionMode === 'game' && !this.showHitboxes) {
             return;
+        }
+
+        if (this.collisionDebugEnabled) {
+            this.scene.forceRender = true;
         }
 
         for (const annotation of this.annotations) {
             const volume = this.hitVolumes.get(annotation.id);
-            if (!volume || !this.shouldShowVolume(annotation)) {
+            if (volume && (this.collisionDebugEnabled || this.shouldShowVolume(annotation))) {
+                const color = this.foundAnnotationIds.has(annotation.id) ? HIT_VOLUME_FOUND_COLOR : HIT_VOLUME_COLOR;
+                this.scene.app.drawWireAlignedBox(volume.min, volume.max, color, true, this.scene.worldLayer);
                 continue;
             }
 
-            const color = this.foundAnnotationIds.has(annotation.id) ? HIT_VOLUME_FOUND_COLOR : HIT_VOLUME_COLOR;
-            this.scene.app.drawWireAlignedBox(volume.min, volume.max, color, true, this.scene.worldLayer);
+            if (this.collisionDebugEnabled) {
+                const center = new Vec3(annotation.position[0], annotation.position[1], annotation.position[2]);
+                const radius = this.annotationHitRadius(annotation);
+                this.scene.app.drawWireAlignedBox(
+                    new Vec3(center.x - radius, center.y - radius, center.z - radius),
+                    new Vec3(center.x + radius, center.y + radius, center.z + radius),
+                    COLLISION_DEBUG_OBJECT_COLOR,
+                    true,
+                    this.scene.worldLayer
+                );
+            }
+        }
+
+        if (!this.collisionDebugEnabled) {
+            return;
+        }
+
+        for (const player of this.multiplayerPlayers) {
+            const calibration = this.multiplayerHeightCalibrations.get(player.id);
+            if (!calibration) {
+                continue;
+            }
+            const height = calibration.height;
+            const radius = Math.max(0.18, Math.min(0.46, height * 0.18));
+            const top = player.position[1];
+            const bottom = top - height;
+            const x = player.position[0];
+            const z = player.position[2];
+            this.scene.app.drawWireAlignedBox(
+                new Vec3(x - radius, bottom, z - radius),
+                new Vec3(x + radius, top, z + radius),
+                COLLISION_DEBUG_AVATAR_COLOR,
+                true,
+                this.scene.worldLayer
+            );
         }
     }
 
