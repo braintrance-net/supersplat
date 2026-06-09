@@ -73,6 +73,12 @@ const ASSET_GRADS = [
     'linear-gradient(135deg,#f5576c,#f093fb)'
 ];
 
+// Audio content library (click to spawn). SFX = spatial, Music = stereo.
+const AUDIO_LIB: { SFX: string[]; Music: string[] } = {
+    SFX: ['Footsteps', 'Door creak', 'Birdsong', 'Rain', 'Wind', 'Chime', 'Whoosh', 'Splash'],
+    Music: ['Cathedral tone', 'Ambient pad', 'Lo-fi loop', 'Drone', 'Piano', 'Strings']
+};
+
 const el = (tag: string, cls?: string, html?: string): HTMLElement => {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -134,7 +140,7 @@ class BraintranceUI {
     // asset-browser state
     private assetsPanel: HTMLElement | null = null;
     private assetTab = 'Gaussians';
-    private placingAsset: string | null = null;
+    private placedCount = 0;
 
     constructor() {
         document.body.classList.add('bt-mode');
@@ -502,9 +508,9 @@ class BraintranceUI {
         this.audioMode = true;
         this.placingAudio = false;
         this.audioPanel?.remove();
-        this.audioPanel = this.buildObjectsPanel();
+        this.audioPanel = this.buildAudioLibrary();
         this.root.appendChild(this.audioPanel);
-        this.refreshBottom(); // bottom → audio bar
+        this.refreshBottom(); // bottom → audio bar for the active source
     }
 
     private exitAudio() {
@@ -518,51 +524,68 @@ class BraintranceUI {
 
     private rebuildAudio() {
         if (this.audioPanel) {
-            const p = this.buildObjectsPanel();
+            const p = this.buildAudioLibrary();
             this.audioPanel.replaceWith(p);
             this.audioPanel = p;
         }
         this.refreshBottom();
     }
 
-    private buildObjectsPanel(): HTMLElement {
-        const panel = el('div', 'bt-objects-panel');
-        const head = el('div', 'bt-op-head');
-        head.appendChild(el('div', 'bt-op-title', 'Objects'));
-        const add = el('div', 'bt-op-add', ICON.plus);
-        add.addEventListener('click', () => this.addAudioSource());
-        head.appendChild(add);
+    // a browsable library of sounds — click a tile to spawn it
+    private buildAudioLibrary(): HTMLElement {
+        const panel = el('div', 'bt-effects-panel'); // reuse the docked-left library shell
+        const head = el('div', 'bt-ep-head');
+        head.appendChild(el('div', 'bt-ep-title', 'Add sound'));
+        const close = el('div', 'bt-ep-close', ICON.x);
+        close.addEventListener('click', () => { this.exitAudio(); this.setActiveTool('explore'); });
+        head.appendChild(close);
         panel.appendChild(head);
+        panel.appendChild(el('div', 'bt-ep-search', 'Search sounds…'));
 
-        panel.appendChild(this.objectRow(ICON.globe, 'Scene', '', false, () => {}));
-        panel.appendChild(this.objectRow(ICON.camera, 'Camera', '', false, () => {}));
-        this.audioSources.forEach((s, i) => {
-            panel.appendChild(this.objectRow(ICON.audio, s.name, s.kind, this.activeAudio === i, () => this.selectAudio(i)));
-        });
+        panel.appendChild(el('div', 'bt-ep-section', 'SFX · 3D'));
+        const sfx = el('div', 'bt-ep-grid');
+        AUDIO_LIB.SFX.forEach(name => sfx.appendChild(this.audioTile(name, 'Spatial')));
+        panel.appendChild(sfx);
+
+        panel.appendChild(el('div', 'bt-ep-section', 'MUSIC · STEREO'));
+        const music = el('div', 'bt-ep-grid');
+        AUDIO_LIB.Music.forEach(name => music.appendChild(this.audioTile(name, 'Stereo')));
+        panel.appendChild(music);
         return panel;
     }
 
-    private objectRow(icon: string, name: string, badge: string, active: boolean, onClick: () => void): HTMLElement {
-        const row = el('div', `bt-op-row${active ? ' is-active' : ''}`,
-            `${icon}<span class="bt-op-name">${name}</span>${badge ? `<span class="bt-op-badge">${badge}</span>` : ''}`);
-        row.addEventListener('click', onClick);
-        return row;
+    private audioTile(name: string, kind: string): HTMLElement {
+        const tile = el('div', 'bt-tile',
+            `<div class="bt-tile-sw is-audio">${ICON.audio}</div><span class="bt-tile-label">${name}</span>`);
+        tile.addEventListener('click', () => this.spawnAudio(name, kind));
+        return tile;
     }
 
-    private selectAudio(i: number) {
-        this.activeAudio = i;
-        this.placingAudio = false;
-        this.rebuildAudio();
-    }
-
-    private addAudioSource() {
-        this.audioSources.push({ name: `Audio ${this.audioSources.length + 1}`, kind: 'Spatial', volume: 50, range: 8, loop: false, placed: false });
+    // spawn the clicked sound; spatial ones drop a pin at world origin (then re-Place to move)
+    private spawnAudio(name: string, kind: string) {
+        this.audioSources.push({ name, kind, volume: 50, range: 8, loop: false, placed: kind === 'Stereo' });
         this.activeAudio = this.audioSources.length - 1;
-        this.rebuildAudio();
+        if (kind === 'Spatial') this.dropAudioPin(0, 0.3, 0);
+        this.refreshBottom(); // audio bar for the new source
+    }
+
+    private dropAudioPin(x: number, y: number, z: number) {
+        const scene = this.scene;
+        if (!scene?.contentRoot) return;
+        const mat = new StandardMaterial();
+        mat.useLighting = false; mat.diffuse.set(0, 0, 0); mat.emissive.set(0.13, 0.78, 0.6); mat.update();
+        const pin = new Entity('bt-audio-pin');
+        pin.addComponent('render', { type: 'sphere' });
+        if (pin.render) pin.render.material = mat;
+        pin.setLocalScale(0.14, 0.14, 0.14);
+        pin.setLocalPosition(x, y, z);
+        scene.contentRoot.addChild(pin);
+        this.audioMarkers.push(pin);
+        scene.forceRender = true;
     }
 
     private buildAudioBar(): HTMLElement {
-        const s = this.audioSources[this.activeAudio];
+        const s = this.audioSources[this.activeAudio] ?? this.audioSources[0];
         const bar = el('div', 'bt-audio-bar');
 
         const head = el('div', 'bt-ab-head');
@@ -598,25 +621,15 @@ class BraintranceUI {
 
     private placeAudioAt(clientX: number, clientY: number) {
         const s = this.audioSources[this.activeAudio];
-        const scene = this.scene;
         const cam = this.cameraComponent();
-        if (scene?.contentRoot && cam && this.canvas) {
+        if (cam && this.canvas) {
             const rect = this.canvas.getBoundingClientRect();
-            const dist = scene.camera?.distance ?? 2;
+            const dist = this.scene.camera?.distance ?? 2;
             const out = new Vec3();
             cam.screenToWorld(clientX - rect.left, clientY - rect.top, dist, out);
-            const mat = new StandardMaterial();
-            mat.useLighting = false; mat.diffuse.set(0, 0, 0); mat.emissive.set(0.13, 0.78, 0.6); mat.update();
-            const pin = new Entity('bt-audio-pin');
-            pin.addComponent('render', { type: 'sphere' });
-            if (pin.render) pin.render.material = mat;
-            pin.setLocalScale(0.14, 0.14, 0.14);
-            pin.setPosition(out);
-            scene.contentRoot.addChild(pin);
-            this.audioMarkers.push(pin);
-            scene.forceRender = true;
+            this.dropAudioPin(out.x, out.y, out.z);
         }
-        s.placed = true;
+        if (s) s.placed = true;
         this.placingAudio = false;
         this.rebuildAudio();
     }
@@ -667,7 +680,6 @@ class BraintranceUI {
     }
 
     private closeAssets() {
-        this.placingAsset = null;
         this.assetsPanel?.remove();
         this.assetsPanel = null;
     }
@@ -691,45 +703,40 @@ class BraintranceUI {
 
         const grid = el('div', 'bt-as-grid');
         ASSETS[this.assetTab].forEach((name, i) => {
-            const tile = el('div', `bt-as-tile${this.placingAsset === name ? ' is-armed' : ''}`);
+            const tile = el('div', 'bt-as-tile');
             const thumb = el('div', 'bt-as-thumb');
             thumb.style.background = ASSET_GRADS[i % ASSET_GRADS.length];
             tile.appendChild(thumb);
             tile.appendChild(el('div', 'bt-as-label', name));
-            tile.addEventListener('click', () => this.armAsset(name));
+            tile.addEventListener('click', () => this.placeAssetAndSelect(name));
             grid.appendChild(tile);
         });
         panel.appendChild(grid);
-        panel.appendChild(el('div', 'bt-as-foot', 'Click a tile, then click in the scene to place it.'));
+        panel.appendChild(el('div', 'bt-as-foot', 'Click an item to drop it in the scene and select it.'));
         return panel;
     }
 
-    private armAsset(name: string) {
-        this.placingAsset = name;
-        this.openAssets(); // re-render with the armed tile highlighted
-    }
-
-    private placeAssetAt(clientX: number, clientY: number) {
+    // selecting an asset drops it into the scene and makes it the active selection
+    private placeAssetAndSelect(name: string) {
         const scene = this.scene;
-        const cam = this.cameraComponent();
-        if (scene?.contentRoot && cam && this.canvas) {
-            const rect = this.canvas.getBoundingClientRect();
-            const dist = scene.camera?.distance ?? 2;
-            const out = new Vec3();
-            cam.screenToWorld(clientX - rect.left, clientY - rect.top, dist, out);
+        if (scene?.contentRoot) {
             const mat = new StandardMaterial();
-            mat.useLighting = false; mat.diffuse.set(0, 0, 0); mat.emissive.set(0.55, 0.6, 0.72); mat.update();
+            mat.useLighting = false; mat.diffuse.copy(IDLE_DIFFUSE); mat.emissive.copy(IDLE_DIFFUSE); mat.emissiveIntensity = 1; mat.update();
             const asset = new Entity('bt-asset');
             asset.addComponent('render', { type: 'box' });
             if (asset.render) asset.render.material = mat;
-            asset.setLocalScale(0.22, 0.22, 0.22);
-            asset.setPosition(out);
+            asset.setLocalScale(0.3, 0.3, 0.3);
+            // offset from the existing cube so the new (selected/yellow) asset is visible
+            const k = this.placedCount++;
+            asset.setLocalPosition(0.55 + k * 0.12, 0.3, 0.25 - k * 0.12);
             scene.contentRoot.addChild(asset);
+            this.box = asset;                 // make it the selectable object
+            this.boxMat = mat;
+            this.selection = { name, effects: [], interactions: [] };
             scene.forceRender = true;
         }
-        this.placingAsset = null;
-        this.closeAssets();      // browser closes after a placement (spec §7.10)
-        this.setActiveTool('explore');
+        this.closeAssets();
+        this.selectObject(true);              // select it: yellow + selected chrome + gizmo
     }
 
     // Re-render the header center cluster (camera hints vs transform tools). Also
@@ -789,7 +796,6 @@ class BraintranceUI {
             const wasDown = down; down = false;
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
-            if (this.placingAsset) { this.placeAssetAt(e.clientX, e.clientY); return; }
             if (this.audioMode) return; // audio mode: clicks are for placement only
             if (this.recordingMode) return; // recording: keep the source selected (move it = a change)
             this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));

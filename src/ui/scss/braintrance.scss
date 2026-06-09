@@ -486,6 +486,8 @@ body.bt-mode {
         }
         .bt-tile-sw.is-none { background: #eee; }
         .bt-tile-sw.is-cool { background: linear-gradient(150deg, #6db8ff, #2f7bff); }
+        .bt-tile-sw.is-audio { background: var(--bt-audio); display: flex; align-items: center; justify-content: center; color: #fff;
+            svg { width: 22px; height: 22px; } }
         .bt-tile-label { font-size: 11px; color: var(--bt-ink-2); white-space: nowrap; }
         &.is-selected .bt-tile-sw { box-shadow: 0 0 0 2px var(--bt-ink); }
     }
