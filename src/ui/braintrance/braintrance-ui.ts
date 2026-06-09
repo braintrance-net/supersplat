@@ -379,9 +379,11 @@ class BraintranceUI {
         const gizmo = new Cls(cam, layer);
         gizmo.attach([this.box]);
         const render = () => { if (this.scene) this.scene.forceRender = true; };
-        gizmo.on('transform:start', render);
+        const suppressCamera = (on: boolean) => { if (this.scene?.camera) this.scene.camera.inputDisabled = on; };
+        // while an axis is being dragged, stop the camera from orbiting under it
+        gizmo.on('transform:start', () => { suppressCamera(true); render(); });
         gizmo.on('transform:move', render);
-        gizmo.on('transform:end', render);
+        gizmo.on('transform:end', () => { suppressCamera(false); render(); });
         this.gizmo = gizmo;
         this.gizmoMode = mode;
         render();
@@ -394,11 +396,18 @@ class BraintranceUI {
             this.gizmo = null;
         }
         this.gizmoMode = null;
+        if (this.scene?.camera) this.scene.camera.inputDisabled = false; // safety if torn down mid-drag
         if (this.scene) this.scene.forceRender = true;
     }
 
     private frameSelection() {
-        this.events?.fire?.('camera.focus');
+        const cam = this.scene?.camera; // Camera element
+        if (cam?.setFocalPoint && this.box && this.box.enabled !== false) {
+            cam.setFocalPoint(this.box.getPosition());        // re-centre orbit on the cube
+            cam.setDistance?.(1.2, 0.4);                      // pull to a comfortable framing
+        } else {
+            this.events?.fire?.('camera.focus');
+        }
     }
 
     private deleteSelection() {

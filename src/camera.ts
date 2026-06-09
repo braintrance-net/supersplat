@@ -81,6 +81,10 @@ class Camera extends Element {
 
     controlMode: 'orbit' | 'fly' = 'orbit';
 
+    // when true, pointer orbit/pan/look is suppressed (e.g. while a transform
+    // gizmo is being dragged, so the drag isn't stolen by the camera)
+    inputDisabled = false;
+
     // during fly-mode look, stores the camera position that must stay fixed
     // while the azim/elev tween smoothly converges
     lookCameraPos: Vec3 | null = null;

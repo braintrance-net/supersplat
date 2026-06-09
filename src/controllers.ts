@@ -55,6 +55,7 @@ class PointerController {
         let midx: number, midy: number, midlen: number;
 
         const pointerdown = (event: PointerEvent) => {
+            if (camera.inputDisabled) return; // gizmo drag etc. owns the pointer
             if (event.pointerType === 'mouse') {
                 // If a button is already pressed, ignore this press
                 if (pressedButton !== -1) {
@@ -98,6 +99,7 @@ class PointerController {
         };
 
         const pointermove = (event: PointerEvent) => {
+            if (camera.inputDisabled) return; // suppressed while a gizmo is dragging
             if (event.pointerType === 'mouse') {
                 // Only process if we're tracking a button
                 if (pressedButton === -1) {
