@@ -1093,6 +1093,8 @@ class BraintranceUI {
     // ── interaction recording (cyan border + record bar) ──
     private startRecording() {
         if (this.state !== 'selected') return;
+        this.hideStrengthPop(); // dismiss any open chip/interaction detail popover
+        this.openChip = null;
         this.recordingMode = true;
         this.recordBorder = el('div', 'bt-recording');
         this.root.appendChild(this.recordBorder);
@@ -1120,10 +1122,17 @@ class BraintranceUI {
     }
 
     private finishRecording(commit: boolean) {
+        // capture the chosen trigger before tearing the bar down
+        const trigger = (this.recordBar?.querySelector('select') as HTMLSelectElement | null)?.value ?? 'Clicked';
         this.recordingMode = false;
         this.recordBorder?.remove(); this.recordBorder = null;
         this.recordBar?.remove(); this.recordBar = null;
-        if (commit) this.selection.interactions.push('On click → changes'); // bumps the badge
+        if (commit) {
+            const phrase: Record<string, string> = {
+                Clicked: 'On click', Hovered: 'On hover', 'Looked at': 'On look', Nearby: 'When nearby'
+            };
+            this.selection.interactions.push(`${phrase[trigger] ?? 'On click'} → changes`); // bumps the badge
+        }
         this.interactionsMode = true; // return to the interaction list (showing the new one)
         this.refreshBottom();
     }
