@@ -10,13 +10,18 @@
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <meta name="description" content="SuperSplat is an advanced browser-based editor for manipulating and optimizing 3D Gaussian Splats. It is open source and engine agnostic." />
         <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
 
-        <!-- Service worker -->
+        <!-- Service worker (disabled on localhost so design iteration always loads fresh assets) -->
         <script>
             const sw = navigator.serviceWorker;
-            if (sw) {
+            const isLocal = ['localhost', '127.0.0.1', '::1'].includes(location.hostname);
+            if (sw && isLocal) {
+                // dev: ensure no stale-caching SW is controlling the page
+                sw.getRegistrations().then(rs => rs.forEach(r => r.unregister()));
+            } else if (sw) {
                 sw.register('./sw.js')
                     .then(reg => console.log('service worker registered', reg))
                     .catch(err => console.log('failed to register service worker', err));

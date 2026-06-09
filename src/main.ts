@@ -34,6 +34,7 @@ import { ToolManager } from './tools/tool-manager';
 import { registerTrackManagerEvents } from './track-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { AnnotationOverlay } from './ui/annotation-overlay';
+import { BraintranceUI } from './ui/braintrance/braintrance-ui';
 import { EditorUI } from './ui/editor';
 import { localizeInit } from './ui/localization';
 import { ViewManager } from './view-manager';
@@ -108,6 +109,10 @@ const main = async () => {
 
     // editor ui
     const editorUI = new EditorUI(events);
+
+    // braintrance "Simplification" redesign overlay (hides stock chrome via body.bt-mode)
+    const braintranceUI = new BraintranceUI();
+    events.function('braintranceUI', () => braintranceUI);
 
     // create the graphics device
     const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {

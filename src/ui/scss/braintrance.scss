@@ -1,0 +1,404 @@
+// ─────────────────────────────────────────────────────────────────────────
+// Braintrance editor — "Simplification" redesign overlay
+// Source of truth: Paper file "Braintrance" › page "Simplification",
+// frames marked "best" (Explore / Selected / W - Move). Built as a custom
+// overlay over SuperSplat's live PlayCanvas viewport; the stock SuperSplat
+// chrome is hidden while `body.bt-mode` is set.
+// ─────────────────────────────────────────────────────────────────────────
+
+:root {
+    // Surfaces (light chrome over a dark 3D viewport)
+    --bt-surface:      #ffffff; // rail, header, panels
+    --bt-menubar:      #e9e9e9; // top file/select/view/help strip
+    --bt-active:       #ebebeb; // active rail item / pressed
+    --bt-hover:        #f2f2f2;
+    --bt-border:       #d9d9d9; // dividers
+    --bt-panel:        #ffffff; // floating panels (snapshot / contextual bars)
+
+    // Ink
+    --bt-ink:          #000000; // primary text + icons
+    --bt-ink-2:        #4a4a4a; // secondary
+    --bt-ink-3:        #8a8a8a; // muted / hints
+
+    // Accent language (kept consistent everywhere)
+    --bt-selection:    #ffe600; // selection outline/fill (yellow)
+    --bt-playhead:     #2f7bff; // camera / playhead (blue)
+    --bt-capture:      #9aa0a6; // capture diamonds (gray)
+    --bt-effect:       #f5a623; // effects (amber)
+    --bt-interaction:  #5b5bd6; // interactions (indigo)
+    --bt-audio:        #21a366; // audio (green)
+
+    --bt-radius:       12.7px;  // rail item radius (from frame)
+    --bt-shadow:       0 6px 24px rgba(0, 0, 0, 0.18);
+    --bt-font:         'Inter', system-ui, -apple-system, sans-serif;
+}
+
+// While the braintrance overlay is active, hide SuperSplat's own chrome but
+// keep the live canvas + view cube. Stock panels use the `.panel` class (not
+// `.pcui-panel`); toolbars/menus live in #top-container or carry -toolbar classes.
+body.bt-mode {
+    #top-container,            // stock menu / toolbars / popups
+    #bottom-toolbar,
+    #right-toolbar,
+    .panel,                    // left-dock panels (scene / view / transform / effect / render-sub)
+    .select-toolbar,
+    .mode-toggle,
+    .status-bar,
+    .pcui-panel {
+        display: none !important;
+    }
+}
+
+#bt-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none; // pass through to canvas by default; children opt-in
+    font-family: var(--bt-font);
+    color: var(--bt-ink);
+    font-feature-settings: 'cv01', 'ss01';
+
+    * { box-sizing: border-box; }
+
+    button { font-family: inherit; }
+
+    // anything interactive re-enables pointer events
+    .bt-interactive,
+    .bt-menubar,
+    .bt-header,
+    .bt-rail,
+    .bt-snapshot,
+    .bt-scrubber,
+    .bt-contextbar,
+    .bt-topbar { pointer-events: auto; }
+}
+
+// ── Top menu strip: file · select · view · help ─────────────────────────────
+.bt-menubar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 40px;
+    background: var(--bt-menubar);
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    padding: 0 22px;
+
+    .bt-menubar-item {
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 500;
+        font-size: 17px;
+        line-height: 1;
+        color: var(--bt-ink);
+        cursor: pointer;
+        opacity: 0.85;
+        &:hover { opacity: 1; }
+    }
+}
+
+// ── Project sub-header (row under the menubar) ──────────────────────────────
+.bt-header {
+    position: absolute;
+    top: 40px; left: 0; right: 0;
+    height: 50px;
+    background: var(--bt-surface);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+
+    .bt-back {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px; height: 28px;
+        margin-right: 14px;
+        cursor: pointer;
+        color: var(--bt-ink);
+        border-radius: 6px;
+        &:hover { background: var(--bt-hover); }
+    }
+
+    .bt-project-title {
+        font-weight: 600;
+        font-size: 15px;
+        color: var(--bt-ink);
+        white-space: nowrap;
+    }
+
+    // center cluster: camera hints (Explore) OR transform tools (Selected)
+    .bt-header-center {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        white-space: nowrap;
+    }
+}
+
+// camera hints (Explore - best): WASD pill · Rotate · Pan · Zoom
+.bt-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 14px;
+    color: var(--bt-ink-2);
+
+    .bt-hint-keys { height: 31px; }
+    svg { width: 22px; height: 22px; color: var(--bt-ink-2); }
+}
+
+// transform tools (Selected / Move - best): Q Move · E Scale · R Rotate · F Frame · ⌘K Crop to · ⌫ Delete
+.bt-topbar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+
+    .bt-tool {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 14px;
+        color: var(--bt-ink);
+        cursor: pointer;
+        user-select: none;
+
+        .bt-key {
+            font-weight: 700;
+            font-size: 13px;
+        }
+        &.is-active .bt-key { color: var(--bt-playhead); }
+        &.is-danger { color: #c23b3b; }
+        &:hover { opacity: 0.7; }
+    }
+}
+
+// ── Left rail ───────────────────────────────────────────────────────────────
+.bt-rail {
+    position: absolute;
+    top: 90px;           // below menubar(40) + header(50)
+    left: 0;
+    bottom: 0;
+    width: 78px;
+    background: var(--bt-surface);
+    border-right: 1px solid var(--bt-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 6px;
+    gap: 0;
+
+    .bt-rail-item {
+        position: relative;
+        width: 66px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 10px 6px;
+        border-radius: var(--bt-radius);
+        cursor: pointer;
+        color: var(--bt-ink);
+
+        svg { width: 24px; height: 24px; }
+        .bt-rail-label { font-size: 11px; line-height: 16px; }
+
+        &:hover { background: var(--bt-hover); }
+        &.is-active { background: var(--bt-active); }
+
+        // SAM dropdown corner triangle
+        .bt-rail-caret {
+            position: absolute;
+            right: 8px; bottom: 8px;
+            width: 0; height: 0;
+            border-left: 7px solid transparent;
+            border-bottom: 7px solid var(--bt-ink);
+        }
+    }
+
+    .bt-rail-spacer { flex: 1; }
+}
+
+// ── Snapshot panel (floating, bottom center, above scrubber) ─────────────────
+.bt-snapshot {
+    position: absolute;
+    left: 50%;
+    bottom: 78px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+
+    .bt-btn {
+        height: 36px;
+        padding: 0 18px;
+        border: none;
+        border-radius: 8px;
+        background: #f1f1f1;
+        color: var(--bt-ink);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        &:hover { background: #e6e6e6; }
+    }
+    .bt-icon-btn {
+        width: 36px; height: 36px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border: 1px solid var(--bt-border);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--bt-ink);
+        cursor: pointer;
+        &:hover { background: var(--bt-hover); }
+        svg { width: 18px; height: 18px; }
+    }
+}
+
+// ── Scrubber (bottom) ───────────────────────────────────────────────────────
+.bt-scrubber {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 54px;
+    background: var(--bt-surface);
+    border-top: 1px solid var(--bt-border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 18px;
+
+    .bt-play {
+        flex-shrink: 0;
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        border: none;
+        background: var(--bt-ink);
+        color: #fff;
+        display: inline-flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        svg { width: 14px; height: 14px; }
+    }
+    .bt-time {
+        flex-shrink: 0;
+        font-size: 13px;
+        color: var(--bt-ink-2);
+        min-width: 34px;
+        font-variant-numeric: tabular-nums;
+    }
+    .bt-track {
+        position: relative;
+        flex: 1;
+        height: 4px;
+        border-radius: 2px;
+        background: #e3e3e3;
+
+        .bt-track-fill {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            border-radius: 2px;
+            background: var(--bt-ink);
+        }
+        // diamond markers
+        .bt-marker {
+            position: absolute;
+            top: 50%;
+            width: 11px; height: 11px;
+            transform: translate(-50%, -50%) rotate(45deg);
+            background: var(--bt-capture);
+            border-radius: 2px;
+        }
+        .bt-marker.is-playhead {
+            width: 14px; height: 14px;
+            background: var(--bt-playhead);
+            box-shadow: 0 0 0 3px rgba(47, 123, 255, 0.25);
+        }
+    }
+    .bt-expand {
+        flex-shrink: 0;
+        width: 24px; height: 24px;
+        display: inline-flex; align-items: center; justify-content: center;
+        color: var(--bt-ink-3);
+        cursor: pointer;
+    }
+}
+
+// ── Selection contextual bar (Selected / Move - best) ───────────────────────
+// `🌐 Cuboid [⏸ Pause] · Add Effect (2) · Add interaction (1) · ↺`
+.bt-contextbar {
+    position: absolute;
+    left: 50%;
+    bottom: 78px;
+    transform: translateX(-50%);
+    min-width: 440px;
+    padding: 14px 18px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+
+    .bt-cb-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+
+        .bt-cb-name {
+            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 15px; font-weight: 600;
+            svg { width: 18px; height: 18px; color: var(--bt-ink-2); }
+        }
+        .bt-pause {
+            display: inline-flex; align-items: center; gap: 6px;
+            height: 24px; padding: 0 10px;
+            border-radius: 12px;
+            background: var(--bt-ink);
+            color: #fff;
+            font-size: 12px; font-weight: 600;
+            cursor: pointer;
+        }
+    }
+
+    .bt-cb-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        .bt-cb-btn {
+            flex: 1;
+            display: flex; align-items: center; justify-content: space-between;
+            height: 38px; padding: 0 14px;
+            border: none; border-radius: 8px;
+            background: #f1f1f1;
+            font-size: 14px; font-weight: 600; color: var(--bt-ink);
+            cursor: pointer;
+            &:hover { background: #e6e6e6; }
+
+            .bt-cb-badge {
+                display: inline-flex; align-items: center; gap: 5px;
+                color: var(--bt-ink-2); font-weight: 600;
+            }
+            &.bt-effect .bt-cb-badge svg { color: var(--bt-effect); }
+            &.bt-interaction .bt-cb-badge svg { color: var(--bt-interaction); }
+        }
+        .bt-icon-btn {
+            width: 38px; height: 38px;
+            display: inline-flex; align-items: center; justify-content: center;
+            border: 1px solid var(--bt-border); border-radius: 8px;
+            background: #fff; color: var(--bt-ink); cursor: pointer;
+            &:hover { background: var(--bt-hover); }
+            svg { width: 18px; height: 18px; }
+        }
+    }
+
+    .bt-cb-hint {
+        margin-top: 8px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--bt-ink-3);
+    }
+}
