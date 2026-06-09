@@ -40,6 +40,11 @@ body.bt-mode {
     #top-container,            // stock menu / toolbars / popups
     #bottom-toolbar,
     #right-toolbar,
+    #menu-bar,                 // stock top-left menu (leaks under our header)
+    #timeline-panel,           // stock 4D timeline (the redundant bar under our scrubber)
+    #app-label,                // "SuperSplat" watermark
+    #cursor-label,
+    #annotation-overlay,
     .panel,                    // left-dock panels (scene / view / transform / effect / render-sub)
     .select-toolbar,
     .mode-toggle,

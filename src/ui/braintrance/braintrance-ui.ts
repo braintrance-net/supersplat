@@ -225,14 +225,37 @@ class BraintranceUI {
 
         const select = el('div', 'bt-tooltab bt-tooltab-dd');
         select.innerHTML = `${ICON.sam}<span class="bt-tt-label">Select</span><span class="bt-tt-caret">${ICON.chevronDown}</span>`;
-        select.addEventListener('click', (e) => { e.stopPropagation(); this.toggleSelectMenu(); });
+        // Photoshop-style: short click activates (selects last); long-press reveals the flyout.
+        let pressTimer = 0, longPressed = false;
+        const endPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = 0; } };
+        select.addEventListener('pointerdown', (e) => {
+            e.stopPropagation(); longPressed = false;
+            pressTimer = window.setTimeout(() => { longPressed = true; this.openSelectMenu(); }, 360);
+        });
+        select.addEventListener('pointerup', () => { endPress(); if (!longPressed) this.activateSelect(); });
+        select.addEventListener('pointerleave', endPress);
         this.toolTabs.sam = select;
         tabs.appendChild(select);
         return tabs;
     }
 
-    private toggleSelectMenu() {
-        if (this.selectMenu) { this.closeSelectMenu(); return; }
+    // short click: enter Select (last sub-tool) and re-select the last object
+    private activateSelect() {
+        this.selectMode = 'sam';
+        this.exitAudio();
+        this.closeAssets();
+        this.endLasso();
+        this.closeSelectMenu();
+        this.setActiveTool('sam');
+        this.updateSelectTabLabel();
+        if (this.canvas) this.canvas.style.cursor = 'crosshair';
+        if (this.selection?.entity && this.selection.entity.enabled !== false) {
+            this.selectSceneObject(this.selection); // auto-select the last object
+        }
+    }
+
+    private openSelectMenu() {
+        if (this.selectMenu) return;
         const menu = el('div', 'bt-select-menu bt-interactive');
         const item = (icon: string, name: string, sub: string, mode: 'sam' | 'lasso') => {
             const it = el('div', `bt-select-item${this.selectMode === mode ? ' is-active' : ''}`,
@@ -275,6 +298,10 @@ class BraintranceUI {
         this.closeSelectMenu();
         this.updateSelectTabLabel();
         if (this.canvas) this.canvas.style.cursor = 'crosshair';
+        // SAM re-selects the last object; lasso waits for a drawn region
+        if (mode === 'sam' && this.selection?.entity && this.selection.entity.enabled !== false) {
+            this.selectSceneObject(this.selection);
+        }
     }
 
     private updateSelectTabLabel() {
@@ -406,13 +433,14 @@ class BraintranceUI {
         head.appendChild(pause);
         bar.appendChild(head);
 
-        // Badges = the effects / interactions already on this selection.
+        // Category buttons: open the existing effects / interactions (not "Add" — the
+        // Add button lives inside each list so the library doesn't pop up too soon).
         const actions = el('div', 'bt-cb-actions');
         const eff = el('button', 'bt-cb-btn bt-effect',
-            `<span>Add Effect</span><span class="bt-cb-badge">${this.selection.effects.length} ${ICON.sparkles}</span>`);
+            `<span>Effects</span><span class="bt-cb-badge">${this.selection.effects.length} ${ICON.sparkles}</span>`);
         eff.addEventListener('click', () => this.openEffects());
         const inter = el('button', 'bt-cb-btn bt-interaction',
-            `<span>Add interaction</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
+            `<span>Interactions</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
         inter.addEventListener('click', () => this.openInteractions());
         actions.appendChild(eff);
         actions.appendChild(inter);
@@ -436,6 +464,9 @@ class BraintranceUI {
             chip.addEventListener('click', () => this.toggleChip(i));
             chips.appendChild(chip);
         });
+        const add = el('button', 'bt-chip bt-chip-add', `${ICON.plus}<span>Add effect</span>`);
+        add.addEventListener('click', () => this.showEffectsLibrary()); // library opens only here
+        chips.appendChild(add);
         bar.appendChild(chips);
         return bar;
     }
@@ -644,11 +675,21 @@ class BraintranceUI {
         this.effectsMode = true;
         this.interactionsMode = false;
         this.openChip = null;
-        this.refreshBottom();          // context bar → chip view
+        this.hideStrengthPop();
+        this.effectsPanel?.remove(); this.effectsPanel = null;
+        this.refreshBottom();          // context bar → effect chip list (+ Add)
+    }
+
+    private showEffectsLibrary() {
         this.hideStrengthPop();
         this.effectsPanel?.remove();
         this.effectsPanel = this.buildEffectsPanel();
         this.root.appendChild(this.effectsPanel);
+    }
+
+    private hideEffectsLibrary() {
+        this.effectsPanel?.remove();
+        this.effectsPanel = null;
     }
 
     private closeEffects() {
@@ -677,7 +718,7 @@ class BraintranceUI {
         const head = el('div', 'bt-ep-head');
         head.appendChild(el('div', 'bt-ep-title', 'Enhance with effects'));
         const close = el('div', 'bt-ep-close', ICON.x);
-        close.addEventListener('click', () => this.closeEffects());
+        close.addEventListener('click', () => this.hideEffectsLibrary()); // back to the chip list
         head.appendChild(close);
         panel.appendChild(head);
 
@@ -1094,9 +1135,11 @@ class BraintranceUI {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
             if (this.gizmo && this.scene) this.scene.forceRender = true;
             if (this.lasso && down) { this.addLassoPoint(e.clientX, e.clientY); return; }
-            // hover affordance only in click-select (SAM) mode
-            if (!down && this.selectMode === 'sam') {
-                canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : 'crosshair';
+            // hover affordance: pointer cursor over a selectable (selection-first)
+            if (!down && this.selectMode !== 'lasso' && !this.audioMode && !this.placingAudio) {
+                canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : '';
+            } else if (this.selectMode === 'lasso' && !down) {
+                canvas.style.cursor = 'crosshair';
             }
         });
         canvas.addEventListener('pointerup', (e) => {
@@ -1106,8 +1149,8 @@ class BraintranceUI {
             if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
             if (this.audioMode) return;
             if (this.recordingMode) return;
-            // selection only happens in SAM mode; Explore leaves clicks to the camera
-            if (this.selectMode === 'sam') {
+            // selection-first: a click selects whatever's under it (any tool but lasso-draw)
+            if (this.selectMode !== 'lasso') {
                 const obj = this.pickObjectAt(e.clientX, e.clientY);
                 if (obj) this.selectSceneObject(obj);
                 else this.selectObject(false);
@@ -1219,6 +1262,7 @@ class BraintranceUI {
                 if (this.selectMenu) { this.closeSelectMenu(); return; }
                 if (this.lasso) { this.endLasso(); return; }
                 if (this.strengthPop) { this.hideStrengthPop(); this.openChip = null; this.refreshBottom(); }
+                else if (this.effectsPanel) this.hideEffectsLibrary(); // close the library, keep the chip list
                 else if (this.recordingMode) this.finishRecording(false);
                 else if (this.effectsMode) this.closeEffects();
                 else if (this.interactionsMode) this.closeInteractions();
