@@ -11,8 +11,14 @@
 // can later be wired to SuperSplat's `Events` bus.
 // ─────────────────────────────────────────────────────────────────────────
 
+import { Color, Entity, StandardMaterial, Vec3 } from 'playcanvas';
+
 type RailTool = 'explore' | 'sam' | 'audio' | 'assets';
 type EditorState = 'explore' | 'selected';
+
+// Placeholder colours (matching the frames: idle cube red, selected cube yellow)
+const IDLE_DIFFUSE = new Color(0.83, 0.20, 0.18);
+const SEL_DIFFUSE = new Color(1.0, 0.90, 0.0);
 
 // ── icons (Lucide 24×24, matching the frame's stroke icons) ─────────────────
 const stroke = (paths: string, size = 24) =>
@@ -51,6 +57,12 @@ class BraintranceUI {
     private headerCenter!: HTMLElement;
     private bottomCenter!: HTMLElement; // hosts snapshot panel or context bar
     private railItems: Partial<Record<RailTool, HTMLElement>> = {};
+
+    // scene integration (placeholder object + faked selection)
+    private scene: any = null;
+    private canvas: HTMLCanvasElement | null = null;
+    private box: Entity | null = null;
+    private boxMat: StandardMaterial | null = null;
 
     constructor() {
         document.body.classList.add('bt-mode');
@@ -198,12 +210,20 @@ class BraintranceUI {
     }
 
     // ── state ──
-    private selectTool(tool: RailTool) {
+    private setActiveTool(tool: RailTool) {
         (Object.keys(this.railItems) as RailTool[]).forEach((k) => {
             this.railItems[k]?.classList.toggle('is-active', k === tool);
         });
-        // For the prototype, SAM = a live selection; everything else = explore chrome.
-        this.setState(tool === 'sam' ? 'selected' : 'explore');
+    }
+
+    private selectTool(tool: RailTool) {
+        // SAM = select the placeholder; any other tool returns to explore chrome.
+        if (tool === 'sam') {
+            this.selectObject(true);
+        } else {
+            this.selectObject(false);
+            this.setActiveTool(tool);
+        }
     }
 
     setState(state: EditorState) {
@@ -219,6 +239,83 @@ class BraintranceUI {
         if (state === 'explore' && !Object.values(this.railItems).some(i => i?.classList.contains('is-active'))) {
             this.railItems.explore?.classList.add('is-active');
         }
+    }
+
+    // ── scene integration: placeholder object + faked SAM selection ──
+    attachScene(scene: any, canvas: HTMLCanvasElement) {
+        this.scene = scene;
+        this.canvas = canvas;
+        this.addPlaceholder();
+        this.wireSelection();
+    }
+
+    private addPlaceholder() {
+        const scene = this.scene;
+        if (!scene?.contentRoot) return;
+        const mat = new StandardMaterial();
+        // Drive colour through emissive so the box reads clearly over the splat
+        // viewport even though the scene has no lights (a lit material would be black).
+        mat.diffuse.copy(IDLE_DIFFUSE);
+        mat.emissive.copy(IDLE_DIFFUSE);
+        mat.emissiveIntensity = 1;
+        mat.update();
+
+        const box = new Entity('bt-placeholder');
+        box.addComponent('render', { type: 'box' });
+        if (box.render) box.render.material = mat; // apply to all primitive mesh instances
+        box.setLocalScale(0.35, 0.35, 0.35);
+        box.setLocalPosition(0, 0.3, 0);
+        scene.contentRoot.addChild(box);
+
+        this.box = box;
+        this.boxMat = mat;
+        scene.forceRender = true;
+    }
+
+    private wireSelection() {
+        const canvas = this.canvas;
+        if (!canvas) return;
+        let down = false, downX = 0, downY = 0, moved = false;
+        canvas.addEventListener('pointerdown', (e) => { down = true; downX = e.clientX; downY = e.clientY; moved = false; });
+        canvas.addEventListener('pointermove', (e) => {
+            if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
+        });
+        // observe only (no preventDefault) so SuperSplat's camera drag still works
+        canvas.addEventListener('pointerup', (e) => {
+            const wasDown = down; down = false;
+            if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
+            this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));
+        });
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') this.selectObject(false);
+        });
+    }
+
+    // Faked SAM: a click within a screen-space radius of the placeholder selects it.
+    private hitsPlaceholder(clientX: number, clientY: number): boolean {
+        const scene = this.scene;
+        const canvas = this.canvas;
+        if (!scene || !canvas || !this.box) return true;
+        const cam = scene.app?.root?.findByName?.('Camera');
+        if (!cam?.camera) return true;
+        const sp = new Vec3();
+        cam.camera.worldToScreen(this.box.getPosition(), sp);
+        const rect = canvas.getBoundingClientRect();
+        const sx = sp.x * (rect.width / canvas.width);   // device px → css px
+        const sy = sp.y * (rect.height / canvas.height);
+        return Math.hypot((clientX - rect.left) - sx, (clientY - rect.top) - sy) < 150;
+    }
+
+    private selectObject(sel: boolean) {
+        if (this.boxMat) {
+            const c = sel ? SEL_DIFFUSE : IDLE_DIFFUSE;
+            this.boxMat.diffuse.copy(c);
+            this.boxMat.emissive.copy(c);
+            this.boxMat.update();
+            if (this.scene) this.scene.forceRender = true;
+        }
+        this.setActiveTool(sel ? 'sam' : 'explore');
+        this.setState(sel ? 'selected' : 'explore');
     }
 
     destroy() {
