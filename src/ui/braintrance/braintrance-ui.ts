@@ -11,7 +11,9 @@
 // can later be wired to SuperSplat's `Events` bus.
 // ─────────────────────────────────────────────────────────────────────────
 
-import { Color, Entity, StandardMaterial, Vec3 } from 'playcanvas';
+import { Color, Entity, RotateGizmo, ScaleGizmo, StandardMaterial, TranslateGizmo, Vec3 } from 'playcanvas';
+
+type GizmoMode = 'move' | 'scale' | 'rotate';
 
 type RailTool = 'explore' | 'sam' | 'audio' | 'assets';
 type EditorState = 'explore' | 'selected';
@@ -61,8 +63,19 @@ class BraintranceUI {
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
     private canvas: HTMLCanvasElement | null = null;
+    private events: any = null;
     private box: Entity | null = null;
     private boxMat: StandardMaterial | null = null;
+    private gizmo: any = null;            // active PlayCanvas transform gizmo
+    private gizmoMode: GizmoMode | null = null;
+
+    // the current selection's model — badges/counts read from here (the effects &
+    // interactions already on it, per the fixture cube: 2 effects + 1 interaction)
+    private selection = {
+        name: 'Cuboid',
+        effects: ['Vivid', 'Bloom'],
+        interactions: ['On click → moves + glows']
+    };
 
     constructor() {
         document.body.classList.add('bt-mode');
@@ -118,17 +131,19 @@ class BraintranceUI {
     private selectedTopbar(): HTMLElement {
         const wrap = el('div', 'bt-header-center');
         const bar = el('div', 'bt-topbar');
-        const tool = (key: string, label: string, opts: { active?: boolean; danger?: boolean } = {}) => {
-            const t = el('div', `bt-tool${opts.active ? ' is-active' : ''}${opts.danger ? ' is-danger' : ''}`);
+        const tool = (key: string, label: string, opts: { mode?: GizmoMode; danger?: boolean; onClick?: () => void } = {}) => {
+            const active = !!opts.mode && opts.mode === this.gizmoMode;
+            const t = el('div', `bt-tool${active ? ' is-active' : ''}${opts.danger ? ' is-danger' : ''}`);
             t.innerHTML = `<span class="bt-key">${key}</span><span>${label}</span>`;
+            if (opts.onClick) t.addEventListener('click', opts.onClick);
             return t;
         };
-        bar.appendChild(tool('Q', 'Move', { active: true }));
-        bar.appendChild(tool('E', 'Scale'));
-        bar.appendChild(tool('R', 'Rotate'));
-        bar.appendChild(tool('F', 'Frame'));
+        bar.appendChild(tool('Q', 'Move', { mode: 'move', onClick: () => this.setGizmoMode('move') }));
+        bar.appendChild(tool('E', 'Scale', { mode: 'scale', onClick: () => this.setGizmoMode('scale') }));
+        bar.appendChild(tool('R', 'Rotate', { mode: 'rotate', onClick: () => this.setGizmoMode('rotate') }));
+        bar.appendChild(tool('F', 'Frame', { onClick: () => this.frameSelection() }));
         bar.appendChild(tool('⌘K', 'Crop to'));
-        bar.appendChild(tool('⌫', 'Delete', { danger: true }));
+        bar.appendChild(tool('⌫', 'Delete', { danger: true, onClick: () => this.deleteSelection() }));
         wrap.appendChild(bar);
         return wrap;
     }
@@ -165,15 +180,16 @@ class BraintranceUI {
         const bar = el('div', 'bt-contextbar');
 
         const head = el('div', 'bt-cb-head');
-        head.appendChild(el('div', 'bt-cb-name', `${ICON.globe}<span>Cuboid</span>`));
+        head.appendChild(el('div', 'bt-cb-name', `${ICON.globe}<span>${this.selection.name}</span>`));
         head.appendChild(el('div', 'bt-pause', `${ICON.pause}<span>Pause</span>`));
         bar.appendChild(head);
 
+        // Badges = the effects / interactions already on this selection.
         const actions = el('div', 'bt-cb-actions');
         const eff = el('button', 'bt-cb-btn bt-effect',
-            `<span>Add Effect</span><span class="bt-cb-badge">2 ${ICON.sparkles}</span>`);
+            `<span>Add Effect</span><span class="bt-cb-badge">${this.selection.effects.length} ${ICON.sparkles}</span>`);
         const inter = el('button', 'bt-cb-btn bt-interaction',
-            `<span>Add interaction</span><span class="bt-cb-badge">1 ${ICON.zap}</span>`);
+            `<span>Add interaction</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
         actions.appendChild(eff);
         actions.appendChild(inter);
         actions.appendChild(el('button', 'bt-icon-btn', ICON.reset));
@@ -228,9 +244,7 @@ class BraintranceUI {
 
     setState(state: EditorState) {
         this.state = state;
-        // header center
-        this.headerCenter.replaceWith(state === 'selected' ? this.selectedTopbar() : this.exploreHints());
-        this.headerCenter = this.root.querySelector('.bt-header-center') as HTMLElement;
+        this.refreshHeaderCenter();
         // bottom center panel
         const next = state === 'selected' ? this.contextBar() : this.snapshotPanel();
         this.bottomCenter.replaceWith(next);
@@ -241,12 +255,22 @@ class BraintranceUI {
         }
     }
 
+    // Re-render the header center cluster (camera hints vs transform tools). Also
+    // called when the gizmo mode changes so the active Q/E/R highlight updates.
+    private refreshHeaderCenter() {
+        const next = this.state === 'selected' ? this.selectedTopbar() : this.exploreHints();
+        this.headerCenter.replaceWith(next);
+        this.headerCenter = next;
+    }
+
     // ── scene integration: placeholder object + faked SAM selection ──
-    attachScene(scene: any, canvas: HTMLCanvasElement) {
+    attachScene(scene: any, canvas: HTMLCanvasElement, events?: any) {
         this.scene = scene;
         this.canvas = canvas;
+        this.events = events ?? null;
         this.addPlaceholder();
         this.wireSelection();
+        this.wireKeyboard();
     }
 
     private addPlaceholder() {
@@ -279,6 +303,9 @@ class BraintranceUI {
         canvas.addEventListener('pointerdown', (e) => { down = true; downX = e.clientX; downY = e.clientY; moved = false; });
         canvas.addEventListener('pointermove', (e) => {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
+            // keep rendering while a gizmo is up so its hover/drag feedback is live
+            // (SuperSplat renders on demand; the gizmo otherwise wouldn't animate)
+            if (this.gizmo && this.scene) this.scene.forceRender = true;
         });
         // observe only (no preventDefault) so SuperSplat's camera drag still works
         canvas.addEventListener('pointerup', (e) => {
@@ -286,8 +313,23 @@ class BraintranceUI {
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
             this.selectObject(this.hitsPlaceholder(e.clientX, e.clientY));
         });
+    }
+
+    // ── keyboard map (spec §8): Q/E/R transforms · F frame · ⌫ delete · Esc deselect ──
+    private wireKeyboard() {
         window.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') this.selectObject(false);
+            const tag = (e.target as HTMLElement)?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            if (e.key === 'Escape') { this.selectObject(false); return; }
+            if (this.state !== 'selected') return; // leave WASD etc. to the camera
+            switch (e.key.toLowerCase()) {
+                case 'q': this.setGizmoMode('move'); break;
+                case 'e': this.setGizmoMode('scale'); break;
+                case 'r': this.setGizmoMode('rotate'); break;
+                case 'f': this.frameSelection(); break;
+                case 'delete': case 'backspace': this.deleteSelection(); break;
+                default: return;
+            }
         });
     }
 
@@ -307,7 +349,7 @@ class BraintranceUI {
     }
 
     private selectObject(sel: boolean) {
-        if (this.boxMat) {
+        if (this.boxMat && this.box?.enabled !== false) {
             const c = sel ? SEL_DIFFUSE : IDLE_DIFFUSE;
             this.boxMat.diffuse.copy(c);
             this.boxMat.emissive.copy(c);
@@ -316,6 +358,54 @@ class BraintranceUI {
         }
         this.setActiveTool(sel ? 'sam' : 'explore');
         this.setState(sel ? 'selected' : 'explore');
+        // selecting defaults to the Move gizmo (matches the "W - Move - best" frame)
+        if (sel) this.setGizmoMode('move');
+        else this.clearGizmo();
+    }
+
+    // ── transform gizmo (real PlayCanvas Translate/Scale/Rotate) ──
+    private cameraComponent(): any {
+        return this.scene?.app?.root?.findByName?.('Camera')?.camera ?? null;
+    }
+
+    private setGizmoMode(mode: GizmoMode) {
+        if (this.state !== 'selected' || !this.box || this.box.enabled === false) return;
+        if (this.gizmoMode === mode && this.gizmo) return;
+        this.clearGizmo();
+        const cam = this.cameraComponent();
+        const layer = this.scene?.gizmoLayer;
+        if (!cam || !layer) return;
+        const Cls = mode === 'move' ? TranslateGizmo : mode === 'scale' ? ScaleGizmo : RotateGizmo;
+        const gizmo = new Cls(cam, layer);
+        gizmo.attach([this.box]);
+        const render = () => { if (this.scene) this.scene.forceRender = true; };
+        gizmo.on('transform:start', render);
+        gizmo.on('transform:move', render);
+        gizmo.on('transform:end', render);
+        this.gizmo = gizmo;
+        this.gizmoMode = mode;
+        render();
+        this.refreshHeaderCenter(); // highlight active Q/E/R
+    }
+
+    private clearGizmo() {
+        if (this.gizmo) {
+            try { this.gizmo.detach(); this.gizmo.destroy(); } catch (e) { /* noop */ }
+            this.gizmo = null;
+        }
+        this.gizmoMode = null;
+        if (this.scene) this.scene.forceRender = true;
+    }
+
+    private frameSelection() {
+        this.events?.fire?.('camera.focus');
+    }
+
+    private deleteSelection() {
+        this.clearGizmo();
+        if (this.box) this.box.enabled = false; // placeholder: hide it
+        if (this.scene) this.scene.forceRender = true;
+        this.selectObject(false);
     }
 
     destroy() {

@@ -141,7 +141,7 @@ const main = async () => {
 
     // braintrance prototype: drop a placeholder object into the live scene and
     // wire faked-SAM click selection so the redesign is testable end to end.
-    braintranceUI.attachScene(scene, editorUI.canvas);
+    braintranceUI.attachScene(scene, editorUI.canvas, events);
 
     // colors
     const bgClr = new Color();
