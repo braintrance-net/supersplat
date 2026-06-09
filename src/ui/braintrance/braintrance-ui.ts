@@ -393,7 +393,15 @@ class BraintranceUI {
     private exploreHints(): HTMLElement {
         const wrap = el('div', 'bt-header-center');
         const keys = el('div', 'bt-hint');
-        keys.innerHTML = '<span class="bt-hint-keys">⌨</span><span>W A S D <span style="color:var(--bt-ink-3)">or Arrow keys to move</span></span>';
+        // little WASD keycap cluster (W on top, A S D below) + "or Arrow keys to move"
+        keys.innerHTML =
+            '<span class="bt-wasd">' +
+                '<span class="bt-kc bt-kc-w">W</span>' +
+                '<span class="bt-kc bt-kc-a">A</span>' +
+                '<span class="bt-kc bt-kc-s">S</span>' +
+                '<span class="bt-kc bt-kc-d">D</span>' +
+            '</span>' +
+            '<span class="bt-hint-sub">or Arrow keys to move</span>';
         wrap.appendChild(keys);
         const hint = (icon: string, label: string) => el('div', 'bt-hint', `${icon}<span>${label}</span>`);
         wrap.appendChild(hint(ICON.rotate, 'Rotate'));
@@ -1570,9 +1578,9 @@ class BraintranceUI {
         }
         this.setActiveTool(sel ? 'sam' : 'explore');
         this.setState(sel ? 'selected' : 'explore');
-        // selecting defaults to the Move gizmo (matches the "W - Move - best" frame)
-        if (sel) this.setGizmoMode('move');
-        else this.clearGizmo();
+        // Selection shows the highlight only — no gizmo until a transform tool
+        // (Q/E/R) is chosen. Matches "Selected - best" (no gizmo) vs "W - Move - best"
+        // (move gizmo). The previous object's gizmo was already cleared above.
     }
 
     // ── transform gizmo (real PlayCanvas Translate/Scale/Rotate) ──

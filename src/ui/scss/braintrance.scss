@@ -52,6 +52,16 @@ body.bt-mode {
     .pcui-panel {
         display: none !important;
     }
+
+    // keep SuperSplat's orientation view-cube (a designed element, top-right of the
+    // viewport) but nudge it clear of our header and scale it to the cleaner mock size.
+    #view-cube-container {
+        top: 94px !important;
+        right: 16px !important;
+        left: auto !important;
+        transform: scale(0.8);
+        transform-origin: top right;
+    }
 }
 
 #bt-overlay {
@@ -159,6 +169,35 @@ body.bt-mode {
 
     .bt-hint-keys { height: 31px; }
     svg { width: 22px; height: 22px; color: var(--bt-ink-2); }
+
+    .bt-hint-sub { color: var(--bt-ink-3); font-size: 13px; }
+}
+
+// little WASD keycap cluster (W centered on top, A S D below)
+.bt-wasd {
+    display: inline-grid;
+    grid-template-columns: repeat(3, 17px);
+    grid-template-rows: 16px 16px;
+    gap: 2px;
+    margin-right: 4px;
+
+    .bt-kc {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1;
+        color: var(--bt-ink-2);
+        background: var(--bt-hover);
+        border: 1px solid var(--bt-border);
+        border-radius: 4px;
+        box-shadow: 0 1px 0 var(--bt-border);
+    }
+    .bt-kc-w { grid-area: 1 / 2 / 2 / 3; }
+    .bt-kc-a { grid-area: 2 / 1 / 3 / 2; }
+    .bt-kc-s { grid-area: 2 / 2 / 3 / 3; }
+    .bt-kc-d { grid-area: 2 / 3 / 3 / 4; }
 }
 
 // transform tools (Selected / Move - best): Q Move · E Scale · R Rotate · F Frame · ⌘K Crop to · ⌫ Delete
