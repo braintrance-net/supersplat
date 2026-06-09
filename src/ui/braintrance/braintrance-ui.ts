@@ -1274,19 +1274,37 @@ class BraintranceUI {
     private wireSelection() {
         const canvas = this.canvas;
         if (!canvas) return;
+        // SuperSplat's camera controller calls setPointerCapture on #canvas-container,
+        // which redirects every later pointermove/up to that element. If we listened on
+        // the <canvas> child we'd never see the release, so a real click could never
+        // select. Listen on the same captured element; coordinate math still uses the
+        // canvas (it fills the container, so the rect is identical).
+        const target: HTMLElement = document.getElementById('canvas-container') ?? canvas;
         let down = false, downX = 0, downY = 0, moved = false;
         // Click-vs-drag slop: a real mouse/trackpad jitters several px during a click,
         // so anything under this still counts as a click-to-select. Above it is a
         // deliberate camera orbit. (Lasso/crop draw on every move regardless.)
         const CLICK_SLOP = 10;
         const drawMode = () => this.selectMode === 'lasso' || this.selectMode === 'crop';
-        canvas.addEventListener('pointerdown', (e) => {
+        target.addEventListener('pointerdown', (e) => {
             down = true; downX = e.clientX; downY = e.clientY; moved = false;
             if (e.button !== 0) return;
-            if (this.selectMode === 'lasso') this.startLasso(e.clientX, e.clientY);
-            else if (this.selectMode === 'crop') this.startCrop(e.clientX, e.clientY);
+            // For lasso/crop we set camera.inputDisabled, so SuperSplat skips its own
+            // pointer capture — capture here ourselves so the whole drag (move + up)
+            // is delivered to this element even if the cursor leaves it.
+            if (this.selectMode === 'lasso') {
+                try {
+                    target.setPointerCapture(e.pointerId);
+                } catch (err) { /* noop */ }
+                this.startLasso(e.clientX, e.clientY);
+            } else if (this.selectMode === 'crop') {
+                try {
+                    target.setPointerCapture(e.pointerId);
+                } catch (err) { /* noop */ }
+                this.startCrop(e.clientX, e.clientY);
+            }
         });
-        canvas.addEventListener('pointermove', (e) => {
+        target.addEventListener('pointermove', (e) => {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > CLICK_SLOP) moved = true;
             if (this.gizmo && this.scene) this.scene.forceRender = true;
             if (this.lasso && down) {
@@ -1302,7 +1320,7 @@ class BraintranceUI {
                 canvas.style.cursor = 'crosshair';
             }
         });
-        canvas.addEventListener('pointerup', (e) => {
+        target.addEventListener('pointerup', (e) => {
             const wasDown = down; down = false;
             if (this.lasso) {
                 this.finishLasso(); return;
