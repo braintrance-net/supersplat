@@ -753,7 +753,7 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
 #bt-overlay .bt-sequencer {
     position: absolute;
     left: 0; right: 0; bottom: 0;
-    height: 300px;
+    height: 332px;
     background: var(--bt-surface);
     border-top: 1px solid var(--bt-border);
     box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.12);
@@ -784,15 +784,16 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
         }
     }
 
-    .bt-seq-body { flex: 1; display: flex; overflow: hidden; }
+    // scroll the label + lane columns together so they stay row-aligned when there
+    // are more tracks than fit (the ruler scrolls with them; the time is also in the head).
+    .bt-seq-body { flex: 1; display: flex; overflow-y: auto; overflow-x: hidden; }
 
     .bt-seq-labels {
         width: 184px; flex-shrink: 0;
         border-right: 1px solid var(--bt-border);
-        overflow-y: auto;
         .bt-seq-label {
             display: flex; align-items: center; gap: 8px;
-            height: 40px; padding: 0 14px;
+            height: 36px; padding: 0 14px;
             font-size: 13px; font-weight: 600; color: var(--bt-ink);
             border-bottom: 1px solid #f1f1f1;
             svg { width: 16px; height: 16px; color: var(--bt-ink-3); flex-shrink: 0; }
@@ -818,7 +819,7 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
             }
         }
         .bt-seq-lane {
-            position: relative; height: 40px; border-bottom: 1px solid #f1f1f1;
+            position: relative; height: 36px; border-bottom: 1px solid #f1f1f1;
             .bt-seq-kf {
                 position: absolute; top: 50%; width: 11px; height: 11px;
                 transform: translate(-50%, -50%) rotate(45deg); border-radius: 2px;
