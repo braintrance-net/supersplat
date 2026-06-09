@@ -109,6 +109,7 @@ class BraintranceUI {
 
     // effects-library state
     private effectsMode = false;            // context bar in chip view + library open
+    private interactionsMode = false;       // context bar showing interaction chips + Add
     private openChip: number | null = null; // index of the chip whose strength popover is open
     private effectsPanel: HTMLElement | null = null;
     private strengthPop: HTMLElement | null = null;
@@ -235,7 +236,28 @@ class BraintranceUI {
 
     // ── selection contextual bar — default actions vs effect-chip view ──
     private contextBar(): HTMLElement {
-        return this.effectsMode ? this.contextBarChips() : this.contextBarDefault();
+        if (this.effectsMode) return this.contextBarChips();
+        if (this.interactionsMode) return this.contextBarInteractions();
+        return this.contextBarDefault();
+    }
+
+    // interaction chips: ‹ Cuboid · [On click → …] · [+ Add]
+    private contextBarInteractions(): HTMLElement {
+        const bar = el('div', 'bt-contextbar');
+        const chips = el('div', 'bt-cb-chips');
+        const back = el('div', 'bt-cb-back', ICON.back);
+        back.addEventListener('click', () => this.closeInteractions());
+        chips.appendChild(back);
+        chips.appendChild(el('div', 'bt-cb-name', this.selection.name));
+        this.selection.interactions.forEach((it) => {
+            chips.appendChild(el('div', 'bt-chip bt-chip-int',
+                `<span class="bt-chip-dot"></span><span>${it}</span><span class="bt-chip-caret">${ICON.chevronRight}</span>`));
+        });
+        const add = el('button', 'bt-chip bt-chip-add', `${ICON.plus}<span>Add</span>`);
+        add.addEventListener('click', () => this.startRecording());
+        chips.appendChild(add);
+        bar.appendChild(chips);
+        return bar;
     }
 
     private contextBarDefault(): HTMLElement {
@@ -253,7 +275,7 @@ class BraintranceUI {
         eff.addEventListener('click', () => this.openEffects());
         const inter = el('button', 'bt-cb-btn bt-interaction',
             `<span>Add interaction</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
-        inter.addEventListener('click', () => this.startRecording());
+        inter.addEventListener('click', () => this.openInteractions());
         actions.appendChild(eff);
         actions.appendChild(inter);
         actions.appendChild(el('button', 'bt-icon-btn', ICON.reset));
@@ -357,6 +379,7 @@ class BraintranceUI {
     // ── effects library ("Enhance with effects") ──
     private openEffects() {
         this.effectsMode = true;
+        this.interactionsMode = false;
         this.openChip = null;
         this.refreshBottom();          // context bar → chip view
         this.hideStrengthPop();
@@ -370,6 +393,19 @@ class BraintranceUI {
         this.openChip = null;
         this.effectsPanel?.remove(); this.effectsPanel = null;
         this.hideStrengthPop();
+        if (this.state === 'selected') this.refreshBottom();
+    }
+
+    private openInteractions() {
+        this.interactionsMode = true;
+        this.effectsMode = false;
+        this.effectsPanel?.remove(); this.effectsPanel = null;
+        this.hideStrengthPop();
+        this.refreshBottom(); // context bar → interaction chips + Add
+    }
+
+    private closeInteractions() {
+        this.interactionsMode = false;
         if (this.state === 'selected') this.refreshBottom();
     }
 
@@ -619,7 +655,8 @@ class BraintranceUI {
         this.recordBorder?.remove(); this.recordBorder = null;
         this.recordBar?.remove(); this.recordBar = null;
         if (commit) this.selection.interactions.push('On click → changes'); // bumps the badge
-        this.refreshBottom(); // restore context bar with updated count
+        this.interactionsMode = true; // return to the interaction list (showing the new one)
+        this.refreshBottom();
     }
 
     // ── asset browser (revealable) ──
@@ -767,6 +804,7 @@ class BraintranceUI {
             if (e.key === 'Escape') {
                 if (this.recordingMode) this.finishRecording(false); // cancel recording
                 else if (this.effectsMode) this.closeEffects();      // close the library first
+                else if (this.interactionsMode) this.closeInteractions();
                 else this.selectObject(false);
                 return;
             }
@@ -800,6 +838,7 @@ class BraintranceUI {
     private selectObject(sel: boolean) {
         // reset any open effects / recording UI on selection change
         this.effectsMode = false;
+        this.interactionsMode = false;
         this.openChip = null;
         this.effectsPanel?.remove(); this.effectsPanel = null;
         this.hideStrengthPop();
@@ -859,9 +898,11 @@ class BraintranceUI {
 
     private frameSelection() {
         const cam = this.scene?.camera; // Camera element
-        if (cam?.setFocalPoint && this.box && this.box.enabled !== false) {
-            cam.setFocalPoint(this.box.getPosition());        // re-centre orbit on the cube
-            cam.setDistance?.(1.2, 0.4);                      // pull to a comfortable framing
+        if (cam?.focus && this.box && this.box.enabled !== false) {
+            // focus() sets focal point + the right distance to fit `radius`; speed 0 = instant.
+            const r = Math.max(this.box.getLocalScale().x, 0.2) * 1.6;
+            cam.focus({ focalPoint: this.box.getPosition(), radius: r, speed: 0 });
+            if (this.scene) this.scene.forceRender = true;
         } else {
             this.events?.fire?.('camera.focus');
         }

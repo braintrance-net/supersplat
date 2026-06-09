@@ -435,6 +435,12 @@ body.bt-mode {
             .bt-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--bt-effect); }
             .bt-chip-caret { color: var(--bt-ink-3); display: inline-flex; svg { width: 14px; height: 14px; } }
         }
+        .bt-chip.bt-chip-int .bt-chip-dot { background: var(--bt-interaction); }
+        .bt-chip.bt-chip-add {
+            background: transparent; border: 1px dashed var(--bt-border); color: var(--bt-ink-2);
+            svg { width: 16px; height: 16px; }
+            &:hover { background: var(--bt-hover); }
+        }
     }
 }
 
