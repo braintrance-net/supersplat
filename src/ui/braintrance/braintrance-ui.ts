@@ -57,6 +57,14 @@ const ICON = {
     crop: stroke('<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>')
 };
 
+// Top-menu contents ('—' = separator). Most are faked; a few wire to real actions.
+const MENUS: Record<string, [string, string?][]> = {
+    file: [['New project'], ['Open…'], ['Save', '⌘S'], ['—'], ['Export video…'], ['Publish to viewer']],
+    select: [['Select all', '⌘A'], ['Deselect', 'Esc'], ['Invert'], ['—'], ['Frame selection', 'F']],
+    view: [['Frame all'], ['Reset camera'], ['—'], ['Toggle grid'], ['Fullscreen']],
+    help: [['Keyboard shortcuts', '?'], ['About Braintrance'], ['—'], ['Documentation']]
+};
+
 const DURATION = 151; // 2:31 timeline (seconds)
 const fmtTime = (sec: number) => {
     const s = Math.max(0, Math.round(sec));
@@ -115,6 +123,8 @@ class BraintranceUI {
     private lasso: { pts: { x: number; y: number }[]; el: HTMLElement } | null = null;
     private cropBox: { x0: number; y0: number; x1: number; y1: number; el: HTMLElement } | null = null;
     private cropConfirm: HTMLElement | null = null;
+    private menuDropdown: HTMLElement | null = null;
+    private menuOpen: string | null = null;
     private depthPop: HTMLElement | null = null;            // lasso depth prompt
     private captures: number[] = [0.14, 0.60];              // snapshot marker positions (0..1)
     private scrubberEl: HTMLElement | null = null;
@@ -202,9 +212,57 @@ class BraintranceUI {
     private buildMenubar(): HTMLElement {
         const bar = el('div', 'bt-menubar');
         ['file', 'select', 'view', 'help'].forEach((label) => {
-            bar.appendChild(el('div', 'bt-menubar-item', label));
+            const it = el('div', 'bt-menubar-item', label);
+            it.addEventListener('click', (e) => { e.stopPropagation(); this.openMenu(label, it); });
+            it.addEventListener('mouseenter', () => { if (this.menuOpen && this.menuOpen !== label) this.openMenu(label, it); });
+            bar.appendChild(it);
         });
         return bar;
+    }
+
+    private openMenu(name: string, anchor: HTMLElement) {
+        if (this.menuOpen === name) { this.closeMenu(); return; }
+        this.closeMenu();
+        const dd = el('div', 'bt-menu-dd bt-interactive');
+        (MENUS[name] ?? []).forEach(([label, sc]) => {
+            if (label === '—') { dd.appendChild(el('div', 'bt-menu-sep')); return; }
+            const row = el('div', 'bt-menu-row', `<span>${label}</span>${sc ? `<span class="bt-menu-sc">${sc}</span>` : ''}`);
+            row.addEventListener('click', () => { this.closeMenu(); this.runMenuAction(label); });
+            dd.appendChild(row);
+        });
+        const r = anchor.getBoundingClientRect();
+        dd.style.left = `${r.left}px`;
+        dd.style.top = `${r.bottom + 2}px`;
+        this.menuDropdown = dd;
+        this.menuOpen = name;
+        anchor.classList.add('is-open');
+        this.root.appendChild(dd);
+        setTimeout(() => document.addEventListener('pointerdown', this.onMenuDocDown), 0);
+    }
+
+    private onMenuDocDown = (e: PointerEvent) => {
+        const t = e.target as HTMLElement;
+        if (this.menuDropdown && !this.menuDropdown.contains(t) && !t?.closest?.('.bt-menubar')) this.closeMenu();
+    };
+
+    private closeMenu() {
+        if (this.menuDropdown) {
+            this.menuDropdown.remove();
+            this.menuDropdown = null;
+            this.menuOpen = null;
+            this.root.querySelectorAll('.bt-menubar-item.is-open').forEach(e => e.classList.remove('is-open'));
+            document.removeEventListener('pointerdown', this.onMenuDocDown);
+        }
+    }
+
+    private runMenuAction(label: string) {
+        if (label === 'Frame all') this.frameAll();
+        else if (label === 'Frame selection') this.frameSelection();
+        else if (label === 'Deselect') this.selectObject(false);
+        else if (label === 'Fullscreen') {
+            (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.())?.catch?.(() => {});
+        }
+        // remaining items are faked placeholders for the prototype
     }
 
     // ── project sub-header (back · title · center cluster) ──
@@ -1339,6 +1397,7 @@ class BraintranceUI {
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
             if (e.key === 'Escape') {
                 // one layer per press: lasso/menus → popover → recording → library/list → deselect
+                if (this.menuDropdown) { this.closeMenu(); return; }
                 if (this.depthPop) { this.cancelLasso(); return; }
                 if (this.cropConfirm || this.cropBox) { this.endCrop(); return; }
                 if (this.selectMenu) { this.closeSelectMenu(); return; }

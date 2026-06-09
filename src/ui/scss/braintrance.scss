@@ -919,3 +919,24 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
         .bt-crop-cancel { background: #f1f1f1; color: var(--bt-ink); &:hover { background: #e6e6e6; } }
         .bt-crop-apply { background: var(--bt-ink); color: #fff; &:hover { background: #222; } } }
 }
+
+// ── Top-menu dropdowns (file / select / view / help) ────────────────────────
+.bt-menubar .bt-menubar-item.is-open { opacity: 1; background: rgba(0,0,0,0.06); border-radius: 6px; }
+
+#bt-overlay .bt-menu-dd {
+    position: fixed; z-index: 210;
+    min-width: 210px;
+    background: var(--bt-panel);
+    border: 1px solid var(--bt-border);
+    border-radius: 10px;
+    box-shadow: var(--bt-shadow);
+    padding: 6px;
+    .bt-menu-row {
+        display: flex; align-items: center; justify-content: space-between;
+        height: 32px; padding: 0 10px; border-radius: 7px;
+        font-size: 13px; color: var(--bt-ink); cursor: pointer;
+        .bt-menu-sc { font-size: 12px; color: var(--bt-ink-3); }
+        &:hover { background: var(--bt-active); }
+    }
+    .bt-menu-sep { height: 1px; background: var(--bt-border); margin: 5px 8px; }
+}
