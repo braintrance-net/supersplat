@@ -1664,9 +1664,7 @@ class WalkTool {
             }
         }
 
-        if (reportGroundY !== null) {
-            this.externalGroundY = reportGroundY;
-        }
+        this.externalGroundY = reportGroundY;
         if (changed || this.externalVerticalVelocity !== 0) {
             this.reportCollisionMesh(performance.now(), grounded ? 'ground' : 'air', {
                 blocked: false,
