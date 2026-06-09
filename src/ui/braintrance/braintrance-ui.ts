@@ -773,7 +773,10 @@ class BraintranceUI {
     // Re-render the bottom-center panel (audio bar vs context bar / chips vs snapshot).
     private refreshBottom() {
         let next: HTMLElement;
-        if (this.recordingMode) next = el('div'); // center panel hidden; record bar is full-width
+        // a lasso-depth / crop-confirm prompt owns the bottom-center zone — don't
+        // stack the snapshot bar (or any panel) under it.
+        if (this.depthPop || this.cropConfirm) next = el('div');
+        else if (this.recordingMode) next = el('div'); // center panel hidden; record bar is full-width
         else if (this.audioMode) next = this.buildAudioBar();
         else if (this.state === 'selected') next = this.contextBar();
         else next = this.snapshotPanel();
@@ -1376,10 +1379,12 @@ class BraintranceUI {
         pop.style.top = `${Math.min(cy + 14, window.innerHeight - 190)}px`;
         this.depthPop = pop;
         this.root.appendChild(pop);
+        this.refreshBottom(); // hide the snapshot bar while the prompt is open
     }
 
     private cancelLasso() {
         this.depthPop?.remove(); this.depthPop = null; this.endLasso();
+        this.refreshBottom(); // restore the snapshot bar
     }
 
     private commitLasso(cx: number, cy: number) {
@@ -1388,6 +1393,7 @@ class BraintranceUI {
         // faked SAM: select whatever object sits under the lasso's centre
         const obj = this.pickObjectAt(cx, cy);
         if (obj) this.selectSceneObject(obj);
+        else this.refreshBottom(); // nothing selected → bring the snapshot bar back
     }
 
     // ── crop / volume (bounding-box) selection — the interview's #1 tool ──
@@ -1419,6 +1425,7 @@ class BraintranceUI {
         if (this.scene?.camera) this.scene.camera.inputDisabled = false;
         this.cropBox?.el.remove(); this.cropBox = null;
         this.cropConfirm?.remove(); this.cropConfirm = null;
+        this.refreshBottom(); // restore the snapshot bar (no-op if already correct)
     }
 
     private finishCrop() {
@@ -1454,6 +1461,7 @@ class BraintranceUI {
         bar.style.top = `${Math.min(Math.max(t - 8, 100), window.innerHeight - 150)}px`;
         this.cropConfirm = bar;
         this.root.appendChild(bar);
+        this.refreshBottom(); // hide the snapshot bar while the confirm is open
     }
 
     private applyCrop() {
