@@ -48,7 +48,16 @@ const ICON = {
     trash: stroke('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>', 15),
     chevronRight: stroke('<path d="m9 18 6-6-6-6"/>', 16),
     plus: stroke('<path d="M12 5v14"/><path d="M5 12h14"/>', 18),
-    camera: stroke('<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/>', 18)
+    camera: stroke('<path d="m22 8-6 4 6 4V8Z"/><rect x="2" y="6" width="14" height="12" rx="2"/>', 18),
+    chevronDown: stroke('<path d="m6 9 6 6 6-6"/>', 18),
+    diamond: stroke('<path d="M12 3l9 9-9 9-9-9z"/>', 15),
+    type: stroke('<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>', 18)
+};
+
+const DURATION = 151; // 2:31 timeline (seconds)
+const fmtTime = (sec: number) => {
+    const s = Math.max(0, Math.round(sec));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
 
 // Effect catalogue (faked — labels per spec §7.6). Presets are single-select
@@ -95,6 +104,18 @@ class BraintranceUI {
     private headerCenter!: HTMLElement;
     private bottomCenter!: HTMLElement; // hosts snapshot panel or context bar
     private railItems: Partial<Record<RailTool, HTMLElement>> = {};
+    private toolTabs: Partial<Record<RailTool, HTMLElement>> = {}; // top Explore/SAM toggle
+
+    // playback (scrubber + sequencer share one playhead)
+    private playing = false;
+    private playhead = 0.34;             // 0..1 (0:51 of 2:31)
+    private playRaf = 0;
+    private scrubFill: HTMLElement | null = null;
+    private scrubPlayheadEl: HTMLElement | null = null;
+    private scrubTimeEl: HTMLElement | null = null;
+    private playBtns: HTMLElement[] = []; // play buttons (scrubber + sequencer) to sync icon
+    private sequencer: HTMLElement | null = null;
+    private seqPlayheadEl: HTMLElement | null = null;
 
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
@@ -170,9 +191,24 @@ class BraintranceUI {
         const header = el('div', 'bt-header');
         header.appendChild(el('div', 'bt-back', ICON.back));
         header.appendChild(el('div', 'bt-project-title', 'Untitled Project'));
+        header.appendChild(this.buildToolTabs()); // Explore / SAM toggle, right of the title
         this.headerCenter = el('div', 'bt-header-center');
         header.appendChild(this.headerCenter);
         return header;
+    }
+
+    // top-of-header navigate/select toggle (moved up from the rail)
+    private buildToolTabs(): HTMLElement {
+        const tabs = el('div', 'bt-tooltabs');
+        const tab = (tool: RailTool, icon: string, label: string) => {
+            const t = el('div', 'bt-tooltab', `${icon}<span>${label}</span>`);
+            t.addEventListener('click', () => this.selectTool(tool));
+            this.toolTabs[tool] = t;
+            return t;
+        };
+        tabs.appendChild(tab('explore', ICON.explore, 'Explore'));
+        tabs.appendChild(tab('sam', ICON.sam, 'Select'));
+        return tabs;
     }
 
     // camera hints (Explore state)
@@ -220,9 +256,7 @@ class BraintranceUI {
             this.railItems[tool] = it;
             return it;
         };
-        // Grouped at the top, matching the "best" frame (not Assets-pinned-bottom).
-        rail.appendChild(item('explore', ICON.explore, 'Explore'));
-        rail.appendChild(item('sam', ICON.sam, 'SAM', true));
+        // Explore/Select moved to the top header; the rail holds content tools.
         rail.appendChild(item('audio', ICON.audio, 'Audio'));
         rail.appendChild(item('assets', ICON.assets, 'Assets'));
         return rail;
@@ -310,33 +344,153 @@ class BraintranceUI {
     // ── scrubber ──
     private buildScrubber(): HTMLElement {
         const s = el('div', 'bt-scrubber');
-        s.appendChild(el('button', 'bt-play', ICON.play));
-        s.appendChild(el('div', 'bt-time', '0:51'));
+        const play = el('button', 'bt-play', ICON.play);
+        play.addEventListener('click', () => this.togglePlay());
+        this.playBtns = [play];
+        s.appendChild(play);
+        this.scrubTimeEl = el('div', 'bt-time', fmtTime(this.playhead * DURATION));
+        s.appendChild(this.scrubTimeEl);
 
         const track = el('div', 'bt-track');
-        track.appendChild(el('div', 'bt-track-fill'));
-        // seed captures (fixtures): two gray diamonds + a blue playhead
-        const marker = (pct: number, playhead = false) => {
-            const m = el('div', `bt-marker${playhead ? ' is-playhead' : ''}`);
-            m.style.left = `${pct}%`;
-            return m;
-        };
-        const fillBar = track.firstElementChild as HTMLElement;
-        fillBar.style.width = '34%';
-        track.appendChild(marker(14));
-        track.appendChild(marker(34, true));
-        track.appendChild(marker(60));
+        const fill = el('div', 'bt-track-fill');
+        fill.style.width = `${this.playhead * 100}%`;
+        this.scrubFill = fill;
+        track.appendChild(fill);
+        [14, 60].forEach((pct) => { const m = el('div', 'bt-marker'); m.style.left = `${pct}%`; track.appendChild(m); });
+        const ph = el('div', 'bt-marker is-playhead'); ph.style.left = `${this.playhead * 100}%`;
+        this.scrubPlayheadEl = ph; track.appendChild(ph);
+        track.addEventListener('click', (e) => {
+            const r = track.getBoundingClientRect();
+            this.setPlayhead(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+        });
         s.appendChild(track);
 
-        s.appendChild(el('div', 'bt-time', '2:31'));
-        s.appendChild(el('div', 'bt-expand', ICON.expand));
+        s.appendChild(el('div', 'bt-time', fmtTime(DURATION)));
+        const expand = el('button', 'bt-expand', ICON.expand);
+        expand.title = 'Open timeline';
+        expand.addEventListener('click', () => this.toggleSequencer());
+        s.appendChild(expand);
         return s;
+    }
+
+    // ── playback ──
+    private togglePlay() {
+        this.playing = !this.playing;
+        this.updatePlayIcon();
+        if (this.playing) {
+            if (this.playhead >= 1) this.playhead = 0; // restart from the top
+            let last = performance.now();
+            const tick = (now: number) => {
+                if (!this.playing) return;
+                const dt = (now - last) / 1000; last = now;
+                this.playhead += dt / DURATION;
+                if (this.playhead >= 1) { this.playhead = 1; this.applyPlayhead(); this.playing = false; this.updatePlayIcon(); return; }
+                this.applyPlayhead();
+                this.playRaf = requestAnimationFrame(tick);
+            };
+            this.playRaf = requestAnimationFrame(tick);
+        } else {
+            cancelAnimationFrame(this.playRaf);
+        }
+    }
+
+    private setPlayhead(f: number) { this.playhead = f; this.applyPlayhead(); }
+
+    private applyPlayhead() {
+        const pct = `${this.playhead * 100}%`;
+        if (this.scrubFill) this.scrubFill.style.width = pct;
+        if (this.scrubPlayheadEl) this.scrubPlayheadEl.style.left = pct;
+        if (this.scrubTimeEl) this.scrubTimeEl.textContent = fmtTime(this.playhead * DURATION);
+        if (this.seqPlayheadEl) this.seqPlayheadEl.style.left = pct;
+        const seqTime = this.sequencer?.querySelector('.bt-seq-time');
+        if (seqTime) seqTime.textContent = `${fmtTime(this.playhead * DURATION)} / ${fmtTime(DURATION)}`;
+    }
+
+    private updatePlayIcon() {
+        this.playBtns.forEach(b => { b.innerHTML = this.playing ? ICON.pause : ICON.play; });
+    }
+
+    // ── expandable timeline / sequencer ──
+    private toggleSequencer() {
+        if (this.sequencer) {
+            this.playBtns = this.playBtns.filter(b => !this.sequencer!.contains(b));
+            this.sequencer.remove(); this.sequencer = null; this.seqPlayheadEl = null;
+            document.body.classList.remove('bt-seq-open');
+            return;
+        }
+        this.sequencer = this.buildSequencer();
+        this.root.appendChild(this.sequencer);
+        document.body.classList.add('bt-seq-open');
+    }
+
+    private buildSequencer(): HTMLElement {
+        const panel = el('div', 'bt-sequencer');
+
+        // header: collapse · play · time · Snapshot
+        const head = el('div', 'bt-seq-head');
+        const collapse = el('button', 'bt-seq-collapse', ICON.chevronDown);
+        collapse.title = 'Close timeline';
+        collapse.addEventListener('click', () => this.toggleSequencer());
+        head.appendChild(collapse);
+        const play = el('button', 'bt-seq-play', this.playing ? ICON.pause : ICON.play);
+        play.addEventListener('click', () => this.togglePlay());
+        this.playBtns.push(play);
+        head.appendChild(play);
+        head.appendChild(el('div', 'bt-seq-time', `${fmtTime(this.playhead * DURATION)} / ${fmtTime(DURATION)}`));
+        head.appendChild(el('div', 'bt-seq-spacer'));
+        head.appendChild(el('button', 'bt-seq-snap', `${ICON.diamond}<span>Snapshot</span>`));
+        panel.appendChild(head);
+
+        // body: label column + lanes column
+        const body = el('div', 'bt-seq-body');
+        const labels = el('div', 'bt-seq-labels');
+        const lanes = el('div', 'bt-seq-lanes');
+
+        // ruler + playhead (sit above the lanes)
+        const ruler = el('div', 'bt-seq-ruler');
+        for (let i = 0; i <= 10; i++) { const t = el('div', 'bt-seq-tick', fmtTime((i / 10) * DURATION)); t.style.left = `${i * 10}%`; ruler.appendChild(t); }
+        lanes.appendChild(ruler);
+        labels.appendChild(el('div', 'bt-seq-label bt-seq-rulerlabel', 'Layers'));
+        const ph = el('div', 'bt-seq-playhead'); ph.style.left = `${this.playhead * 100}%`; this.seqPlayheadEl = ph; lanes.appendChild(ph);
+        lanes.addEventListener('click', (e) => {
+            const r = lanes.getBoundingClientRect();
+            this.setPlayhead(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
+        });
+
+        // tracks: each selectable object, then Camera · Music · Text (designed placeholders)
+        type Track = { name: string; color: string; icon?: string; kfs?: number[]; clip?: [number, number] };
+        const tracks: Track[] = [
+            ...this.objects.map(o => ({ name: o.name, color: 'var(--bt-selection)', icon: ICON.globe, kfs: [18, 52, 84] })),
+            { name: 'Camera', color: 'var(--bt-playhead)', icon: ICON.camera, kfs: [8, 40, 92] },
+            { name: 'Music', color: 'var(--bt-audio)', icon: ICON.audio, clip: [4, 74] },
+            { name: 'Text', color: '#8a8a8a', icon: ICON.type, kfs: [34, 66] }
+        ];
+        tracks.forEach((tr) => {
+            labels.appendChild(el('div', 'bt-seq-label',
+                `${tr.icon ?? ''}<span class="bt-seq-dot" style="background:${tr.color}"></span><span class="bt-seq-name">${tr.name}</span>`));
+            const lane = el('div', 'bt-seq-lane');
+            if (tr.clip) { const c = el('div', 'bt-seq-clip'); c.style.left = `${tr.clip[0]}%`; c.style.width = `${tr.clip[1] - tr.clip[0]}%`; c.style.background = tr.color; lane.appendChild(c); }
+            (tr.kfs ?? []).forEach((p) => { const d = el('div', 'bt-seq-kf'); d.style.left = `${p}%`; d.style.background = tr.color; lane.appendChild(d); });
+            lanes.appendChild(lane);
+        });
+        // add-layer affordance
+        const addLabel = el('div', 'bt-seq-label bt-seq-add', `${ICON.plus}<span>Add layer</span>`);
+        labels.appendChild(addLabel);
+        lanes.appendChild(el('div', 'bt-seq-lane bt-seq-lane-add'));
+
+        body.appendChild(labels);
+        body.appendChild(lanes);
+        panel.appendChild(body);
+        return panel;
     }
 
     // ── state ──
     private setActiveTool(tool: RailTool) {
         (Object.keys(this.railItems) as RailTool[]).forEach((k) => {
             this.railItems[k]?.classList.toggle('is-active', k === tool);
+        });
+        (Object.keys(this.toolTabs) as RailTool[]).forEach((k) => {
+            this.toolTabs[k]?.classList.toggle('is-active', k === tool);
         });
     }
 
@@ -865,6 +1019,7 @@ class BraintranceUI {
                 else this.selectObject(false);
                 return;
             }
+            if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); this.togglePlay(); return; } // play/pause
             if (this.state !== 'selected') return; // leave WASD etc. to the camera
             switch (e.key.toLowerCase()) {
                 case 'q': this.setGizmoMode('move'); break;
