@@ -23,10 +23,8 @@ const IDLE_DIFFUSE = new Color(0.83, 0.20, 0.18);
 const SEL_DIFFUSE = new Color(1.0, 0.90, 0.0);
 
 // ── icons (Lucide 24×24, matching the frame's stroke icons) ─────────────────
-const stroke = (paths: string, size = 24) =>
-    `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
-const fill = (paths: string, size = 24) =>
-    `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor">${paths}</svg>`;
+const stroke = (paths: string, size = 24) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
+const fill = (paths: string, size = 24) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="currentColor">${paths}</svg>`;
 
 const ICON = {
     explore: stroke('<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>'),
@@ -213,21 +211,31 @@ class BraintranceUI {
         const bar = el('div', 'bt-menubar');
         ['file', 'select', 'view', 'help'].forEach((label) => {
             const it = el('div', 'bt-menubar-item', label);
-            it.addEventListener('click', (e) => { e.stopPropagation(); this.openMenu(label, it); });
-            it.addEventListener('mouseenter', () => { if (this.menuOpen && this.menuOpen !== label) this.openMenu(label, it); });
+            it.addEventListener('click', (e) => {
+                e.stopPropagation(); this.openMenu(label, it);
+            });
+            it.addEventListener('mouseenter', () => {
+                if (this.menuOpen && this.menuOpen !== label) this.openMenu(label, it);
+            });
             bar.appendChild(it);
         });
         return bar;
     }
 
     private openMenu(name: string, anchor: HTMLElement) {
-        if (this.menuOpen === name) { this.closeMenu(); return; }
+        if (this.menuOpen === name) {
+            this.closeMenu(); return;
+        }
         this.closeMenu();
         const dd = el('div', 'bt-menu-dd bt-interactive');
         (MENUS[name] ?? []).forEach(([label, sc]) => {
-            if (label === '—') { dd.appendChild(el('div', 'bt-menu-sep')); return; }
+            if (label === '—') {
+                dd.appendChild(el('div', 'bt-menu-sep')); return;
+            }
             const row = el('div', 'bt-menu-row', `<span>${label}</span>${sc ? `<span class="bt-menu-sc">${sc}</span>` : ''}`);
-            row.addEventListener('click', () => { this.closeMenu(); this.runMenuAction(label); });
+            row.addEventListener('click', () => {
+                this.closeMenu(); this.runMenuAction(label);
+            });
             dd.appendChild(row);
         });
         const r = anchor.getBoundingClientRect();
@@ -288,12 +296,20 @@ class BraintranceUI {
         select.innerHTML = `${ICON.sam}<span class="bt-tt-label">Select</span><span class="bt-tt-caret">${ICON.chevronDown}</span>`;
         // Photoshop-style: short click activates (selects last); long-press reveals the flyout.
         let pressTimer = 0, longPressed = false;
-        const endPress = () => { if (pressTimer) { clearTimeout(pressTimer); pressTimer = 0; } };
+        const endPress = () => {
+            if (pressTimer) {
+                clearTimeout(pressTimer); pressTimer = 0;
+            }
+        };
         select.addEventListener('pointerdown', (e) => {
             e.stopPropagation(); longPressed = false;
-            pressTimer = window.setTimeout(() => { longPressed = true; this.openSelectMenu(); }, 360);
+            pressTimer = window.setTimeout(() => {
+                longPressed = true; this.openSelectMenu();
+            }, 360);
         });
-        select.addEventListener('pointerup', () => { endPress(); if (!longPressed) this.activateSelect(); });
+        select.addEventListener('pointerup', () => {
+            endPress(); if (!longPressed) this.activateSelect();
+        });
         select.addEventListener('pointerleave', endPress);
         this.toolTabs.sam = select;
         tabs.appendChild(select);
@@ -377,10 +393,9 @@ class BraintranceUI {
     private exploreHints(): HTMLElement {
         const wrap = el('div', 'bt-header-center');
         const keys = el('div', 'bt-hint');
-        keys.innerHTML = `<span class="bt-hint-keys">⌨</span><span>W A S D <span style="color:var(--bt-ink-3)">or Arrow keys to move</span></span>`;
+        keys.innerHTML = '<span class="bt-hint-keys">⌨</span><span>W A S D <span style="color:var(--bt-ink-3)">or Arrow keys to move</span></span>';
         wrap.appendChild(keys);
-        const hint = (icon: string, label: string) =>
-            el('div', 'bt-hint', `${icon}<span>${label}</span>`);
+        const hint = (icon: string, label: string) => el('div', 'bt-hint', `${icon}<span>${label}</span>`);
         wrap.appendChild(hint(ICON.rotate, 'Rotate'));
         wrap.appendChild(hint(ICON.pan, 'Pan'));
         wrap.appendChild(hint(ICON.zoom, 'Zoom'));
@@ -449,14 +464,22 @@ class BraintranceUI {
     private removeNearestCapture(pos: number) {
         if (!this.captures.length) return;
         let bi = 0, bd = Infinity;
-        this.captures.forEach((c, i) => { const d = Math.abs(c - pos); if (d < bd) { bd = d; bi = i; } });
+        this.captures.forEach((c, i) => {
+            const d = Math.abs(c - pos); if (d < bd) {
+                bd = d; bi = i;
+            }
+        });
         this.captures.splice(bi, 1);
         this.renderCaptures();
     }
 
     private renderCaptures() {
-        if (this.scrubberEl) { const s = this.buildScrubber(); this.scrubberEl.replaceWith(s); this.scrubberEl = s; }
-        if (this.sequencer) { this.sequencer.remove(); this.seqPlayheadEl = null; this.sequencer = this.buildSequencer(); this.root.appendChild(this.sequencer); }
+        if (this.scrubberEl) {
+            const s = this.buildScrubber(); this.scrubberEl.replaceWith(s); this.scrubberEl = s;
+        }
+        if (this.sequencer) {
+            this.sequencer.remove(); this.seqPlayheadEl = null; this.sequencer = this.buildSequencer(); this.root.appendChild(this.sequencer);
+        }
     }
 
     // ── selection contextual bar — default actions vs effect-chip view ──
@@ -493,7 +516,9 @@ class BraintranceUI {
         const head = el('div', 'bt-cb-head');
         head.appendChild(el('div', 'bt-cb-name', `${ICON.globe}<span>${this.selection.name}</span>`));
         const pause = el('div', 'bt-pause', `${this.playing ? ICON.pause : ICON.play}<span>${this.playing ? 'Pause' : 'Play'}</span>`);
-        pause.addEventListener('click', () => { this.togglePlay(); this.refreshBottom(); });
+        pause.addEventListener('click', () => {
+            this.togglePlay(); this.refreshBottom();
+        });
         head.appendChild(pause);
         bar.appendChild(head);
 
@@ -550,7 +575,9 @@ class BraintranceUI {
         fill.style.width = `${this.playhead * 100}%`;
         this.scrubFill = fill;
         track.appendChild(fill);
-        this.captures.forEach((pos) => { const m = el('div', 'bt-marker'); m.style.left = `${pos * 100}%`; track.appendChild(m); });
+        this.captures.forEach((pos) => {
+            const m = el('div', 'bt-marker'); m.style.left = `${pos * 100}%`; track.appendChild(m);
+        });
         const ph = el('div', 'bt-marker is-playhead'); ph.style.left = `${this.playhead * 100}%`;
         this.scrubPlayheadEl = ph; track.appendChild(ph);
         track.addEventListener('click', (e) => {
@@ -578,7 +605,9 @@ class BraintranceUI {
                 if (!this.playing) return;
                 const dt = (now - last) / 1000; last = now;
                 this.playhead += dt / DURATION;
-                if (this.playhead >= 1) { this.playhead = 1; this.applyPlayhead(); this.playing = false; this.updatePlayIcon(); return; }
+                if (this.playhead >= 1) {
+                    this.playhead = 1; this.applyPlayhead(); this.playing = false; this.updatePlayIcon(); return;
+                }
                 this.applyPlayhead();
                 this.playRaf = requestAnimationFrame(tick);
             };
@@ -588,7 +617,9 @@ class BraintranceUI {
         }
     }
 
-    private setPlayhead(f: number) { this.playhead = f; this.applyPlayhead(); }
+    private setPlayhead(f: number) {
+        this.playhead = f; this.applyPlayhead();
+    }
 
     private applyPlayhead() {
         const pct = `${this.playhead * 100}%`;
@@ -601,7 +632,9 @@ class BraintranceUI {
     }
 
     private updatePlayIcon() {
-        this.playBtns.forEach(b => { b.innerHTML = this.playing ? ICON.pause : ICON.play; });
+        this.playBtns.forEach((b) => {
+            b.innerHTML = this.playing ? ICON.pause : ICON.play;
+        });
     }
 
     // ── expandable timeline / sequencer ──
@@ -644,7 +677,9 @@ class BraintranceUI {
 
         // ruler + playhead (sit above the lanes)
         const ruler = el('div', 'bt-seq-ruler');
-        for (let i = 0; i <= 10; i++) { const t = el('div', 'bt-seq-tick', fmtTime((i / 10) * DURATION)); t.style.left = `${i * 10}%`; ruler.appendChild(t); }
+        for (let i = 0; i <= 10; i++) {
+            const t = el('div', 'bt-seq-tick', fmtTime((i / 10) * DURATION)); t.style.left = `${i * 10}%`; ruler.appendChild(t);
+        }
         lanes.appendChild(ruler);
         labels.appendChild(el('div', 'bt-seq-label bt-seq-rulerlabel', 'Layers'));
         const ph = el('div', 'bt-seq-playhead'); ph.style.left = `${this.playhead * 100}%`; this.seqPlayheadEl = ph; lanes.appendChild(ph);
@@ -666,8 +701,12 @@ class BraintranceUI {
             labels.appendChild(el('div', 'bt-seq-label',
                 `${tr.icon ?? ''}<span class="bt-seq-dot" style="background:${tr.color}"></span><span class="bt-seq-name">${tr.name}</span>`));
             const lane = el('div', 'bt-seq-lane');
-            if (tr.clip) { const c = el('div', 'bt-seq-clip'); c.style.left = `${tr.clip[0]}%`; c.style.width = `${tr.clip[1] - tr.clip[0]}%`; c.style.background = tr.color; lane.appendChild(c); }
-            (tr.kfs ?? []).forEach((p) => { const d = el('div', 'bt-seq-kf'); d.style.left = `${p}%`; d.style.background = tr.color; lane.appendChild(d); });
+            if (tr.clip) {
+                const c = el('div', 'bt-seq-clip'); c.style.left = `${tr.clip[0]}%`; c.style.width = `${tr.clip[1] - tr.clip[0]}%`; c.style.background = tr.color; lane.appendChild(c);
+            }
+            (tr.kfs ?? []).forEach((p) => {
+                const d = el('div', 'bt-seq-kf'); d.style.left = `${p}%`; d.style.background = tr.color; lane.appendChild(d);
+            });
             lanes.appendChild(lane);
         });
         // add-layer affordance
@@ -847,11 +886,15 @@ class BraintranceUI {
         const valEl = row.querySelector('.bt-sp-val') as HTMLElement;
         const slider = el('input') as HTMLInputElement;
         slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(eff.strength);
-        slider.addEventListener('input', () => { eff.strength = +slider.value; valEl.textContent = `${eff.strength}%`; });
+        slider.addEventListener('input', () => {
+            eff.strength = +slider.value; valEl.textContent = `${eff.strength}%`;
+        });
         pop.appendChild(slider);
         pop.appendChild(el('div', 'bt-sp-note', 'Other shader toggles go here'));
         const reset = el('div', 'bt-sp-action', `${ICON.reset}<span>Reset</span>`);
-        reset.addEventListener('click', () => { eff.strength = 50; slider.value = '50'; valEl.textContent = '50%'; });
+        reset.addEventListener('click', () => {
+            eff.strength = 50; slider.value = '50'; valEl.textContent = '50%';
+        });
         const remove = el('div', 'bt-sp-action is-danger', `${ICON.trash}<span>Remove</span>`);
         remove.addEventListener('click', () => this.removeEffect(i));
         pop.appendChild(reset);
@@ -886,7 +929,9 @@ class BraintranceUI {
         pop.appendChild(el('div', 'bt-sp-trigger', `When <strong>${this.selection.name}</strong> is <strong>clicked</strong>`));
         pop.appendChild(el('div', 'bt-sp-note', it)); // the recorded change(s)
         const edit = el('div', 'bt-sp-action', `${ICON.zap}<span>Edit changes</span>`);
-        edit.addEventListener('click', () => { this.hideStrengthPop(); this.openChip = null; this.startRecording(); });
+        edit.addEventListener('click', () => {
+            this.hideStrengthPop(); this.openChip = null; this.startRecording();
+        });
         const remove = el('div', 'bt-sp-action is-danger', `${ICON.trash}<span>Remove</span>`);
         remove.addEventListener('click', () => {
             this.selection.interactions.splice(i, 1);
@@ -936,7 +981,9 @@ class BraintranceUI {
         const head = el('div', 'bt-ep-head');
         head.appendChild(el('div', 'bt-ep-title', 'Add sound'));
         const close = el('div', 'bt-ep-close', ICON.x);
-        close.addEventListener('click', () => { this.exitAudio(); this.setActiveTool('explore'); });
+        close.addEventListener('click', () => {
+            this.exitAudio(); this.setActiveTool('explore');
+        });
         head.appendChild(close);
         panel.appendChild(head);
         panel.appendChild(el('div', 'bt-ep-search', 'Search sounds…'));
@@ -998,7 +1045,9 @@ class BraintranceUI {
         const slider = el('input') as HTMLInputElement;
         slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(s.volume);
         const val = el('span', 'bt-ab-val', String(s.volume));
-        slider.addEventListener('input', () => { s.volume = +slider.value; val.textContent = String(s.volume); });
+        slider.addEventListener('input', () => {
+            s.volume = +slider.value; val.textContent = String(s.volume);
+        });
         vol.appendChild(slider); vol.appendChild(val);
         controls.appendChild(vol);
         controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
@@ -1088,14 +1137,18 @@ class BraintranceUI {
         const head = el('div', 'bt-as-head');
         head.appendChild(el('div', 'bt-as-title', 'Assets'));
         const close = el('div', 'bt-as-close', ICON.x);
-        close.addEventListener('click', () => { this.closeAssets(); this.setActiveTool('explore'); });
+        close.addEventListener('click', () => {
+            this.closeAssets(); this.setActiveTool('explore');
+        });
         head.appendChild(close);
         panel.appendChild(head);
 
         const tabs = el('div', 'bt-as-tabs');
         ['Gaussians', 'Props', 'Sounds'].forEach((t) => {
             const tab = el('div', `bt-as-tab${this.assetTab === t ? ' is-active' : ''}`, t);
-            tab.addEventListener('click', () => { this.assetTab = t; this.openAssets(); });
+            tab.addEventListener('click', () => {
+                this.assetTab = t; this.openAssets();
+            });
             tabs.appendChild(tab);
         });
         panel.appendChild(tabs);
@@ -1177,7 +1230,9 @@ class BraintranceUI {
 
         // the cube is the first selectable object, with the seeded fixtures
         const cube: SceneObject = {
-            entity: box, mat, name: 'Cuboid',
+            entity: box,
+            mat,
+            name: 'Cuboid',
             effects: [{ label: 'Vivid', type: 'preset', strength: 60 }, { label: 'Bloom', type: 'effect', strength: 50 }],
             interactions: ['On click → moves + glows']
         };
@@ -1202,8 +1257,12 @@ class BraintranceUI {
         canvas.addEventListener('pointermove', (e) => {
             if (down && Math.hypot(e.clientX - downX, e.clientY - downY) > 4) moved = true;
             if (this.gizmo && this.scene) this.scene.forceRender = true;
-            if (this.lasso && down) { this.addLassoPoint(e.clientX, e.clientY); return; }
-            if (this.cropBox && down) { this.updateCrop(e.clientX, e.clientY); return; }
+            if (this.lasso && down) {
+                this.addLassoPoint(e.clientX, e.clientY); return;
+            }
+            if (this.cropBox && down) {
+                this.updateCrop(e.clientX, e.clientY); return;
+            }
             // hover affordance
             if (!down && !drawMode() && !this.audioMode && !this.placingAudio) {
                 canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : '';
@@ -1213,10 +1272,16 @@ class BraintranceUI {
         });
         canvas.addEventListener('pointerup', (e) => {
             const wasDown = down; down = false;
-            if (this.lasso) { this.finishLasso(); return; } // → depth prompt
-            if (this.cropBox) { this.finishCrop(); return; } // → crop confirm
+            if (this.lasso) {
+                this.finishLasso(); return;
+            } // → depth prompt
+            if (this.cropBox) {
+                this.finishCrop(); return;
+            } // → crop confirm
             if (!wasDown || moved || e.button !== 0) return; // a drag is a camera move, not a click
-            if (this.placingAudio) { this.placeAudioAt(e.clientX, e.clientY); return; }
+            if (this.placingAudio) {
+                this.placeAudioAt(e.clientX, e.clientY); return;
+            }
             if (this.audioMode) return;
             if (this.recordingMode) return;
             // selection-first: a click selects whatever's under it (any tool but a draw mode)
@@ -1260,7 +1325,9 @@ class BraintranceUI {
     }
 
     private finishLasso() {
-        if (!this.lasso || this.lasso.pts.length < 3) { this.endLasso(); return; }
+        if (!this.lasso || this.lasso.pts.length < 3) {
+            this.endLasso(); return;
+        }
         const pts = this.lasso.pts;
         const cx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
         const cy = pts.reduce((a, p) => a + p.y, 0) / pts.length;
@@ -1277,7 +1344,9 @@ class BraintranceUI {
         const row = el('div', 'bt-dp-row', '<input type="range" min="0.2" max="5" step="0.1" value="1.5"><span class="bt-dp-val">1.5 m</span>');
         const slider = row.querySelector('input') as HTMLInputElement;
         const valEl = row.querySelector('.bt-dp-val') as HTMLElement;
-        slider.addEventListener('input', () => { valEl.textContent = `${(+slider.value).toFixed(1)} m`; });
+        slider.addEventListener('input', () => {
+            valEl.textContent = `${(+slider.value).toFixed(1)} m`;
+        });
         pop.appendChild(row);
         const actions = el('div', 'bt-dp-actions');
         const cancel = el('button', 'bt-dp-cancel', 'Cancel');
@@ -1292,7 +1361,9 @@ class BraintranceUI {
         this.root.appendChild(pop);
     }
 
-    private cancelLasso() { this.depthPop?.remove(); this.depthPop = null; this.endLasso(); }
+    private cancelLasso() {
+        this.depthPop?.remove(); this.depthPop = null; this.endLasso();
+    }
 
     private commitLasso(cx: number, cy: number) {
         this.depthPop?.remove(); this.depthPop = null;
@@ -1336,7 +1407,9 @@ class BraintranceUI {
     private finishCrop() {
         if (this.scene?.camera) this.scene.camera.inputDisabled = false; // camera ok again; box stays
         const b = this.cropBox;
-        if (!b || Math.abs(b.x1 - b.x0) < 12 || Math.abs(b.y1 - b.y0) < 12) { this.endCrop(); return; }
+        if (!b || Math.abs(b.x1 - b.x0) < 12 || Math.abs(b.y1 - b.y0) < 12) {
+            this.endCrop(); return;
+        }
         this.showCropConfirm();
     }
 
@@ -1348,7 +1421,9 @@ class BraintranceUI {
         const depth = el('div', 'bt-crop-depth', '<span>Depth</span><input type="range" min="0.2" max="5" step="0.1" value="2"><span class="bt-crop-val">2.0 m</span>');
         const slider = depth.querySelector('input') as HTMLInputElement;
         const val = depth.querySelector('.bt-crop-val') as HTMLElement;
-        slider.addEventListener('input', () => { val.textContent = `${(+slider.value).toFixed(1)} m`; });
+        slider.addEventListener('input', () => {
+            val.textContent = `${(+slider.value).toFixed(1)} m`;
+        });
         bar.appendChild(depth);
         const acts = el('div', 'bt-crop-acts');
         const cancel = el('button', 'bt-crop-cancel', 'Cancel');
@@ -1374,9 +1449,13 @@ class BraintranceUI {
     // ── frame-all / fly-to-content (the interview's main pain point) ──
     private frameAll() {
         const cam = this.scene?.camera;
-        if (!cam?.focus) { this.events?.fire?.('camera.focus'); return; }
+        if (!cam?.focus) {
+            this.events?.fire?.('camera.focus'); return;
+        }
         const vis = this.objects.filter(o => o.entity.enabled !== false);
-        if (vis.length === 0) { cam.focus({ focalPoint: new Vec3(0, 0.3, 0), radius: 1, speed: 1 }); this.pumpRender(650); return; }
+        if (vis.length === 0) {
+            cam.focus({ focalPoint: new Vec3(0, 0.3, 0), radius: 1, speed: 1 }); this.pumpRender(650); return;
+        }
         const min = new Vec3(Infinity, Infinity, Infinity);
         const max = new Vec3(-Infinity, -Infinity, -Infinity);
         for (const o of vis) {
@@ -1397,20 +1476,33 @@ class BraintranceUI {
             if (tag === 'INPUT' || tag === 'TEXTAREA') return;
             if (e.key === 'Escape') {
                 // one layer per press: lasso/menus → popover → recording → library/list → deselect
-                if (this.menuDropdown) { this.closeMenu(); return; }
-                if (this.depthPop) { this.cancelLasso(); return; }
-                if (this.cropConfirm || this.cropBox) { this.endCrop(); return; }
-                if (this.selectMenu) { this.closeSelectMenu(); return; }
-                if (this.lasso) { this.endLasso(); return; }
-                if (this.strengthPop) { this.hideStrengthPop(); this.openChip = null; this.refreshBottom(); }
-                else if (this.effectsPanel) this.hideEffectsLibrary(); // close the library, keep the chip list
+                if (this.menuDropdown) {
+                    this.closeMenu(); return;
+                }
+                if (this.depthPop) {
+                    this.cancelLasso(); return;
+                }
+                if (this.cropConfirm || this.cropBox) {
+                    this.endCrop(); return;
+                }
+                if (this.selectMenu) {
+                    this.closeSelectMenu(); return;
+                }
+                if (this.lasso) {
+                    this.endLasso(); return;
+                }
+                if (this.strengthPop) {
+                    this.hideStrengthPop(); this.openChip = null; this.refreshBottom();
+                } else if (this.effectsPanel) this.hideEffectsLibrary(); // close the library, keep the chip list
                 else if (this.recordingMode) this.finishRecording(false);
                 else if (this.effectsMode) this.closeEffects();
                 else if (this.interactionsMode) this.closeInteractions();
                 else this.selectObject(false);
                 return;
             }
-            if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); this.togglePlay(); return; } // play/pause
+            if (e.key === ' ' || e.code === 'Space') {
+                e.preventDefault(); this.togglePlay(); return;
+            } // play/pause
             if (this.state !== 'selected') return; // leave WASD etc. to the camera
             switch (e.key.toLowerCase()) {
                 case 'q': this.setGizmoMode('move'); break;
@@ -1418,7 +1510,7 @@ class BraintranceUI {
                 case 'r': this.setGizmoMode('rotate'); break;
                 case 'f': this.frameSelection(); break;
                 case 'delete': case 'backspace': this.deleteSelection(); break;
-                default: return;
+                default:
             }
         });
     }
@@ -1438,7 +1530,9 @@ class BraintranceUI {
             const sx = sp.x * (rect.width / canvas.width);
             const sy = sp.y * (rect.height / canvas.height);
             const d = Math.hypot((clientX - rect.left) - sx, (clientY - rect.top) - sy);
-            if (d < bestD) { bestD = d; best = obj; }
+            if (d < bestD) {
+                bestD = d; best = obj;
+            }
         }
         return best;
     }
@@ -1496,12 +1590,20 @@ class BraintranceUI {
         const Cls = mode === 'move' ? TranslateGizmo : mode === 'scale' ? ScaleGizmo : RotateGizmo;
         const gizmo = new Cls(cam, layer);
         gizmo.attach([this.box]);
-        const render = () => { if (this.scene) this.scene.forceRender = true; };
-        const suppressCamera = (on: boolean) => { if (this.scene?.camera) this.scene.camera.inputDisabled = on; };
+        const render = () => {
+            if (this.scene) this.scene.forceRender = true;
+        };
+        const suppressCamera = (on: boolean) => {
+            if (this.scene?.camera) this.scene.camera.inputDisabled = on;
+        };
         // while an axis is being dragged, stop the camera from orbiting under it
-        gizmo.on('transform:start', () => { suppressCamera(true); render(); });
+        gizmo.on('transform:start', () => {
+            suppressCamera(true); render();
+        });
         gizmo.on('transform:move', render);
-        gizmo.on('transform:end', () => { suppressCamera(false); render(); });
+        gizmo.on('transform:end', () => {
+            suppressCamera(false); render();
+        });
         this.gizmo = gizmo;
         this.gizmoMode = mode;
         render();
@@ -1510,7 +1612,9 @@ class BraintranceUI {
 
     private clearGizmo() {
         if (this.gizmo) {
-            try { this.gizmo.detach(); this.gizmo.destroy(); } catch (e) { /* noop */ }
+            try {
+                this.gizmo.detach(); this.gizmo.destroy();
+            } catch (e) { /* noop */ }
             this.gizmo = null;
         }
         this.gizmoMode = null;
