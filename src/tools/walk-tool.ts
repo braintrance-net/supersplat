@@ -95,6 +95,7 @@ const COLLISION_MESH_GROUND_SNAP = 0.42;
 const COLLISION_MESH_GROUND_PROBE_RADIUS = 0.22;
 const COLLISION_MESH_GROUND_CACHE_DROP = 0.45;
 const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
+const COLLISION_MESH_BLOCKING_ENABLED = false;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
@@ -837,6 +838,7 @@ class WalkTool {
                 key: this.collisionMeshKey,
                 triangles: mesh?.triangleCount ?? null,
                 blockingTriangles: mesh?.blockingTriangleCount ?? null,
+                blockingEnabled: COLLISION_MESH_BLOCKING_ENABLED,
                 cells: mesh?.cellCount ?? null,
                 cellSize: mesh ? COLLISION_MESH_CELL_SIZE : null,
                 capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
@@ -1383,6 +1385,7 @@ class WalkTool {
                 parseMs,
                 triangles: mesh.triangleCount,
                 blockingTriangles: mesh.blockingTriangleCount,
+                blockingEnabled: COLLISION_MESH_BLOCKING_ENABLED,
                 cells: mesh.cellCount
             });
             this.events.fire('walk.collisionMesh', {
@@ -1395,6 +1398,7 @@ class WalkTool {
                 parseMs,
                 triangles: mesh.triangleCount,
                 blockingTriangles: mesh.blockingTriangleCount,
+                blockingEnabled: COLLISION_MESH_BLOCKING_ENABLED,
                 cells: mesh.cellCount,
                 cellSize: COLLISION_MESH_CELL_SIZE,
                 capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
@@ -1500,6 +1504,13 @@ class WalkTool {
 
         if (Math.hypot(fullMove.x, fullMove.z) <= 0.00001) {
             this.lastCollisionDebugReason = 'idle';
+            return fullMove;
+        }
+
+        if (!COLLISION_MESH_BLOCKING_ENABLED) {
+            this.collisionMeshBlockedSince = null;
+            this.lastCollisionDebugReason = 'floor-only';
+            this.lastCollisionResolvedMove = fullMove.clone();
             return fullMove;
         }
 
@@ -1695,7 +1706,7 @@ class WalkTool {
 
     private resolveCollisionMeshPenetration(camera: Camera, focalPoint: Vec3) {
         const mesh = this.collisionMesh;
-        if (!mesh) {
+        if (!mesh || !COLLISION_MESH_BLOCKING_ENABLED) {
             return false;
         }
 
