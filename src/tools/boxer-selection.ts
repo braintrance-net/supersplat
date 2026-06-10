@@ -69,13 +69,13 @@ const getLocalEvalSaveUrl = () => {
     }
 };
 
-const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'include' => {
+const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'omit' => {
     if (!window.supersplatConfig?.sam3BackendUrl?.trim()) {
         return 'same-origin';
     }
 
     try {
-        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'omit';
     } catch {
         return 'same-origin';
     }
@@ -5455,6 +5455,11 @@ class BoxerSelection {
             clear2DBoxLayers();
             svg.style.display = 'none';
         };
+        const clearBoxerResultOverlay = () => {
+            currentCorners = null;
+            hide2DBox();
+            scene.forceRender = true;
+        };
         const debugPanel = document.createElement('div');
         debugPanel.style.position = 'absolute';
         debugPanel.style.right = '12px';
@@ -6241,6 +6246,10 @@ class BoxerSelection {
             if (!splat) {
                 throw new Error('No splat loaded');
             }
+            if (options?.useSam) {
+                clearBoxerResultOverlay();
+                events.fire('select.none');
+            }
 
             const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
                 includeImage: !!options?.useSam,
@@ -6266,6 +6275,13 @@ class BoxerSelection {
                         promptPoints: brushPoints
                     });
                 }
+            }
+            if (options?.useSam && !sam3Region) {
+                const reason = sam3Debug?.rejection_reason ?? sam3Debug?.error ?? 'no usable SAM mask';
+                const attempts = sam3Debug?.attempts
+                .map(attempt => `${attempt.endpoint}:${attempt.status}${attempt.ok ? '' : ':failed'}`)
+                .join(', ');
+                throw new Error(`SAM brush failed: ${reason}${attempts ? ` (${attempts})` : ''}`);
             }
             const geometryRefinement = sam3Region ?
                 refineObbFromBoxedPoints(

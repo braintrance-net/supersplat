@@ -11,13 +11,13 @@ const getSam3BackendUrl = () => {
     return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;
 };
 
-const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'include' => {
+const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'omit' => {
     if (!window.supersplatConfig?.sam3BackendUrl?.trim()) {
         return 'same-origin';
     }
 
     try {
-        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'omit';
     } catch {
         return 'same-origin';
     }
