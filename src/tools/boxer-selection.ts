@@ -479,11 +479,13 @@ type BoxerClickDebugPanelState = {
     }[];
 };
 type BoxerOverlayLayer = {
-    bb2d: NormalizedBb2d;
+    bb2d?: NormalizedBb2d | null;
     label: string;
     color: string;
     dash?: string;
     width?: number;
+    // optional stroke polyline (canvas pixels), drawn semi-transparent
+    points?: [number, number][];
 };
 type BoxerBrushPrompt = {
     shape?: 'circle' | 'rect' | 'stroke';
@@ -5645,7 +5647,7 @@ class BoxerSelection {
 
         const show2DBoxLayers = (layers: BoxerOverlayLayer[]) => {
             clear2DBoxLayers();
-            const visibleLayers = layers.filter(layer => layer.bb2d);
+            const visibleLayers = layers.filter(layer => layer.bb2d || layer.points?.length);
             if (visibleLayers.length === 0) {
                 svg.style.display = 'none';
                 return;
@@ -5659,6 +5661,18 @@ class BoxerSelection {
             svg.style.display = '';
 
             for (const layer of visibleLayers) {
+                if (layer.points?.length) {
+                    const polyline = document.createElementNS(svg.namespaceURI, 'polyline') as SVGPolylineElement;
+                    polyline.setAttribute('fill', 'none');
+                    polyline.setAttribute('stroke', layer.color);
+                    polyline.setAttribute('stroke-opacity', '0.35');
+                    polyline.setAttribute('stroke-linecap', 'round');
+                    polyline.setAttribute('stroke-linejoin', 'round');
+                    polyline.setAttribute('stroke-width', String(layer.width ?? 2));
+                    polyline.setAttribute('points', layer.points.map(point => `${ox + point[0]},${oy + point[1]}`).join(' '));
+                    svg.appendChild(polyline);
+                }
+                if (!layer.bb2d) continue;
                 const [x0, y0, x1, y1] = layer.bb2d;
                 const svgRect = document.createElementNS(svg.namespaceURI, 'rect') as SVGRectElement;
                 svgRect.setAttribute('fill', 'none');
@@ -7682,6 +7696,84 @@ class BoxerSelection {
             });
         } catch (err) {
             console.warn('[Boxer] boxer.runEvalCase was already registered', err);
+        }
+
+        try {
+            // Non-destructive preview for the eval case editor: apply the case
+            // camera, then overlay the recorded stroke/click, the projected
+            // target box, and the target wireframe in 3D. Runs no geometry.
+            events.function('boxer.previewEvalCase', async (evalCase: {
+                camera: CameraDebugState;
+                frame?: { image_width?: number; image_height?: number };
+                prompt?: BoxerEvalPrompt;
+                target?: BoxerEvalTarget | null;
+            }) => {
+                applyCameraState(scene, evalCase.camera);
+                await waitForNextRender(scene);
+
+                const sourceWidth = evalCase.frame?.image_width ?? canvas.clientWidth;
+                const sourceHeight = evalCase.frame?.image_height ?? canvas.clientHeight;
+                const scaleX = canvas.clientWidth / Math.max(1, sourceWidth);
+                const scaleY = canvas.clientHeight / Math.max(1, sourceHeight);
+                const intrinsics = extractIntrinsics(scene.camera.camera, canvas.clientWidth, canvas.clientHeight);
+                const layers: BoxerOverlayLayer[] = [];
+
+                const target = evalCase.target ?? null;
+                const targetBb = projectedTargetBb2d(target, scene, intrinsics);
+                if (targetBb) {
+                    layers.push({ bb2d: targetBb, label: 'target', color: '#3dff7b', width: 2 });
+                }
+
+                const prompt = evalCase.prompt;
+                const brush = prompt && 'brush' in prompt ? prompt.brush : undefined;
+                if (brush?.bb2d) {
+                    layers.push({
+                        bb2d: [
+                            brush.bb2d[0] * scaleX,
+                            brush.bb2d[1] * scaleY,
+                            brush.bb2d[2] * scaleX,
+                            brush.bb2d[3] * scaleY
+                        ],
+                        label: 'brush bb',
+                        color: '#00d2ff',
+                        dash: '5 5',
+                        width: 1
+                    });
+                }
+                if (brush?.points?.length) {
+                    layers.push({
+                        label: 'stroke',
+                        color: '#ff9f1a',
+                        width: Math.max(3, (brush.radius ?? 8) * 2 * scaleX),
+                        points: brush.points.map(point => [point[0] * scaleX, point[1] * scaleY] as [number, number])
+                    });
+                }
+                const click = prompt && 'click_xy' in prompt && prompt.click_xy ? prompt.click_xy : null;
+                if (click) {
+                    const cx = click[0] * scaleX;
+                    const cy = click[1] * scaleY;
+                    layers.push({
+                        bb2d: [cx - 6, cy - 6, cx + 6, cy + 6],
+                        label: 'click',
+                        color: '#ff4fd8',
+                        width: 2
+                    });
+                }
+
+                show2DBoxLayers(layers);
+                currentCorners = target ?
+                    buildWireframeCorners({ center: target.center, dimensions: target.dimensions, rotation: target.rotation } as OBBResult) :
+                    null;
+                scene.forceRender = true;
+
+                return {
+                    target_projected_bb2d: targetBb,
+                    has_stroke: !!brush?.points?.length,
+                    has_click: !!click
+                };
+            });
+        } catch (err) {
+            console.warn('[Boxer] boxer.previewEvalCase was already registered', err);
         }
 
         scene.app.on('update', () => {

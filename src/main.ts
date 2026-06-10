@@ -38,6 +38,7 @@ import { ToolManager } from './tools/tool-manager';
 import { WalkTool } from './tools/walk-tool';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
+import { EvalCasePanel } from './ui/eval-case-panel';
 import { localizeInit } from './ui/localization';
 import { SemanticAnnotationOverlay } from './ui/semantic-annotation-overlay';
 import { registerCollisionSurfaceLoader } from './utils/collision-surface';
@@ -289,6 +290,12 @@ const main = async () => {
 
     // load collision surface sidecars for brush/boxer 3D anchoring
     registerCollisionSurfaceLoader(events, scene);
+
+    // dev-only eval case browser/editor
+    if (devConfig.enableDevTools) {
+        const evalCasePanel = new EvalCasePanel(events);
+        events.function('evalCasePanel', () => evalCasePanel);
+    }
 
     // tool manager
     const toolManager = new ToolManager(events);

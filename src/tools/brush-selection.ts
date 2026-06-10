@@ -108,13 +108,19 @@ class BrushSelection {
 
         const applySurfaceRadius = (x: number, y: number) => {
             const hit = probeSurface(x, y);
-            if (!hit || !(hit.world_per_screen_height > 0)) return;
+            if (!hit || !(hit.world_per_screen_height > 0)) {
+                svg.classList.remove('surface-mode');
+                controlLabel.textContent = 'Brush Size';
+                return;
+            }
+            controlLabel.textContent = 'Brush Size · 3D';
             const pxPerWorld = (parent.clientHeight || 1) / hit.world_per_screen_height;
             if (!(pxPerWorld > 0)) return;
             if (radiusWorld === null) {
                 radiusWorld = radius / pxPerWorld;
             }
             lastPxPerWorld = pxPerWorld;
+            svg.classList.add('surface-mode');
             setRadius(radiusWorld * pxPerWorld);
         };
 
