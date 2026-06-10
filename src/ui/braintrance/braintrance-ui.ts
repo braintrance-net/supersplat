@@ -153,6 +153,7 @@ class BraintranceUI {
     private boxMat: StandardMaterial | null = null;
     private gizmo: any = null;            // active PlayCanvas transform gizmo
     private gizmoMode: GizmoMode | null = null;
+    private lastGizmoMode: GizmoMode = 'move'; // tool to re-attach on the next selection
 
     // the current selection's model — badges/counts read from here (the effects &
     // interactions already on it, per the fixture cube: 2 effects + 1 interaction)
@@ -175,8 +176,9 @@ class BraintranceUI {
     private audioCtx: AudioContext | null = null;   // lazily-created, for audition tones
     private audioMarkers: Entity[] = [];
     private activeAudio = 1;
+    // every sound is spatial — it lives at a point in the scene
     private audioSources = [
-        { name: 'Cathedral tone', kind: 'Stereo', volume: 62, range: 8, loop: true, placed: true, start: 0.08, end: 0.92 },
+        { name: 'Cathedral tone', kind: 'Spatial', volume: 62, range: 8, loop: true, placed: true, start: 0.08, end: 0.92 },
         { name: 'Footsteps', kind: 'Spatial', volume: 23, range: 8, loop: false, placed: false, start: 0.30, end: 0.50 }
     ];
     private replacingAudio = false; // Replace flow: next library pick swaps the active sound
@@ -944,14 +946,9 @@ class BraintranceUI {
         if (this.state === 'selected') this.refreshBottom();
     }
 
-    // Effects browser — a wide, store-style modal (think Unity Asset Store) rather than
-    // a thin sidebar. Returns a backdrop wrapper; clicking outside the panel closes it.
+    // Effects browser — a wide store-style window, but floating (no backdrop) so the
+    // scene stays visible. Drag it by its header to move it out of the way.
     private buildEffectsPanel(): HTMLElement {
-        const overlay = el('div', 'bt-ep-overlay');
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) this.hideEffectsLibrary(); // click-away → chip list
-        });
-
         const panel = el('div', 'bt-effects-panel is-store');
         const head = el('div', 'bt-ep-head');
         head.appendChild(el('div', 'bt-ep-title', 'Enhance with effects'));
@@ -959,6 +956,24 @@ class BraintranceUI {
         close.addEventListener('click', () => this.hideEffectsLibrary()); // back to the chip list
         head.appendChild(close);
         panel.appendChild(head);
+
+        // drag the window by its header
+        head.addEventListener('pointerdown', (e) => {
+            if ((e.target as HTMLElement).closest('.bt-ep-close')) return;
+            e.preventDefault();
+            const r = panel.getBoundingClientRect();
+            const dx = e.clientX - r.left, dy = e.clientY - r.top;
+            const move = (ev: PointerEvent) => {
+                panel.style.left = `${Math.max(8, Math.min(window.innerWidth - r.width - 8, ev.clientX - dx))}px`;
+                panel.style.top = `${Math.max(40, Math.min(window.innerHeight - 140, ev.clientY - dy))}px`;
+            };
+            const up = () => {
+                window.removeEventListener('pointermove', move);
+                window.removeEventListener('pointerup', up);
+            };
+            window.addEventListener('pointermove', move);
+            window.addEventListener('pointerup', up);
+        });
 
         panel.appendChild(el('div', 'bt-ep-search', 'Search effects…'));
 
@@ -978,9 +993,7 @@ class BraintranceUI {
         SHADER_EFFECTS.forEach(name => grid.appendChild(this.effectTile(name, 'effect')));
         body.appendChild(grid);
         panel.appendChild(body);
-
-        overlay.appendChild(panel);
-        return overlay;
+        return panel;
     }
 
     private effectTile(name: string, type: 'preset' | 'effect'): HTMLElement {
@@ -1021,6 +1034,9 @@ class BraintranceUI {
     private refreshEffectsPanel() {
         if (!this.effectsPanel) return;
         const next = this.buildEffectsPanel();
+        // keep the window where the user dragged it across rebuilds
+        if (this.effectsPanel.style.left) next.style.left = this.effectsPanel.style.left;
+        if (this.effectsPanel.style.top) next.style.top = this.effectsPanel.style.top;
         this.effectsPanel.replaceWith(next);
         this.effectsPanel = next;
     }
@@ -1215,15 +1231,6 @@ class BraintranceUI {
         this.refreshBottom();
     }
 
-    private rebuildAudio() {
-        if (this.audioPanel) {
-            const p = this.buildAudioLibrary();
-            this.audioPanel.replaceWith(p);
-            this.audioPanel = p;
-        }
-        this.refreshBottom();
-    }
-
     // a browsable library of sounds — click a tile to spawn it
     private buildAudioLibrary(): HTMLElement {
         const panel = el('div', 'bt-effects-panel'); // reuse the docked-left library shell
@@ -1237,43 +1244,43 @@ class BraintranceUI {
         panel.appendChild(head);
         panel.appendChild(el('div', 'bt-ep-search', 'Search sounds…'));
 
-        panel.appendChild(el('div', 'bt-ep-section', 'SFX · 3D'));
+        panel.appendChild(el('div', 'bt-ep-section', 'SFX'));
         const sfx = el('div', 'bt-ep-grid');
-        AUDIO_LIB.SFX.forEach(name => sfx.appendChild(this.audioTile(name, 'Spatial')));
+        AUDIO_LIB.SFX.forEach(name => sfx.appendChild(this.audioTile(name)));
         panel.appendChild(sfx);
 
-        panel.appendChild(el('div', 'bt-ep-section', 'MUSIC · STEREO'));
+        panel.appendChild(el('div', 'bt-ep-section', 'MUSIC'));
         const music = el('div', 'bt-ep-grid');
-        AUDIO_LIB.Music.forEach(name => music.appendChild(this.audioTile(name, 'Stereo')));
+        AUDIO_LIB.Music.forEach(name => music.appendChild(this.audioTile(name)));
         panel.appendChild(music);
         return panel;
     }
 
-    private audioTile(name: string, kind: string): HTMLElement {
+    private audioTile(name: string): HTMLElement {
         const tile = el('div', 'bt-tile',
             `<div class="bt-tile-sw is-audio">${ICON.audio}</div><span class="bt-tile-label">${name}</span>`);
-        tile.addEventListener('click', () => this.previewAudio(name, kind));
+        tile.addEventListener('click', () => this.previewAudio(name));
         return tile;
     }
 
     // Audition the clicked sound and set it as the pending source — but DON'T add it to
-    // the scene yet. That happens via the bar's "Place in scene" / "Add to scene" button.
-    private previewAudio(name: string, kind: string) {
+    // the scene yet. Every sound is spatial, so it enters via explicit placement.
+    private previewAudio(name: string) {
         this.playPreviewTone(name);
         const cur = this.audioSources[this.activeAudio];
         if (this.replacingAudio && cur) {
             // Replace flow: swap the placed sound in place (keep its pin + timing)
-            cur.name = name; cur.kind = kind;
+            cur.name = name;
             const pin = this.objects.find(o => o.audioIndex === this.activeAudio);
             if (pin) pin.name = name;
             this.replacingAudio = false;
         } else if (cur && !cur.placed) {
-            cur.name = name; cur.kind = kind;   // still auditioning → swap the pending sound
+            cur.name = name;                    // still auditioning → swap the pending sound
         } else {
-            this.audioSources.push({ name, kind, volume: 50, range: 8, loop: false, placed: false, start: 0.30, end: 0.50 });
+            this.audioSources.push({ name, kind: 'Spatial', volume: 50, range: 8, loop: false, placed: false, start: 0.30, end: 0.50 });
             this.activeAudio = this.audioSources.length - 1;
         }
-        this.refreshBottom(); // show the audio bar (Preview + Place button)
+        this.refreshBottom(); // show the audio bar (name + Place button)
     }
 
     // short synthesized audition tone (the library is faked), pitched by the sound name
@@ -1298,25 +1305,6 @@ class BraintranceUI {
             osc.connect(gain); gain.connect(ctx.destination);
             osc.start(now); osc.stop(now + 0.52);
         } catch (e) { /* preview is best-effort */ }
-    }
-
-    // add a stereo (global) sound — it still gets a world-space pin (at the origin) so it
-    // can be selected/moved later, even though it plays globally.
-    private addStereo() {
-        const s = this.audioSources[this.activeAudio];
-        if (s) {
-            this.dropAudioPin(0, 0, 0);
-            s.placed = true;
-        }
-        this.rebuildAudio();
-    }
-
-    // flip the pending sound between spatial (3D, positioned + ranged) and stereo (global)
-    private toggleAudioKind() {
-        const s = this.audioSources[this.activeAudio];
-        if (!s) return;
-        s.kind = s.kind === 'Spatial' ? 'Stereo' : 'Spatial';
-        this.refreshBottom();
     }
 
     private dropAudioPin(x: number, y: number, z: number) {
@@ -1350,16 +1338,19 @@ class BraintranceUI {
         const s = this.audioSources[this.activeAudio] ?? this.audioSources[0];
         const bar = el('div', 'bt-audio-bar');
 
+        // Placing: the library is hidden and the bar is just the instruction.
+        if (this.placingAudio) {
+            bar.classList.add('is-placing');
+            bar.appendChild(el('div', 'bt-ab-placing', `${ICON.audio}<span>Click to place <strong>${s.name}</strong></span>`));
+            const cancel = el('button', 'bt-ab-cancel', 'Cancel');
+            cancel.addEventListener('click', () => this.cancelPlace());
+            bar.appendChild(cancel);
+            return bar;
+        }
+
         const head = el('div', 'bt-ab-head');
-        head.appendChild(el('div', 'bt-ab-name', `${ICON.globe}<span>${s.name}</span>`));
-        // the Spatial/Stereo badge is a toggle (stereo plays globally → no range/placement)
-        const badge = el('div', 'bt-ab-badge is-toggle', `${s.kind}<span class="bt-ab-swap">⇄</span>`);
-        badge.addEventListener('click', () => this.toggleAudioKind());
-        head.appendChild(badge);
+        head.appendChild(el('div', 'bt-ab-name', `${ICON.audio}<span>${s.name}</span>`));
         head.appendChild(el('div', 'bt-ab-spacer'));
-        const preview = el('div', 'bt-ab-preview', `${ICON.play}<span>Preview</span>`);
-        preview.addEventListener('click', () => this.playPreviewTone(s.name));
-        head.appendChild(preview);
         if (s.placed) { // only once it's in the scene — opens the library to swap the sound
             const replace = el('div', 'bt-ab-replace', 'Replace');
             replace.addEventListener('click', () => this.replaceAudio());
@@ -1379,24 +1370,33 @@ class BraintranceUI {
             });
             vol.appendChild(slider); vol.appendChild(val);
             controls.appendChild(vol);
-            // range only applies to spatial (3D) sounds; stereo plays at a fixed level everywhere
-            if (s.kind === 'Spatial') controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
+            controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
             controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
             bar.appendChild(controls);
         } else {
-            const label = s.kind === 'Spatial' ?
-                (this.placingAudio ? 'Click in the scene to place…' : 'Place in scene') :
-                'Add to scene';
-            const place = el('button', 'bt-ab-place', label);
-            place.addEventListener('click', () => (s.kind === 'Spatial' ? this.armPlace() : this.addStereo()));
+            // every sound is spatial → it enters the scene by explicit placement
+            const place = el('button', 'bt-ab-place', 'Place in scene');
+            place.addEventListener('click', () => this.armPlace());
             bar.appendChild(place);
         }
         return bar;
     }
 
+    // arm placement: hide the library so the scene is unobstructed; the bottom bar
+    // becomes "Click to place <name>"
     private armPlace() {
         this.placingAudio = true;
-        this.refreshBottom(); // button label → "Click in the scene to place…"
+        this.audioPanel?.remove(); this.audioPanel = null;
+        this.refreshBottom();
+    }
+
+    private cancelPlace() {
+        this.placingAudio = false;
+        if (this.audioMode && !this.audioPanel) { // bring the library back
+            this.audioPanel = this.buildAudioLibrary();
+            this.root.appendChild(this.audioPanel);
+        }
+        this.refreshBottom();
     }
 
     private placeAudioAt(clientX: number, clientY: number) {
@@ -1411,7 +1411,10 @@ class BraintranceUI {
         }
         if (s) s.placed = true;
         this.placingAudio = false;
-        this.rebuildAudio();
+        // leave the library flow and select the freshly placed pin (its config bar opens)
+        this.exitAudio();
+        const pin = this.objects.find(o => o.audioIndex === this.activeAudio);
+        if (pin) this.selectSceneObject(pin);
     }
 
     // ── interaction recording (cyan border + record bar) ──
@@ -1654,7 +1657,7 @@ class BraintranceUI {
             // hover affordance
             if (!down && !drawMode() && !this.audioMode && !this.placingAudio) {
                 canvas.style.cursor = this.pickObjectAt(e.clientX, e.clientY) ? 'pointer' : '';
-            } else if (drawMode() && !down) {
+            } else if ((drawMode() || this.placingAudio) && !down) {
                 canvas.style.cursor = 'crosshair';
             }
         });
@@ -1995,6 +1998,9 @@ class BraintranceUI {
                 if (this.menuDropdown) {
                     this.closeMenu(); return;
                 }
+                if (this.placingAudio) {
+                    this.cancelPlace(); return; // back to the sound library
+                }
                 if (this.depthPop) {
                     this.cancelLasso(); return;
                 }
@@ -2092,9 +2098,9 @@ class BraintranceUI {
         // (Select if a select sub-tool is active, else Explore) — don't snap to Explore.
         this.setActiveTool(sel || this.selectMode ? 'sam' : 'explore');
         this.setState(sel ? 'selected' : 'explore');
-        // Selection shows the highlight only — no gizmo until a transform tool
-        // (Q/E/R) is chosen. Matches "Selected - best" (no gizmo) vs "W - Move - best"
-        // (move gizmo). The previous object's gizmo was already cleared above.
+        // Selecting re-attaches the last transform tool you used (Q/E/R switch it);
+        // the previous object's gizmo was already cleared above.
+        if (sel) this.setGizmoMode(this.lastGizmoMode);
     }
 
     // ── transform gizmo (real PlayCanvas Translate/Scale/Rotate) ──
@@ -2128,6 +2134,7 @@ class BraintranceUI {
         });
         this.gizmo = gizmo;
         this.gizmoMode = mode;
+        this.lastGizmoMode = mode; // selecting another object re-attaches this tool
         render();
         this.refreshHeaderCenter(); // highlight active Q/E/R
     }
