@@ -121,7 +121,6 @@ class BraintranceUI {
 
     // selection mode: null/sam = click-select, lasso = draw region, crop = volume box
     private selectMode: 'sam' | 'lasso' | 'crop' | null = null;
-    private selectMenu: HTMLElement | null = null;          // the Select dropdown
     private lasso: { pts: { x: number; y: number }[]; el: HTMLElement } | null = null;
     private cropBox: { x0: number; y0: number; x1: number; y1: number; el: HTMLElement } | null = null;
     private cropConfirm: HTMLElement | null = null;
@@ -148,7 +147,6 @@ class BraintranceUI {
     private isolateMode = false;
     private isolatedHidden: SceneObject[] = []; // objects hidden while isolating
     private isolateBar: HTMLElement | null = null;
-    private isolateVignette: HTMLElement | null = null;
 
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
@@ -300,109 +298,26 @@ class BraintranceUI {
         return header;
     }
 
-    // top-of-header Explore (default) + Select dropdown (moved up from the rail)
+    // One mode now (everything is Explore). The header shows just an Explore home
+    // indicator; the selection sub-tools (SAM / Lasso / Crop) live in Isolate & clean.
     private buildToolTabs(): HTMLElement {
         const tabs = el('div', 'bt-tooltabs');
-        const explore = el('div', 'bt-tooltab', `${ICON.explore}<span>Explore</span>`);
-        explore.addEventListener('click', () => this.selectTool('explore'));
+        const explore = el('div', 'bt-tooltab is-active', `${ICON.explore}<span>Explore</span>`);
+        explore.addEventListener('click', () => this.selectTool('explore')); // home: exit panels
         this.toolTabs.explore = explore;
         tabs.appendChild(explore);
-
-        const select = el('div', 'bt-tooltab bt-tooltab-dd');
-        select.innerHTML = `${ICON.sam}<span class="bt-tt-label">Select</span><span class="bt-tt-caret">${ICON.chevronDown}</span>`;
-        // Photoshop-style: short click activates (selects last); long-press reveals the flyout.
-        let pressTimer = 0, longPressed = false;
-        const endPress = () => {
-            if (pressTimer) {
-                clearTimeout(pressTimer); pressTimer = 0;
-            }
-        };
-        select.addEventListener('pointerdown', (e) => {
-            e.stopPropagation(); longPressed = false;
-            pressTimer = window.setTimeout(() => {
-                longPressed = true; this.openSelectMenu();
-            }, 360);
-        });
-        select.addEventListener('pointerup', () => {
-            endPress(); if (!longPressed) this.activateSelect();
-        });
-        select.addEventListener('pointerleave', endPress);
-        this.toolTabs.sam = select;
-        tabs.appendChild(select);
         return tabs;
     }
 
-    // short click: enter Select (last sub-tool) and re-select the last object
-    private activateSelect() {
-        this.selectMode = 'sam';
-        this.exitAudio();
-        this.closeAssets();
-        this.endLasso();
-        this.closeSelectMenu();
-        this.setActiveTool('sam');
-        this.updateSelectTabLabel();
-        if (this.canvas) this.canvas.style.cursor = 'crosshair';
-        if (this.selection?.entity && this.selection.entity.enabled !== false) {
-            this.selectSceneObject(this.selection); // auto-select the last object
-        }
-    }
-
-    private openSelectMenu() {
-        if (this.selectMenu) return;
-        const menu = el('div', 'bt-select-menu bt-interactive');
-        const item = (icon: string, name: string, sub: string, mode: 'sam' | 'lasso' | 'crop') => {
-            const it = el('div', `bt-select-item${this.selectMode === mode ? ' is-active' : ''}`,
-                `${icon}<div class="bt-si-text"><div class="bt-si-name">${name}</div><div class="bt-si-sub">${sub}</div></div>`);
-            it.addEventListener('click', () => this.enableSelectMode(mode));
-            return it;
-        };
-        menu.appendChild(item(ICON.sam, 'SAM', 'AI click-to-segment', 'sam'));
-        menu.appendChild(item(ICON.lasso, 'Shape', 'Draw a lasso region', 'lasso'));
-        menu.appendChild(item(ICON.crop, 'Crop', 'Drag a volume box', 'crop'));
-        const tab = this.toolTabs.sam!;
-        const r = tab.getBoundingClientRect();
-        menu.style.left = `${r.left}px`;
-        menu.style.top = `${r.bottom + 6}px`;
-        this.selectMenu = menu;
-        this.root.appendChild(menu);
-        setTimeout(() => document.addEventListener('pointerdown', this.onDocPointerDown), 0);
-    }
-
-    private onDocPointerDown = (e: PointerEvent) => {
-        if (this.selectMenu && !this.selectMenu.contains(e.target as Node) && !this.toolTabs.sam?.contains(e.target as Node)) {
-            this.closeSelectMenu();
-        }
-    };
-
-    private closeSelectMenu() {
-        if (this.selectMenu) {
-            this.selectMenu.remove();
-            this.selectMenu = null;
-            document.removeEventListener('pointerdown', this.onDocPointerDown);
-        }
-    }
-
-    // enabling a select mode does NOT auto-select — it just turns selection on
+    // turn on a cleanup selection tool inside Isolate & clean (SAM / lasso / crop)
     private enableSelectMode(mode: 'sam' | 'lasso' | 'crop') {
         this.selectMode = mode;
-        this.exitAudio();
-        this.closeAssets();
         this.endLasso();
         this.endCrop();
-        this.setActiveTool('sam');       // highlight the Select tab
-        this.closeSelectMenu();
-        this.updateSelectTabLabel();
         if (this.canvas) this.canvas.style.cursor = 'crosshair';
-        // SAM re-selects the last object; lasso/crop wait for a drawn region
-        if (mode === 'sam' && this.selection?.entity && this.selection.entity.enabled !== false) {
-            this.selectSceneObject(this.selection);
-        }
-    }
-
-    private updateSelectTabLabel() {
-        const label = this.toolTabs.sam?.querySelector('.bt-tt-label');
-        const name = this.selectMode === 'lasso' ? 'Lasso' : this.selectMode === 'crop' ? 'Crop' : this.selectMode === 'sam' ? 'SAM' : 'Select';
-        if (label) label.textContent = name;
+        this.isolateBar?.querySelectorAll('.bt-iso-tool').forEach((b) => {
+            b.classList.toggle('is-active', (b as HTMLElement).dataset.mode === mode);
+        });
     }
 
     // camera hints (Explore state)
@@ -596,9 +511,6 @@ class BraintranceUI {
         });
         if (this.scene) this.scene.forceRender = true;
         this.frameSelection();
-        // dim the surround so the isolated object reads as the focus
-        this.isolateVignette = el('div', 'bt-isolate-vignette');
-        this.root.appendChild(this.isolateVignette);
         this.isolateBar = this.buildIsolateBar();
         this.root.appendChild(this.isolateBar);
         this.refreshBottom(); // context bar hides; the isolate toolbar takes over
@@ -608,14 +520,17 @@ class BraintranceUI {
         const bar = el('div', 'bt-isolate-bar');
         bar.appendChild(el('div', 'bt-iso-title', `${ICON.frame}<span>Cleaning <strong>${this.selection.name}</strong></span>`));
         bar.appendChild(el('div', 'bt-iso-spacer'));
-        const tool = (icon: string, label: string, onClick: () => void) => {
+        // the old top "Select" dropdown tools now clean the isolated object
+        const tool = (icon: string, label: string, mode: string | null, onClick: () => void) => {
             const b = el('button', 'bt-iso-tool', `${icon}<span>${label}</span>`);
+            if (mode) b.dataset.mode = mode;
             b.addEventListener('click', onClick);
             return b;
         };
-        bar.appendChild(tool(ICON.sparkles, 'Auto-clean floaters', () => this.cleanFloaters()));
-        bar.appendChild(tool(ICON.crop, 'Crop away', () => this.enableSelectMode('crop')));
-        bar.appendChild(tool(ICON.lasso, 'Lasso away', () => this.enableSelectMode('lasso')));
+        bar.appendChild(tool(ICON.sparkles, 'Auto-clean', null, () => this.cleanFloaters()));
+        bar.appendChild(tool(ICON.sam, 'SAM', 'sam', () => this.enableSelectMode('sam')));
+        bar.appendChild(tool(ICON.crop, 'Crop', 'crop', () => this.enableSelectMode('crop')));
+        bar.appendChild(tool(ICON.lasso, 'Lasso', 'lasso', () => this.enableSelectMode('lasso')));
         const done = el('button', 'bt-iso-done', 'Done');
         done.addEventListener('click', () => this.exitIsolate());
         bar.appendChild(done);
@@ -655,7 +570,6 @@ class BraintranceUI {
         this.isolatedHidden = [];
         if (this.scene) this.scene.forceRender = true;
         this.isolateBar?.remove(); this.isolateBar = null;
-        this.isolateVignette?.remove(); this.isolateVignette = null;
         this.refreshBottom();
     }
 
@@ -938,22 +852,18 @@ class BraintranceUI {
 
     // ── state ──
     private setActiveTool(tool: RailTool) {
+        // Explore is the only mode (its header tab stays lit); just track the rail panels.
         (Object.keys(this.railItems) as RailTool[]).forEach((k) => {
             this.railItems[k]?.classList.toggle('is-active', k === tool);
-        });
-        (Object.keys(this.toolTabs) as RailTool[]).forEach((k) => {
-            this.toolTabs[k]?.classList.toggle('is-active', k === tool);
         });
     }
 
     private selectTool(tool: RailTool) {
         if (tool !== 'audio') this.exitAudio();
         if (tool !== 'assets') this.closeAssets();
-        this.closeSelectMenu();
-        this.selectMode = null;          // leaving Select mode
+        this.selectMode = null;
         this.endLasso();
         this.endCrop();
-        this.updateSelectTabLabel();
         if (tool === 'audio') {
             this.selectObject(false);
             this.setActiveTool('audio');
@@ -1796,19 +1706,12 @@ class BraintranceUI {
             }
             if (drawMode()) return; // lasso/crop draws are handled above
             if (this.selectMode === 'sam') {
-                // Select mode: click an object to select it; click the already-selected
-                // object (or blank) to deselect — but stay in Select, don't drop to Explore.
-                const obj = this.pickObjectAt(e.clientX, e.clientY);
-                if (obj && !(this.state === 'selected' && obj === this.selection)) {
-                    this.selectSceneObject(obj);
-                } else {
-                    this.selectObject(false);
-                }
-            } else {
-                // Explore mode: navigate — click an object to centre it (if it's near),
-                // click blank space to step forward into the scene.
-                this.exploreNavigate(e.clientX, e.clientY);
+                // SAM only lives in Isolate & clean now → click marks a spot to clean
+                if (this.isolateMode) this.toast('Cleaned that area');
+                return;
             }
+            // Explore (the only mode): click an object to select it, blank to navigate.
+            this.exploreNavigate(e.clientX, e.clientY);
         });
     }
 
@@ -1971,8 +1874,7 @@ class BraintranceUI {
     private commitLasso(cx: number, cy: number) {
         this.depthPop?.remove(); this.depthPop = null;
         this.endLasso();
-        if (this.isolateMode) { // "Lasso away" — faked removal of that region
-            this.selectMode = null;
+        if (this.isolateMode) { // "Lasso away" — faked removal; stay armed to clean again
             this.toast('Cleaned the lassoed region');
             this.refreshBottom();
             return;
@@ -2052,9 +1954,8 @@ class BraintranceUI {
     }
 
     private applyCrop() {
-        if (this.isolateMode) { // "Crop away" — faked removal inside isolate, no object op
+        if (this.isolateMode) { // "Crop away" — faked removal; stay armed to crop again
             this.endCrop();
-            this.selectMode = null;
             this.toast('Cropped away that region');
             this.refreshBottom();
             return;
@@ -2135,13 +2036,9 @@ class BraintranceUI {
             const mod = e.metaKey || e.ctrlKey || e.altKey;
             const k = e.key.toLowerCase();
             // global mode shortcuts (any state): V = Select, H = Explore
-            if (!mod && !e.shiftKey) {
-                if (k === 'v') {
-                    e.preventDefault(); e.stopPropagation(); this.activateSelect(); return;
-                }
-                if (k === 'h') {
-                    e.preventDefault(); e.stopPropagation(); this.selectTool('explore'); return;
-                }
+            if (!mod && !e.shiftKey && k === 'h') {
+                // H — back to Explore home (exit any open panel)
+                e.preventDefault(); e.stopPropagation(); this.selectTool('explore'); return;
             }
             // ⌘K / Ctrl+K — Crop to: keep only the selection, drop the rest
             if ((e.metaKey || e.ctrlKey) && !e.altKey && k === 'k') {
@@ -2165,9 +2062,6 @@ class BraintranceUI {
                 }
                 if (this.cropConfirm || this.cropBox) {
                     this.endCrop(); return;
-                }
-                if (this.selectMenu) {
-                    this.closeSelectMenu(); return;
                 }
                 if (this.lasso) {
                     this.endLasso(); return;

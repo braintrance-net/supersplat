@@ -443,11 +443,6 @@ body.bt-mode {
 }
 
 // ── Isolate & clean mode ────────────────────────────────────────────────────
-// dim surround so the isolated object reads as the focus (doesn't block clicks)
-.bt-isolate-vignette {
-    position: fixed; inset: 0; z-index: 84; pointer-events: none;
-    background: radial-gradient(ellipse at 50% 46%, transparent 30%, rgba(0, 0, 0, 0.45) 78%);
-}
 .bt-isolate-bar {
     position: absolute;
     left: 50%; bottom: 78px; transform: translateX(-50%);
@@ -467,6 +462,8 @@ body.bt-mode {
         font-size: 13px; font-weight: 600; cursor: pointer;
         svg { width: 14px; height: 14px; color: var(--bt-ink-2); }
         &:hover { background: var(--bt-hover); }
+        &.is-active { border-color: var(--bt-ink); background: var(--bt-active);
+            svg { color: var(--bt-ink); } }
     }
     .bt-iso-done {
         height: 34px; padding: 0 16px; border: none; border-radius: 9px;
