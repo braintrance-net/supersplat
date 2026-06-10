@@ -61,10 +61,10 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'camera.fly.backward': { codes: ['KeyS'], held: true, shift: 'optional', alt: 'optional' },
     'camera.fly.left': { codes: ['KeyA'], held: true, shift: 'optional', alt: 'optional' },
     'camera.fly.right': { codes: ['KeyD'], held: true, shift: 'optional', alt: 'optional' },
-    // Q/E are repurposed as braintrance transform-tool keys (Move / Scale), so
-    // they no longer fly the camera up/down.
-    'camera.fly.down': { codes: [], held: true, shift: 'optional', alt: 'optional' },
-    'camera.fly.up': { codes: [], held: true, shift: 'optional', alt: 'optional' },
+    // Q/E fly down/up while exploring; with a selection the braintrance overlay
+    // intercepts them (capture phase + stopPropagation) as the Move/Scale tool keys.
+    'camera.fly.down': { codes: ['KeyQ'], held: true, shift: 'optional', alt: 'optional' },
+    'camera.fly.up': { codes: ['KeyE'], held: true, shift: 'optional', alt: 'optional' },
     'camera.modifier.fast': { codes: ['ShiftLeft', 'ShiftRight'], held: true, alt: 'optional' },
     'camera.modifier.slow': { codes: ['AltLeft', 'AltRight'], held: true, shift: 'optional' }
 };

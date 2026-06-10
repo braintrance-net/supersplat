@@ -128,7 +128,8 @@ class BraintranceUI {
     private menuDropdown: HTMLElement | null = null;
     private menuOpen: string | null = null;
     private depthPop: HTMLElement | null = null;            // lasso depth prompt
-    private captures: number[] = [0.14, 0.60];              // snapshot marker positions (0..1)
+    private captures: number[] = [0.14, 0.60];              // keyframe positions (0..1)
+    private wasOnKeyframe = false;                          // playhead-on-keyframe edge detect
     private scrubberEl: HTMLElement | null = null;
 
     // playback (scrubber + sequencer share one playhead)
@@ -411,6 +412,11 @@ class BraintranceUI {
             '</span>' +
             '<span class="bt-hint-sub">or Arrow keys to move</span>';
         wrap.appendChild(keys);
+        const qe = el('div', 'bt-hint');
+        qe.innerHTML =
+            '<span class="bt-qe"><span class="bt-kc">Q</span><span class="bt-kc">E</span></span>' +
+            '<span class="bt-hint-sub">down / up</span>';
+        wrap.appendChild(qe);
         const hint = (icon: string, label: string) => el('div', 'bt-hint', `${icon}<span>${label}</span>`);
         wrap.appendChild(hint(ICON.rotate, 'Rotate'));
         wrap.appendChild(hint(ICON.pan, 'Pan'));
@@ -455,38 +461,44 @@ class BraintranceUI {
         return rail;
     }
 
-    // ── snapshot panel (Explore state) ──
+    // ── keyframe panel (Explore state) ──
     private snapshotPanel(): HTMLElement {
         const p = el('div', 'bt-snapshot');
-        const add = el('button', 'bt-btn', 'Snapshot all');
+        const add = el('button', 'bt-btn', 'Add keyframe');
         add.addEventListener('click', () => this.addCapture(this.playhead));
-        const rem = el('button', 'bt-btn', 'Remove snapshot');
-        rem.addEventListener('click', () => this.removeNearestCapture(this.playhead));
         p.appendChild(add);
-        p.appendChild(rem);
+        // Remove only offers itself when the playhead actually sits on a keyframe
+        // (scrub onto one, or click its diamond marker to jump to it).
+        if (this.keyframeAt(this.playhead) !== -1) {
+            const rem = el('button', 'bt-btn', 'Remove keyframe');
+            rem.addEventListener('click', () => this.removeKeyframe(this.playhead));
+            p.appendChild(rem);
+        }
         p.appendChild(el('button', 'bt-icon-btn', ICON.reset));
         return p;
     }
 
-    // ── snapshot captures (drive scrubber + sequencer keyframes) ──
+    // ── keyframes (drive scrubber + sequencer markers) ──
+    // index of the keyframe at `pos` (within the snap epsilon), or -1
+    private keyframeAt(pos: number): number {
+        return this.captures.findIndex(c => Math.abs(c - pos) < 0.015);
+    }
+
     private addCapture(pos: number) {
-        if (!this.captures.some(c => Math.abs(c - pos) < 0.015)) {
+        if (this.keyframeAt(pos) === -1) {
             this.captures.push(pos);
             this.captures.sort((a, b) => a - b);
             this.renderCaptures();
+            this.refreshBottom(); // the playhead now sits on a keyframe → show Remove
         }
     }
 
-    private removeNearestCapture(pos: number) {
-        if (!this.captures.length) return;
-        let bi = 0, bd = Infinity;
-        this.captures.forEach((c, i) => {
-            const d = Math.abs(c - pos); if (d < bd) {
-                bd = d; bi = i;
-            }
-        });
-        this.captures.splice(bi, 1);
+    private removeKeyframe(pos: number) {
+        const i = this.keyframeAt(pos);
+        if (i === -1) return; // only removable while on the keyframe
+        this.captures.splice(i, 1);
         this.renderCaptures();
+        this.refreshBottom(); // no longer on a keyframe → hide Remove
     }
 
     private renderCaptures() {
@@ -601,7 +613,14 @@ class BraintranceUI {
         this.scrubFill = fill;
         track.appendChild(fill);
         this.captures.forEach((pos) => {
-            const m = el('div', 'bt-marker'); m.style.left = `${pos * 100}%`; track.appendChild(m);
+            const m = el('div', 'bt-marker');
+            m.style.left = `${pos * 100}%`;
+            m.title = 'Jump to keyframe';
+            // clicking a diamond selects that keyframe (jumps the playhead onto it)
+            m.addEventListener('click', (e) => {
+                e.stopPropagation(); this.setPlayhead(pos);
+            });
+            track.appendChild(m);
         });
         const ph = el('div', 'bt-marker is-playhead'); ph.style.left = `${this.playhead * 100}%`;
         this.scrubPlayheadEl = ph; track.appendChild(ph);
@@ -674,6 +693,13 @@ class BraintranceUI {
         if (this.seqPlayheadEl) this.seqPlayheadEl.style.left = pct;
         const seqTime = this.sequencer?.querySelector('.bt-seq-time');
         if (seqTime) seqTime.textContent = `${fmtTime(this.playhead * DURATION)} / ${fmtTime(DURATION)}`;
+        // Remove-keyframe is only offered while ON a keyframe — refresh the panel when
+        // the playhead crosses on/off one (cheap; only fires on the transition).
+        const onKf = this.keyframeAt(this.playhead) !== -1;
+        if (onKf !== this.wasOnKeyframe) {
+            this.wasOnKeyframe = onKf;
+            if (this.state === 'explore' && !this.audioMode && !this.recordingMode) this.refreshBottom();
+        }
     }
 
     private updatePlayIcon() {
@@ -748,7 +774,7 @@ class BraintranceUI {
         head.appendChild(play);
         head.appendChild(el('div', 'bt-seq-time', `${fmtTime(this.playhead * DURATION)} / ${fmtTime(DURATION)}`));
         head.appendChild(el('div', 'bt-seq-spacer'));
-        const snap = el('button', 'bt-seq-snap', `${ICON.diamond}<span>Snapshot</span>`);
+        const snap = el('button', 'bt-seq-snap', `${ICON.diamond}<span>Add keyframe</span>`);
         snap.addEventListener('click', () => this.addCapture(this.playhead));
         head.appendChild(snap);
         panel.appendChild(head);
@@ -918,8 +944,15 @@ class BraintranceUI {
         if (this.state === 'selected') this.refreshBottom();
     }
 
+    // Effects browser — a wide, store-style modal (think Unity Asset Store) rather than
+    // a thin sidebar. Returns a backdrop wrapper; clicking outside the panel closes it.
     private buildEffectsPanel(): HTMLElement {
-        const panel = el('div', 'bt-effects-panel');
+        const overlay = el('div', 'bt-ep-overlay');
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) this.hideEffectsLibrary(); // click-away → chip list
+        });
+
+        const panel = el('div', 'bt-effects-panel is-store');
         const head = el('div', 'bt-ep-head');
         head.appendChild(el('div', 'bt-ep-title', 'Enhance with effects'));
         const close = el('div', 'bt-ep-close', ICON.x);
@@ -929,21 +962,25 @@ class BraintranceUI {
 
         panel.appendChild(el('div', 'bt-ep-search', 'Search effects…'));
 
-        panel.appendChild(el('div', 'bt-ep-section', 'COLOR PRESETS'));
+        const body = el('div', 'bt-ep-body');
+        body.appendChild(el('div', 'bt-ep-section', 'COLOR PRESETS'));
         const row = el('div', 'bt-ep-row');
         COLOR_PRESETS.forEach(name => row.appendChild(this.effectTile(name, 'preset')));
-        panel.appendChild(row);
+        body.appendChild(row);
 
-        panel.appendChild(el('div', 'bt-ep-strength',
+        body.appendChild(el('div', 'bt-ep-strength',
             '<span>Strength</span><input type="range" min="0" max="100" value="60">'));
 
         const shaderCount = this.selection.effects.filter(e => e.type === 'effect').length;
-        panel.appendChild(el('div', 'bt-ep-section',
+        body.appendChild(el('div', 'bt-ep-section',
             `<span>SHADER EFFECTS</span>${shaderCount ? `<span class="bt-ep-count">${shaderCount} selected</span>` : ''}`));
         const grid = el('div', 'bt-ep-grid');
         SHADER_EFFECTS.forEach(name => grid.appendChild(this.effectTile(name, 'effect')));
-        panel.appendChild(grid);
-        return panel;
+        body.appendChild(grid);
+        panel.appendChild(body);
+
+        overlay.appendChild(panel);
+        return overlay;
     }
 
     private effectTile(name: string, type: 'preset' | 'effect'): HTMLElement {
