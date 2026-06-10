@@ -149,6 +149,7 @@ class BraintranceUI {
     private isolateBar: HTMLElement | null = null;
     private isoSelectBtn: HTMLElement | null = null;  // the SAM/Crop/Lasso dropdown button
     private isoSelectMenu: HTMLElement | null = null;  // its open flyout
+    private cleanSelections: HTMLElement[] = [];       // highlighted regions selected while cleaning
 
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
@@ -513,6 +514,10 @@ class BraintranceUI {
         this.isolatedHidden.forEach((o) => {
             o.entity.enabled = false;
         });
+        this.clearCleanSelections();
+        // show the object in its true colour (not full-yellow) so you clean real geometry;
+        // only the parts you select with SAM/lasso/crop get highlighted.
+        this.setSelectionColor(false);
         if (this.scene) this.scene.forceRender = true;
         this.frameSelection();
         this.isolateBar = this.buildIsolateBar();
@@ -525,17 +530,22 @@ class BraintranceUI {
         bar.appendChild(el('div', 'bt-iso-title', `${ICON.frame}<span>Cleaning <strong>${this.selection.name}</strong></span>`));
         bar.appendChild(el('div', 'bt-iso-spacer'));
 
-        const auto = el('button', 'bt-iso-tool', `${ICON.sparkles}<span>Auto-clean</span>`);
-        auto.addEventListener('click', () => this.cleanFloaters());
-        bar.appendChild(auto);
-
-        // SAM / Crop / Lasso live behind one dropdown (like the old top Select tool)
+        // SAM / Crop / Lasso live behind one dropdown (like the old top Select tool).
+        // They only SELECT — the user then explicitly crops-to or deletes the selection.
         const dd = el('button', `bt-iso-tool bt-iso-select${this.selectMode ? ' is-active' : ''}`, this.isoSelectLabel());
         dd.addEventListener('click', (e) => {
             e.stopPropagation(); this.toggleIsoSelectMenu(dd);
         });
         this.isoSelectBtn = dd;
         bar.appendChild(dd);
+
+        const hasSel = this.cleanSelections.length > 0;
+        const cropTo = el('button', `bt-iso-tool${hasSel ? '' : ' is-disabled'}`, `${ICON.crop}<span>Crop to</span>`);
+        cropTo.addEventListener('click', () => this.commitClean('crop'));
+        bar.appendChild(cropTo);
+        const del = el('button', `bt-iso-tool is-danger${hasSel ? '' : ' is-disabled'}`, `${ICON.trash}<span>Delete</span>`);
+        del.addEventListener('click', () => this.commitClean('delete'));
+        bar.appendChild(del);
 
         const done = el('button', 'bt-iso-done', 'Done');
         done.addEventListener('click', () => this.exitIsolate());
@@ -588,15 +598,37 @@ class BraintranceUI {
         }
     }
 
-    // faked auto-cleanup (real splat floater removal isn't wired) — pulse + a count
-    private cleanFloaters() {
-        const ent = this.selection?.entity;
+    // keep a drawn region (lasso / crop) as a persistent highlighted selection
+    private addCleanSelection(elm: HTMLElement) {
+        elm.classList.add('bt-clean-sel');
+        this.cleanSelections.push(elm);
+        if (this.isolateBar) { // refresh so Crop-to / Delete enable
+            const next = this.buildIsolateBar();
+            this.isolateBar.replaceWith(next); this.isolateBar = next;
+        }
+    }
+
+    // SAM click: drop a small highlighted segment at the cursor
+    private addSamSelection(clientX: number, clientY: number) {
+        const dot = el('div', 'bt-clean-sam');
+        dot.style.left = `${clientX}px`; dot.style.top = `${clientY}px`;
+        this.root.appendChild(dot);
+        this.addCleanSelection(dot);
+    }
+
+    // the user explicitly acts on the selection — Crop to (keep it) or Delete (remove it)
+    private commitClean(action: 'crop' | 'delete') {
+        if (!this.cleanSelections.length) return;
+        this.cleanSelections.forEach(s => s.remove());
+        this.cleanSelections = [];
+        // faked: a quick glow pulse acknowledges the edit (no real splat op yet)
         const mat = this.selection?.mat;
-        if (ent && mat) {
+        if (mat) {
             const start = performance.now();
+            const peak = action === 'delete' ? 1.6 : 1.2;
             const tick = (now: number) => {
-                const t = Math.min((now - start) / 450, 1);
-                mat.emissiveIntensity = 1 + Math.sin(t * Math.PI) * 1.2; mat.update();
+                const t = Math.min((now - start) / 380, 1);
+                mat.emissiveIntensity = 1 + Math.sin(t * Math.PI) * peak; mat.update();
                 if (this.scene) this.scene.forceRender = true;
                 if (t < 1) requestAnimationFrame(tick);
                 else {
@@ -606,8 +638,15 @@ class BraintranceUI {
             };
             requestAnimationFrame(tick);
         }
-        const n = 800 + Math.floor((this.selection?.name.length ?? 4) * 137);
-        this.toast(`Removed ${n.toLocaleString()} floaters`);
+        if (this.isolateBar) { // refresh so Crop-to / Delete disable again
+            const next = this.buildIsolateBar();
+            this.isolateBar.replaceWith(next); this.isolateBar = next;
+        }
+    }
+
+    private clearCleanSelections() {
+        this.cleanSelections.forEach(s => s.remove());
+        this.cleanSelections = [];
     }
 
     private exitIsolate() {
@@ -616,25 +655,25 @@ class BraintranceUI {
         this.closeIsoSelectMenu();
         this.isoSelectBtn = null;
         this.endLasso(); this.endCrop();
+        this.clearCleanSelections();
         this.selectMode = null;
         this.isolatedHidden.forEach((o) => {
             o.entity.enabled = true;
         });
         this.isolatedHidden = [];
+        this.setSelectionColor(true); // the object is selected again → re-highlight
         if (this.scene) this.scene.forceRender = true;
         this.isolateBar?.remove(); this.isolateBar = null;
         this.refreshBottom();
     }
 
-    // brief transient confirmation toast
-    private toast(msg: string) {
-        const t = el('div', 'bt-toast', msg);
-        this.root.appendChild(t);
-        requestAnimationFrame(() => t.classList.add('is-in'));
-        setTimeout(() => {
-            t.classList.remove('is-in');
-            setTimeout(() => t.remove(), 250);
-        }, 1600);
+    // paint the active object selected (yellow) or its idle colour
+    private setSelectionColor(sel: boolean) {
+        if (this.boxMat && this.box?.enabled !== false) {
+            const c = sel ? SEL_DIFFUSE : (this.selection?.idle ?? IDLE_DIFFUSE);
+            this.boxMat.diffuse.copy(c); this.boxMat.emissive.copy(c); this.boxMat.update();
+            if (this.scene) this.scene.forceRender = true;
+        }
     }
 
     private contextBarChips(): HTMLElement {
@@ -1759,8 +1798,8 @@ class BraintranceUI {
             }
             if (drawMode()) return; // lasso/crop draws are handled above
             if (this.selectMode === 'sam') {
-                // SAM only lives in Isolate & clean now → click marks a spot to clean
-                if (this.isolateMode) this.toast('Cleaned that area');
+                // SAM only lives in Isolate & clean now → click selects a segment to clean
+                if (this.isolateMode) this.addSamSelection(e.clientX, e.clientY);
                 return;
             }
             // Explore (the only mode): click an object to select it, blank to navigate.
@@ -1926,12 +1965,15 @@ class BraintranceUI {
 
     private commitLasso(cx: number, cy: number) {
         this.depthPop?.remove(); this.depthPop = null;
-        this.endLasso();
-        if (this.isolateMode) { // "Lasso away" — faked removal; stay armed to clean again
-            this.toast('Cleaned the lassoed region');
-            this.refreshBottom();
+        if (this.isolateMode && this.lasso) {
+            // keep the extruded region as a highlighted selection (stay armed to add more)
+            const svg = this.lasso.el;
+            this.lasso = null; // detach without removing the element
+            if (this.scene?.camera) this.scene.camera.inputDisabled = false;
+            this.addCleanSelection(svg);
             return;
         }
+        this.endLasso();
         // faked SAM: select whatever object sits under the lasso's centre
         const obj = this.pickObjectAt(cx, cy);
         if (obj) this.selectSceneObject(obj);
@@ -1976,6 +2018,12 @@ class BraintranceUI {
         if (!b || Math.abs(b.x1 - b.x0) < 12 || Math.abs(b.y1 - b.y0) < 12) {
             this.endCrop(); return;
         }
+        if (this.isolateMode) {
+            // cleaning: the box is just a selection — keep it, no crop-to confirm
+            this.cropBox = null; // detach the element from the active-crop state
+            this.addCleanSelection(b.el);
+            return;
+        }
         this.showCropConfirm();
     }
 
@@ -2007,14 +2055,8 @@ class BraintranceUI {
     }
 
     private applyCrop() {
-        if (this.isolateMode) { // "Crop away" — faked removal; stay armed to crop again
-            this.endCrop();
-            this.toast('Cropped away that region');
-            this.refreshBottom();
-            return;
-        }
-        // Crop to the drawn volume: keep every object whose screen position falls inside
-        // the box and drop the rest. Fall back to keeping the current selection.
+        // (in Isolate & clean the crop box becomes a selection in finishCrop, so we never
+        // reach the confirm here.) Crop to the drawn volume: keep objects inside the box.
         const inside = this.objectsInCropBox();
         this.endCrop();
         this.cropToObjects(inside.length ? inside : (this.selection ? [this.selection] : []));

@@ -464,6 +464,9 @@ body.bt-mode {
         &:hover { background: var(--bt-hover); }
         &.is-active { border-color: var(--bt-ink); background: var(--bt-active);
             svg { color: var(--bt-ink); } }
+        &.is-danger { color: #c0392b; svg { color: #c0392b; }
+            &:hover { background: rgba(192, 57, 43, 0.08); } }
+        &.is-disabled { opacity: 0.4; pointer-events: none; }
     }
     .bt-iso-select .bt-iso-caret { display: inline-flex; margin-left: 2px;
         svg { width: 12px; height: 12px; color: var(--bt-ink-3); } }
@@ -473,14 +476,20 @@ body.bt-mode {
         &:hover { background: #222; }
     }
 }
-// transient confirmation toast
-.bt-toast {
-    position: absolute; left: 50%; bottom: 150px; transform: translate(-50%, 8px);
-    z-index: 210; pointer-events: none;
-    background: rgba(20, 20, 22, 0.92); color: #fff;
-    font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px;
-    opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease;
-    &.is-in { opacity: 1; transform: translate(-50%, 0); }
+// persistent cleaning selections — the highlighted parts you've selected to crop/delete.
+// A drawn lasso/crop region becomes solid-highlighted; SAM drops a small segment dot.
+#bt-overlay .bt-lasso-svg.bt-clean-sel {
+    .bt-lasso-path { fill: rgba(245, 217, 10, 0.22); stroke-dasharray: none; }
+    .bt-lasso-back, .bt-lasso-edge { opacity: 0.55; }
+}
+#bt-overlay .bt-crop-box.bt-clean-sel {
+    background: rgba(245, 230, 0, 0.20); stroke-dasharray: none;
+    .bt-crop-h { display: none; } // it's a selection now, not resizable
+}
+#bt-overlay .bt-clean-sam {
+    position: fixed; z-index: 89; pointer-events: none;
+    width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+    background: rgba(245, 217, 10, 0.28); border: 2px solid var(--bt-selection);
 }
 
 // ── Selection contextual bar (Selected / Move - best) ───────────────────────
