@@ -343,9 +343,34 @@ body.bt-mode {
         min-width: 34px;
         font-variant-numeric: tabular-nums;
     }
+    // the seek bar + the audio strips stacked beneath it
+    .bt-track-col {
+        flex: 1; min-width: 0;
+        display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    }
+    // audio strips: super-thin lines per placed sound; hover thickens, click opens timeline
+    .bt-audio-strips {
+        position: relative; height: 10px; width: 100%;
+        .bt-audio-strip {
+            position: absolute; top: 4px; height: 2px;
+            background: var(--bt-audio); border-radius: 2px; cursor: pointer;
+            transition: height 0.1s ease, top 0.1s ease;
+            .bt-audio-strip-label {
+                position: absolute; left: 6px; top: -16px;
+                font-size: 10px; font-weight: 600; color: var(--bt-audio);
+                white-space: nowrap; opacity: 0; transition: opacity 0.1s ease;
+                pointer-events: none;
+            }
+            &:hover {
+                top: 0; height: 10px;
+                .bt-audio-strip-label { opacity: 1; }
+            }
+        }
+    }
     .bt-track {
         position: relative;
-        flex: 1;
+        flex: none;
+        width: 100%;
         height: 4px;
         border-radius: 2px;
         background: #e3e3e3;
@@ -665,9 +690,15 @@ body.bt-mode {
     .bt-as-tile {
         cursor: pointer; display: flex; flex-direction: column; gap: 6px;
         .bt-as-thumb { width: 100%; aspect-ratio: 1 / 1; border-radius: 10px; border: 1px solid rgba(0,0,0,0.05); }
+        .bt-as-thumb.is-upload {
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bt-hover); border: 1px dashed var(--bt-border); color: var(--bt-ink-3);
+            svg { width: 26px; height: 26px; }
+        }
         .bt-as-label { font-size: 12px; color: var(--bt-ink-2); }
         &.is-armed .bt-as-thumb { box-shadow: 0 0 0 2px var(--bt-ink); }
         &:hover .bt-as-thumb { filter: brightness(1.04); }
+        &.bt-as-upload:hover .bt-as-thumb { filter: none; border-color: var(--bt-ink-3); color: var(--bt-ink); }
     }
     .bt-as-foot {
         padding: 12px 0 6px; margin-top: 8px;
@@ -923,6 +954,8 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
                 box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); cursor: pointer;
             }
             .bt-seq-clip { position: absolute; top: 50%; height: 18px; transform: translateY(-50%); border-radius: 5px; opacity: 0.85; }
+            .bt-seq-clip-audio { cursor: grab; &:hover { opacity: 1; }
+                &.is-focus { opacity: 1; box-shadow: 0 0 0 2px var(--bt-surface), 0 0 0 4px var(--bt-audio); } }
         }
         .bt-seq-lane-add {
             background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0, 0, 0, 0.025) 6px, rgba(0, 0, 0, 0.025) 12px);

@@ -87,12 +87,8 @@ type Interaction = { trigger: string; label: string; targets: InteractionTarget[
 // back to their entry in `audioSources`.
 type SceneObject = { entity: Entity; mat: StandardMaterial; name: string; effects: Effect[]; interactions: Interaction[]; idle?: Color; audioIndex?: number };
 
-// Asset browser catalogue (hardcoded, per spec §7.10) + thumbnail gradients.
-const ASSETS: Record<string, string[]> = {
-    Gaussians: ['Potted plant', 'Armchair', 'Marble bust', 'Vase', 'Sneaker', 'Toy car'],
-    Props: ['Cube', 'Sphere', 'Cylinder', 'Cone', 'Torus', 'Plane'],
-    Sounds: ['Ambient pad', 'Footsteps', 'Birdsong', 'Rain', 'Wind', 'Chime']
-};
+// The user's own uploaded splat assets (their library), + thumbnail gradients.
+const UPLOADED_ASSETS = ['Living room.ply', 'Marble statue.splat', 'Garden scan.ply', 'Sneaker.ply', 'Toy car.splat', 'Bookshelf.ply'];
 const ASSET_GRADS = [
     'linear-gradient(135deg,#f6d365,#fda085)',
     'linear-gradient(135deg,#a1c4fd,#c2e9fb)',
@@ -146,6 +142,7 @@ class BraintranceUI {
     private playBtns: HTMLElement[] = []; // play buttons (scrubber + sequencer) to sync icon
     private sequencer: HTMLElement | null = null;
     private seqPlayheadEl: HTMLElement | null = null;
+    private focusAudioTrack: number | null = null; // audio source to highlight in the timeline
 
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
@@ -178,9 +175,10 @@ class BraintranceUI {
     private audioMarkers: Entity[] = [];
     private activeAudio = 1;
     private audioSources = [
-        { name: 'Cathedral tone', kind: 'Stereo', volume: 62, range: 8, loop: true, placed: true },
-        { name: 'Footsteps', kind: 'Spatial', volume: 23, range: 8, loop: false, placed: false }
+        { name: 'Cathedral tone', kind: 'Stereo', volume: 62, range: 8, loop: true, placed: true, start: 0.08, end: 0.92 },
+        { name: 'Footsteps', kind: 'Spatial', volume: 23, range: 8, loop: false, placed: false, start: 0.30, end: 0.50 }
     ];
+    private replacingAudio = false; // Replace flow: next library pick swaps the active sound
 
     // interaction-recording state
     private recordingMode = false;
@@ -189,7 +187,6 @@ class BraintranceUI {
 
     // asset-browser state
     private assetsPanel: HTMLElement | null = null;
-    private assetTab = 'Gaussians';
     private placedCount = 0;
 
     constructor() {
@@ -596,6 +593,8 @@ class BraintranceUI {
         this.scrubTimeEl = el('div', 'bt-time', fmtTime(this.playhead * DURATION));
         s.appendChild(this.scrubTimeEl);
 
+        // track column: the seek bar on top, the audio strips beneath it
+        const col = el('div', 'bt-track-col');
         const track = el('div', 'bt-track');
         const fill = el('div', 'bt-track-fill');
         fill.style.width = `${this.playhead * 100}%`;
@@ -610,7 +609,25 @@ class BraintranceUI {
             const r = track.getBoundingClientRect();
             this.setPlayhead(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
         });
-        s.appendChild(track);
+        col.appendChild(track);
+
+        // audio strips — super-thin lines for each placed sound. Hovering thickens one;
+        // clicking the thick version opens the timeline to edit that sound's timing.
+        const strips = el('div', 'bt-audio-strips');
+        this.audioSources.forEach((a, i) => {
+            if (!a.placed) return;
+            const strip = el('div', 'bt-audio-strip');
+            strip.style.left = `${(a.start ?? 0) * 100}%`;
+            strip.style.width = `${Math.max((a.end ?? 1) - (a.start ?? 0), 0.02) * 100}%`;
+            strip.title = `${a.name} — click to edit its timing`;
+            strip.appendChild(el('span', 'bt-audio-strip-label', a.name));
+            strip.addEventListener('click', (e) => {
+                e.stopPropagation(); this.openTimelineForAudio(i);
+            });
+            strips.appendChild(strip);
+        });
+        col.appendChild(strips);
+        s.appendChild(col);
 
         s.appendChild(el('div', 'bt-time', fmtTime(DURATION)));
 
@@ -619,11 +636,6 @@ class BraintranceUI {
         previewAll.title = 'Preview the whole experience — timeline + interactions';
         previewAll.addEventListener('click', () => this.previewAll());
         s.appendChild(previewAll);
-
-        const expand = el('button', 'bt-expand', ICON.expand);
-        expand.title = 'Open timeline';
-        expand.addEventListener('click', () => this.toggleSequencer());
-        s.appendChild(expand);
         return s;
     }
 
@@ -683,6 +695,44 @@ class BraintranceUI {
         document.body.classList.add('bt-seq-open');
     }
 
+    // open the expanded timeline focused on a specific audio source (from a scrubber strip)
+    private openTimelineForAudio(i: number) {
+        this.focusAudioTrack = i;
+        if (!this.sequencer) this.toggleSequencer();
+    }
+
+    // drag an audio clip along its lane to shift its timing (keeps duration); on release,
+    // the collapsed scrubber strip reflects the new position.
+    private makeClipDraggable(clip: HTMLElement, lane: HTMLElement, a: { start?: number; end?: number }) {
+        clip.style.cursor = 'grab';
+        let dragging = false, startX = 0, s0 = 0, dur = 0;
+        clip.addEventListener('pointerdown', (ev) => {
+            ev.stopPropagation();
+            dragging = true; startX = ev.clientX; s0 = a.start ?? 0; dur = (a.end ?? 1) - s0;
+            clip.style.cursor = 'grabbing';
+            try {
+                clip.setPointerCapture(ev.pointerId);
+            } catch (e) { /* noop */ }
+        });
+        clip.addEventListener('pointermove', (ev) => {
+            if (!dragging) return;
+            const w = lane.getBoundingClientRect().width || 1;
+            const ns = Math.max(0, Math.min(1 - dur, s0 + (ev.clientX - startX) / w));
+            a.start = ns; a.end = ns + dur;
+            clip.style.left = `${ns * 100}%`;
+        });
+        clip.addEventListener('pointerup', (ev) => {
+            if (!dragging) return;
+            dragging = false; clip.style.cursor = 'grab';
+            try {
+                clip.releasePointerCapture(ev.pointerId);
+            } catch (e) { /* noop */ }
+            if (this.scrubberEl) { // keep the collapsed strips in sync with the edited timing
+                const ns = this.buildScrubber(); this.scrubberEl.replaceWith(ns); this.scrubberEl = ns;
+            }
+        });
+    }
+
     private buildSequencer(): HTMLElement {
         const panel = el('div', 'bt-sequencer');
 
@@ -721,21 +771,33 @@ class BraintranceUI {
             this.setPlayhead(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)));
         });
 
-        // tracks: each selectable object, then Camera · Music · Text (designed placeholders)
-        type Track = { name: string; color: string; icon?: string; kfs?: number[]; clip?: [number, number] };
+        // tracks: each selectable (non-audio) object, Camera, one track per placed sound, Text
+        type Track = { name: string; color: string; icon?: string; kfs?: number[]; audioIndex?: number };
         const capPts = this.captures.map(c => c * 100); // snapshots become keyframes
+        const audioTracks: Track[] = this.audioSources
+        .map((a, ai) => (a.placed ? { name: a.name, color: 'var(--bt-audio)', icon: ICON.audio, audioIndex: ai } : null))
+        .filter((t): t is Track => t !== null);
         const tracks: Track[] = [
-            ...this.objects.map(o => ({ name: o.name, color: 'var(--bt-selection)', icon: ICON.globe, kfs: capPts })),
+            ...this.objects.filter(o => o.audioIndex == null)
+            .map(o => ({ name: o.name, color: 'var(--bt-selection)', icon: ICON.globe, kfs: capPts })),
             { name: 'Camera', color: 'var(--bt-playhead)', icon: ICON.camera, kfs: capPts },
-            { name: 'Music', color: 'var(--bt-audio)', icon: ICON.audio, clip: [4, 74] },
+            ...audioTracks,
             { name: 'Text', color: '#8a8a8a', icon: ICON.type, kfs: [34, 66] }
         ];
         tracks.forEach((tr) => {
             labels.appendChild(el('div', 'bt-seq-label',
                 `${tr.icon ?? ''}<span class="bt-seq-dot" style="background:${tr.color}"></span><span class="bt-seq-name">${tr.name}</span>`));
             const lane = el('div', 'bt-seq-lane');
-            if (tr.clip) {
-                const c = el('div', 'bt-seq-clip'); c.style.left = `${tr.clip[0]}%`; c.style.width = `${tr.clip[1] - tr.clip[0]}%`; c.style.background = tr.color; lane.appendChild(c);
+            if (tr.audioIndex != null) {
+                // audio clip — draggable to retune its timing; highlighted if it's the one you clicked
+                const a = this.audioSources[tr.audioIndex];
+                const focus = this.focusAudioTrack === tr.audioIndex;
+                const c = el('div', `bt-seq-clip bt-seq-clip-audio${focus ? ' is-focus' : ''}`);
+                c.style.left = `${(a.start ?? 0) * 100}%`;
+                c.style.width = `${Math.max((a.end ?? 1) - (a.start ?? 0), 0.02) * 100}%`;
+                c.style.background = tr.color;
+                this.makeClipDraggable(c, lane, a);
+                lane.appendChild(c);
             }
             (tr.kfs ?? []).forEach((p) => {
                 const d = el('div', 'bt-seq-kf'); d.style.left = `${p}%`; d.style.background = tr.color; lane.appendChild(d);
@@ -1101,6 +1163,12 @@ class BraintranceUI {
         this.refreshBottom(); // bottom → audio bar for the active source
     }
 
+    // Replace: reopen the audio library so the next pick swaps the placed sound in place
+    private replaceAudio() {
+        this.replacingAudio = true;
+        this.enterAudio();
+    }
+
     private exitAudio() {
         if (!this.audioMode && !this.audioPanel) return;
         this.audioMode = false;
@@ -1156,10 +1224,16 @@ class BraintranceUI {
     private previewAudio(name: string, kind: string) {
         this.playPreviewTone(name);
         const cur = this.audioSources[this.activeAudio];
-        if (cur && !cur.placed) {
+        if (this.replacingAudio && cur) {
+            // Replace flow: swap the placed sound in place (keep its pin + timing)
+            cur.name = name; cur.kind = kind;
+            const pin = this.objects.find(o => o.audioIndex === this.activeAudio);
+            if (pin) pin.name = name;
+            this.replacingAudio = false;
+        } else if (cur && !cur.placed) {
             cur.name = name; cur.kind = kind;   // still auditioning → swap the pending sound
         } else {
-            this.audioSources.push({ name, kind, volume: 50, range: 8, loop: false, placed: false });
+            this.audioSources.push({ name, kind, volume: 50, range: 8, loop: false, placed: false, start: 0.30, end: 0.50 });
             this.activeAudio = this.audioSources.length - 1;
         }
         this.refreshBottom(); // show the audio bar (Preview + Place button)
@@ -1249,7 +1323,11 @@ class BraintranceUI {
         const preview = el('div', 'bt-ab-preview', `${ICON.play}<span>Preview</span>`);
         preview.addEventListener('click', () => this.playPreviewTone(s.name));
         head.appendChild(preview);
-        if (s.placed) head.appendChild(el('div', 'bt-ab-replace', 'Replace')); // only once it's in the scene
+        if (s.placed) { // only once it's in the scene — opens the library to swap the sound
+            const replace = el('div', 'bt-ab-replace', 'Replace');
+            replace.addEventListener('click', () => this.replaceAudio());
+            head.appendChild(replace);
+        }
         bar.appendChild(head);
 
         if (s.placed) {
@@ -1376,7 +1454,7 @@ class BraintranceUI {
     private buildAssetsPanel(): HTMLElement {
         const panel = el('div', 'bt-assets-panel');
         const head = el('div', 'bt-as-head');
-        head.appendChild(el('div', 'bt-as-title', 'Assets'));
+        head.appendChild(el('div', 'bt-as-title', 'Your assets'));
         const close = el('div', 'bt-as-close', ICON.x);
         close.addEventListener('click', () => {
             this.closeAssets(); this.setActiveTool('explore');
@@ -1384,28 +1462,22 @@ class BraintranceUI {
         head.appendChild(close);
         panel.appendChild(head);
 
-        const tabs = el('div', 'bt-as-tabs');
-        ['Gaussians', 'Props', 'Sounds'].forEach((t) => {
-            const tab = el('div', `bt-as-tab${this.assetTab === t ? ' is-active' : ''}`, t);
-            tab.addEventListener('click', () => {
-                this.assetTab = t; this.openAssets();
-            });
-            tabs.appendChild(tab);
-        });
-        panel.appendChild(tabs);
-
         const grid = el('div', 'bt-as-grid');
-        ASSETS[this.assetTab].forEach((name, i) => {
+        // first tile uploads a new splat (faked); the rest are the user's existing uploads
+        const upload = el('div', 'bt-as-tile bt-as-upload');
+        upload.innerHTML = `<div class="bt-as-thumb is-upload">${ICON.assets}</div><div class="bt-as-label">Upload splat</div>`;
+        grid.appendChild(upload);
+        UPLOADED_ASSETS.forEach((name, i) => {
             const tile = el('div', 'bt-as-tile');
             const thumb = el('div', 'bt-as-thumb');
             thumb.style.background = ASSET_GRADS[i % ASSET_GRADS.length];
             tile.appendChild(thumb);
             tile.appendChild(el('div', 'bt-as-label', name));
-            tile.addEventListener('click', () => this.placeAssetAndSelect(name));
+            tile.addEventListener('click', () => this.placeAssetAndSelect(name.replace(/\.(ply|splat)$/i, '')));
             grid.appendChild(tile);
         });
         panel.appendChild(grid);
-        panel.appendChild(el('div', 'bt-as-foot', 'Click an item to drop it in the scene and select it.'));
+        panel.appendChild(el('div', 'bt-as-foot', 'Your uploaded splats — click one to add it to the scene.'));
         return panel;
     }
 
