@@ -76,8 +76,13 @@ const SHADER_EFFECTS = ['Glow', 'Bloom', 'Blur', 'Outline', 'Pixelate', 'Scanlin
 
 type Effect = { label: string; type: 'preset' | 'effect'; strength: number };
 
+// One object affected by an interaction + the changes/timing it plays.
+type InteractionTarget = { name: string; changes: string; timing?: string; thisObject?: boolean };
+// A recorded interaction: a trigger, a short label, and the objects it drives.
+type Interaction = { trigger: string; label: string; targets: InteractionTarget[] };
+
 // A selectable world object — each carries its own effects / interactions.
-type SceneObject = { entity: Entity; mat: StandardMaterial; name: string; effects: Effect[]; interactions: string[] };
+type SceneObject = { entity: Entity; mat: StandardMaterial; name: string; effects: Effect[]; interactions: Interaction[] };
 
 // Asset browser catalogue (hardcoded, per spec §7.10) + thumbnail gradients.
 const ASSETS: Record<string, string[]> = {
@@ -494,7 +499,12 @@ class BraintranceUI {
     // ── selection contextual bar — default actions vs effect-chip view ──
     private contextBar(): HTMLElement {
         if (this.effectsMode) return this.contextBarChips();
-        if (this.interactionsMode) return this.contextBarInteractions();
+        if (this.interactionsMode) {
+            // an open interaction shows its full overview; otherwise the chip list
+            return this.openChip !== null && this.selection.interactions[this.openChip] ?
+                this.interactionOverview(this.openChip) :
+                this.contextBarInteractions();
+        }
         return this.contextBarDefault();
     }
 
@@ -508,7 +518,7 @@ class BraintranceUI {
         chips.appendChild(el('div', 'bt-cb-name', this.selection.name));
         this.selection.interactions.forEach((it, i) => {
             const chip = el('button', `bt-chip bt-chip-int${this.openChip === i ? ' is-open' : ''}`,
-                `<span class="bt-chip-dot"></span><span>${it}</span><span class="bt-chip-caret">${ICON.chevronRight}</span>`);
+                `<span class="bt-chip-dot"></span><span>${it.label}</span><span class="bt-chip-caret">${ICON.chevronRight}</span>`);
             chip.addEventListener('click', () => this.toggleInteractionChip(i));
             chips.appendChild(chip);
         });
@@ -819,6 +829,7 @@ class BraintranceUI {
     private openInteractions() {
         this.interactionsMode = true;
         this.effectsMode = false;
+        this.openChip = null; // start on the chip list, not a stale overview
         this.effectsPanel?.remove(); this.effectsPanel = null;
         this.hideStrengthPop();
         this.refreshBottom(); // context bar → interaction chips + Add
@@ -826,6 +837,7 @@ class BraintranceUI {
 
     private closeInteractions() {
         this.interactionsMode = false;
+        this.openChip = null;
         if (this.state === 'selected') this.refreshBottom();
     }
 
@@ -947,42 +959,110 @@ class BraintranceUI {
         this.strengthPop = null;
     }
 
-    // clicking an interaction chip reopens its detail (toggle); single open panel
+    // clicking an interaction chip opens its full overview (toggle)
     private toggleInteractionChip(i: number) {
-        if (this.openChip === i && this.strengthPop) {
-            this.openChip = null;
-            this.hideStrengthPop();
-            this.refreshBottom();
-        } else {
-            this.showInteractionDetail(i);
-        }
+        this.hideStrengthPop();
+        this.openChip = this.openChip === i ? null : i;
+        this.refreshBottom();
     }
 
-    private showInteractionDetail(i: number) {
-        this.hideStrengthPop(); // single open panel
+    // Full interaction overview (matches the design): trigger, an at-a-glance card per
+    // affected object (what changes + timing), preview controls and save.
+    private interactionOverview(i: number): HTMLElement {
         const it = this.selection.interactions[i];
-        if (!it) return;
-        const pop = el('div', 'bt-strength-pop bt-interactive');
-        pop.appendChild(el('div', 'bt-sp-title', 'Interaction'));
-        pop.appendChild(el('div', 'bt-sp-trigger', `When <strong>${this.selection.name}</strong> is <strong>clicked</strong>`));
-        pop.appendChild(el('div', 'bt-sp-note', it)); // the recorded change(s)
-        const edit = el('div', 'bt-sp-action', `${ICON.zap}<span>Edit changes</span>`);
-        edit.addEventListener('click', () => {
-            this.hideStrengthPop(); this.openChip = null; this.startRecording();
+        const bar = el('div', 'bt-int-overview');
+
+        const head = el('div', 'bt-io-head');
+        const back = el('div', 'bt-cb-back', ICON.back);
+        back.addEventListener('click', () => {
+            this.openChip = null; this.refreshBottom();
         });
-        const remove = el('div', 'bt-sp-action is-danger', `${ICON.trash}<span>Remove</span>`);
+        head.appendChild(back);
+        head.appendChild(el('div', 'bt-io-name', `${ICON.globe}<span>${this.selection.name}</span>`));
+        head.appendChild(el('div', 'bt-io-spacer'));
+        const prev = el('button', 'bt-io-preview', `${ICON.play}<span>Preview</span>`);
+        prev.addEventListener('click', () => this.previewInteraction(i));
+        const prevAll = el('button', 'bt-io-preview is-all', `${ICON.play}<span>Preview all</span>`);
+        prevAll.addEventListener('click', () => this.previewAll(i));
+        head.appendChild(prev);
+        head.appendChild(prevAll);
+        const remove = el('button', 'bt-icon-btn', ICON.trash);
         remove.addEventListener('click', () => {
-            this.selection.interactions.splice(i, 1);
-            this.openChip = null;
-            this.hideStrengthPop();
-            this.refreshBottom();
+            this.selection.interactions.splice(i, 1); this.openChip = null; this.refreshBottom();
         });
-        pop.appendChild(edit);
-        pop.appendChild(remove);
-        this.strengthPop = pop;
-        this.root.appendChild(pop);
-        this.openChip = i;
-        this.refreshBottom(); // highlight the open chip
+        head.appendChild(remove);
+        const save = el('button', 'bt-io-save', 'Save Interaction');
+        save.addEventListener('click', () => {
+            this.openChip = null; this.closeInteractions();
+        });
+        head.appendChild(save);
+        bar.appendChild(head);
+
+        // When <trigger>
+        const when = el('div', 'bt-io-when', 'When ');
+        const sel = document.createElement('select');
+        sel.className = 'bt-io-trigger';
+        ['Clicked', 'Hovered', 'Looked at', 'Nearby'].forEach((t) => {
+            const o = document.createElement('option');
+            o.textContent = t; o.selected = t === it.trigger; sel.appendChild(o);
+        });
+        sel.addEventListener('change', () => {
+            it.trigger = sel.value;
+        });
+        when.appendChild(sel);
+        bar.appendChild(when);
+
+        // one card per affected object — the overview of what the interaction does
+        const cards = el('div', 'bt-io-cards');
+        it.targets.forEach((t) => {
+            const card = el('div', `bt-io-card${t.thisObject ? ' is-this' : ''}`);
+            const top = el('div', 'bt-io-card-top');
+            top.appendChild(el('span', 'bt-io-card-name', t.name));
+            if (t.thisObject) top.appendChild(el('span', 'bt-io-card-tag', 'THIS OBJECT'));
+            else if (t.timing) top.appendChild(el('span', 'bt-io-card-timing', t.timing));
+            card.appendChild(top);
+            card.appendChild(el('div', 'bt-io-card-changes', t.changes));
+            cards.appendChild(card);
+        });
+        bar.appendChild(cards);
+
+        bar.appendChild(el('div', 'bt-io-note', 'Make changes within the scene to play on interaction. Click save when finished.'));
+        return bar;
+    }
+
+    // play a single interaction: spin + glow-pulse the object that owns it
+    private previewInteraction(i: number) {
+        const ent = this.selection.entity;
+        const mat = this.selection.mat;
+        if (!ent) return;
+        const start = performance.now();
+        const dur = 900;
+        const rot0 = ent.getLocalEulerAngles().clone();
+        const tick = (now: number) => {
+            const t = Math.min((now - start) / dur, 1);
+            const ease = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
+            ent.setLocalEulerAngles(rot0.x, rot0.y + 360 * ease, rot0.z);
+            if (mat) {
+                mat.emissiveIntensity = 1 + Math.sin(t * Math.PI) * 1.8; mat.update();
+            }
+            if (this.scene) this.scene.forceRender = true;
+            if (t < 1) {
+                requestAnimationFrame(tick);
+            } else {
+                ent.setLocalEulerAngles(rot0.x, rot0.y, rot0.z);
+                if (mat) {
+                    mat.emissiveIntensity = 1; mat.update();
+                }
+                if (this.scene) this.scene.forceRender = true;
+            }
+        };
+        requestAnimationFrame(tick);
+    }
+
+    // preview everything together: roll the timeline (video) and play the interaction
+    private previewAll(i: number) {
+        if (!this.playing) this.togglePlay();
+        this.previewInteraction(i);
     }
 
     // ── audio mode (Objects panel + audio contextual bar + placed pins) ──
@@ -1090,6 +1170,14 @@ class BraintranceUI {
         this.rebuildAudio();
     }
 
+    // flip the pending sound between spatial (3D, positioned + ranged) and stereo (global)
+    private toggleAudioKind() {
+        const s = this.audioSources[this.activeAudio];
+        if (!s) return;
+        s.kind = s.kind === 'Spatial' ? 'Stereo' : 'Spatial';
+        this.refreshBottom();
+    }
+
     private dropAudioPin(x: number, y: number, z: number) {
         const scene = this.scene;
         if (!scene?.contentRoot) return;
@@ -1111,12 +1199,15 @@ class BraintranceUI {
 
         const head = el('div', 'bt-ab-head');
         head.appendChild(el('div', 'bt-ab-name', `${ICON.globe}<span>${s.name}</span>`));
-        head.appendChild(el('div', 'bt-ab-badge', s.kind));
+        // the Spatial/Stereo badge is a toggle (stereo plays globally → no range/placement)
+        const badge = el('div', 'bt-ab-badge is-toggle', `${s.kind}<span class="bt-ab-swap">⇄</span>`);
+        badge.addEventListener('click', () => this.toggleAudioKind());
+        head.appendChild(badge);
         head.appendChild(el('div', 'bt-ab-spacer'));
         const preview = el('div', 'bt-ab-preview', `${ICON.play}<span>Preview</span>`);
         preview.addEventListener('click', () => this.playPreviewTone(s.name));
         head.appendChild(preview);
-        head.appendChild(el('div', 'bt-ab-replace', 'Replace'));
+        if (s.placed) head.appendChild(el('div', 'bt-ab-replace', 'Replace')); // only once it's in the scene
         bar.appendChild(head);
 
         const controls = el('div', 'bt-ab-controls');
@@ -1129,7 +1220,8 @@ class BraintranceUI {
         });
         vol.appendChild(slider); vol.appendChild(val);
         controls.appendChild(vol);
-        controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
+        // range only applies to spatial (3D) sounds; stereo plays at a fixed level everywhere
+        if (s.kind === 'Spatial') controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
         controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
         bar.appendChild(controls);
 
@@ -1205,7 +1297,11 @@ class BraintranceUI {
             const phrase: Record<string, string> = {
                 Clicked: 'On click', Hovered: 'On hover', 'Looked at': 'On look', Nearby: 'When nearby'
             };
-            this.selection.interactions.push(`${phrase[trigger] ?? 'On click'} → changes`); // bumps the badge
+            this.selection.interactions.push({
+                trigger,
+                label: `${phrase[trigger] ?? 'On click'} → changes`,
+                targets: [{ name: this.selection.name, changes: 'Move, Rotate', thisObject: true }]
+            }); // bumps the badge
         }
         this.interactionsMode = true; // return to the interaction list (showing the new one)
         this.refreshBottom();
@@ -1332,7 +1428,15 @@ class BraintranceUI {
         // start clean so the user can build them up — and select between all three.
         const cube = make('Cuboid', 'box', [0, 0.5, 0], [0.34, 0.34, 0.34],
             [{ label: 'Vivid', type: 'preset', strength: 60 }, { label: 'Bloom', type: 'effect', strength: 50 }],
-            ['On click → moves + glows']);
+            [{
+                trigger: 'Clicked',
+                label: 'On click → moves + glows',
+                targets: [
+                    { name: 'Cuboid', changes: 'Move, Rotate, Glow', thisObject: true },
+                    { name: 'Scene', changes: 'Fog', timing: '0.0s, 0.3s' },
+                    { name: 'Camera', changes: 'Move', timing: '0.2s, 0.3s' }
+                ]
+            }]);
         make('Sphere', 'sphere', [-0.66, 0.44, 0.1], [0.28, 0.28, 0.28], [], []);
         make('Pillar', 'box', [0.66, 0.62, -0.05], [0.2, 0.56, 0.2], [], []);
 
