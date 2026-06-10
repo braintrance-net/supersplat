@@ -134,6 +134,7 @@ class BraintranceUI {
 
     // playback (scrubber + sequencer share one playhead)
     private playing = false;
+    private dgsPlaying = false;  // object's own 4DGS playback (stand-in; runtime not wired)
     private playhead = 0.34;             // 0..1 (0:51 of 2:31)
     private playRaf = 0;
     private scrubFill: HTMLElement | null = null;
@@ -534,9 +535,11 @@ class BraintranceUI {
 
         const head = el('div', 'bt-cb-head');
         head.appendChild(el('div', 'bt-cb-name', `${ICON.globe}<span>${this.selection.name}</span>`));
-        const pause = el('div', 'bt-pause', `${this.playing ? ICON.pause : ICON.play}<span>${this.playing ? 'Pause' : 'Play'}</span>`);
+        // This Play/Pause drives the object's own 4DGS playback (not the timeline). The
+        // 4DGS runtime isn't wired yet, so it's a stand-in toggle for now.
+        const pause = el('div', 'bt-pause', `${this.dgsPlaying ? ICON.pause : ICON.play}<span>${this.dgsPlaying ? 'Pause' : 'Play'}</span>`);
         pause.addEventListener('click', () => {
-            this.togglePlay(); this.refreshBottom();
+            this.dgsPlaying = !this.dgsPlaying; this.refreshBottom();
         });
         head.appendChild(pause);
         bar.appendChild(head);
@@ -1519,10 +1522,14 @@ class BraintranceUI {
             }
             if (drawMode()) return; // lasso/crop draws are handled above
             if (this.selectMode === 'sam') {
-                // Select mode: a click picks/selects the object under it.
+                // Select mode: click an object to select it; click the already-selected
+                // object (or blank) to deselect — but stay in Select, don't drop to Explore.
                 const obj = this.pickObjectAt(e.clientX, e.clientY);
-                if (obj) this.selectSceneObject(obj);
-                else this.selectObject(false);
+                if (obj && !(this.state === 'selected' && obj === this.selection)) {
+                    this.selectSceneObject(obj);
+                } else {
+                    this.selectObject(false);
+                }
             } else {
                 // Explore mode: navigate — click an object to centre it (if it's near),
                 // click blank space to step forward into the scene.
@@ -1548,10 +1555,23 @@ class BraintranceUI {
                 return;
             }
         }
-        // blank space (or a far object) → step forward along the view direction
+        // blank space (or a far object) → turn to face WHERE YOU CLICKED and step
+        // forward in that direction (not just straight ahead).
+        let rayDir = camEntity.forward.clone();
+        const camComp = this.cameraComponent();
+        if (camComp && this.canvas) {
+            const rect = this.canvas.getBoundingClientRect();
+            const sx = (clientX - rect.left) * (this.canvas.width / rect.width);
+            const sy = (clientY - rect.top) * (this.canvas.height / rect.height);
+            const far = new Vec3();
+            camComp.screenToWorld(sx, sy, 50, far);
+            const dir = far.sub(camPos);
+            if (dir.length() > 1e-4) rayDir = dir.normalize();
+        }
         const step = Math.max(worldDist * 0.4, 0.3);
-        const newFocal = cam.focalPoint.add(camEntity.forward.clone().mulScalar(step));
-        cam.setFocalPoint(newFocal, 1);
+        const newPos = camPos.clone().add(rayDir.clone().mulScalar(step));
+        const newTarget = newPos.clone().add(rayDir.clone().mulScalar(worldDist));
+        cam.setPose(newPos, newTarget, 1);
         this.pumpRender(700);
     }
 
@@ -1802,6 +1822,12 @@ class BraintranceUI {
                     e.preventDefault(); e.stopPropagation(); this.selectTool('explore'); return;
                 }
             }
+            // ⌘K / Ctrl+K — Crop to: keep only the selection, drop the rest
+            if ((e.metaKey || e.ctrlKey) && !e.altKey && k === 'k') {
+                e.preventDefault(); e.stopPropagation();
+                if (this.state === 'selected' && this.selection) this.cropToObjects([this.selection]);
+                return;
+            }
             if (e.key === 'Escape') {
                 // one layer per press: lasso/menus → popover → recording → library/list → deselect
                 if (this.menuDropdown) {
@@ -1897,7 +1923,9 @@ class BraintranceUI {
             this.boxMat.update();
             if (this.scene) this.scene.forceRender = true;
         }
-        this.setActiveTool(sel ? 'sam' : 'explore');
+        // Selecting implies Select mode; on deselect stay in whichever mode is live
+        // (Select if a select sub-tool is active, else Explore) — don't snap to Explore.
+        this.setActiveTool(sel || this.selectMode ? 'sam' : 'explore');
         this.setState(sel ? 'selected' : 'explore');
         // Selection shows the highlight only — no gizmo until a transform tool
         // (Q/E/R) is chosen. Matches "Selected - best" (no gizmo) vs "W - Move - best"
