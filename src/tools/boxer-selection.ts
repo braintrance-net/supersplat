@@ -5375,7 +5375,7 @@ class BoxerSelection {
         let busy = false;
         let currentCorners: Vec3[] | null = null;
         let lastEvalPrompt: BoxerEvalPrompt | null = null;
-        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' }> | null = null;
+        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' }> | null = null;
         let lastBrushReplay: unknown | null = null;
         let brushPanelStatus: 'idle' | 'running' | 'done' | 'failed' = 'idle';
         let lastEvalFrame: ReturnType<typeof summarizeFrameForEval> | null = null;
@@ -5510,7 +5510,7 @@ class BoxerSelection {
                         <strong style="font-size:12px;">Boxer Brush Test</strong>
                         <span>target saved</span>
                     </div>
-                    <div>Switch to the brush tool with shortcut 8 or the brush icon, then paint the object.</div>
+                    <div>Switch to a brush selection tool, then paint the object.</div>
                     <div style="margin-top:6px;">After you release the stroke, this panel will show Run Brush and Save Brush Eval.</div>
                 `;
                 brushPanel.style.display = '';
@@ -5525,7 +5525,7 @@ class BoxerSelection {
                 (brushPanelStatus === 'done' ? 'Ready to save' : (brushPanelStatus === 'failed' ? 'Run failed' : 'Ready'));
             brushPanel.innerHTML = `
                 <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;">
-                    <strong style="font-size:12px;">Boxer Brush Test</strong>
+                    <strong style="font-size:12px;">${lastBrushPrompt.type === 'brush_sam' ? 'SAM Brush Test' : 'Boxer Brush Test'}</strong>
                     <span>${statusText}</span>
                 </div>
                 <div>stroke radius ${fmtNum(radius, 1)} · box ${Math.round(x1 - x0)}x${Math.round(y1 - y0)}</div>
@@ -6381,13 +6381,13 @@ class BoxerSelection {
             };
         };
 
-        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' }>) => {
+        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' }>) => {
             lastBrushPrompt = prompt;
             lastBrushReplay = null;
             brushPanelStatus = 'running';
             renderBrushPanel();
             console.log('[Boxer] captured brush prompt', prompt);
-            events.fire('toast', 'Running Boxer brush selection', 'info');
+            events.fire('toast', prompt.type === 'brush_sam' ? 'Running SAM brush selection' : 'Running Boxer brush selection', 'info');
             void new Promise<void>(resolve => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }).then(() => runLastBrushBoxer()).then(() => {
@@ -6422,7 +6422,8 @@ class BoxerSelection {
                 const replay = await executeClientBrush(
                     lastBrushPrompt.brush,
                     lastBrushPrompt.click_xy,
-                    target ? cloneEvalTarget(target) : null
+                    target ? cloneEvalTarget(target) : null,
+                    { useSam: lastBrushPrompt.type === 'brush_sam' }
                 );
                 lastBrushReplay = replay;
                 brushPanelStatus = 'done';

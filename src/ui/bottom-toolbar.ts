@@ -13,6 +13,7 @@ import floodSvg from './svg/select-flood.svg';
 import lassoSvg from './svg/select-lasso.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
+import samSvg from './svg/select-sam.svg';
 import sphereSvg from './svg/select-sphere.svg';
 import semanticScanSvg from './svg/semantic-scan.svg';
 import boxSvg from './svg/show-hide-splats.svg';
@@ -48,6 +49,12 @@ class BottomToolbar extends Container {
                 }
             }
             return text;
+        };
+        const addVariantBadge = (button: Button, label: string) => {
+            const badge = document.createElement('span');
+            badge.className = 'bottom-toolbar-variant-badge';
+            badge.textContent = label;
+            button.dom.appendChild(badge);
         };
 
         const simplifiedGroup = new Element({
@@ -93,9 +100,14 @@ class BottomToolbar extends Container {
 	            class: 'bottom-toolbar-tool'
 	        });
 
-	        const brushSelect = new Button({
-	            id: 'bottom-toolbar-brush-select',
-	            class: 'bottom-toolbar-tool'
+	        const brushBoxerSelect = new Button({
+	            id: 'bottom-toolbar-brush-boxer',
+	            class: 'bottom-toolbar-tool bottom-toolbar-variant-tool'
+	        });
+
+	        const brushSamSelect = new Button({
+	            id: 'bottom-toolbar-brush-sam',
+	            class: 'bottom-toolbar-tool bottom-toolbar-variant-tool'
 	        });
 
 	        const boxerAll = new Button({
@@ -151,7 +163,10 @@ class BottomToolbar extends Container {
 	        mic.dom.appendChild(createSvg(micSvg));
 	        touch.dom.appendChild(createSvg(touchSvg));
 	        boxer.dom.appendChild(createSvg(boxerSvg));
-	        brushSelect.dom.appendChild(createSvg(brushSvg));
+	        brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
+	        brushSamSelect.dom.appendChild(createSvg(samSvg));
+	        addVariantBadge(brushBoxerSelect, 'B');
+	        addVariantBadge(brushSamSelect, 'S');
 	        manualBox.dom.appendChild(createSvg(boxSvg));
 	        semanticScan.dom.appendChild(createSvg(semanticScanSvg));
 	        simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
@@ -159,7 +174,8 @@ class BottomToolbar extends Container {
 	        appendSimplified(mic);
 	        appendSimplified(touch);
 	        appendSimplified(boxer);
-	        appendSimplified(brushSelect);
+	        appendSimplified(brushBoxerSelect);
+	        appendSimplified(brushSamSelect);
 	        appendSimplified(boxerAll);
 	        appendSimplified(manualBox);
 	        appendSimplified(samModeWrap);
@@ -201,9 +217,25 @@ class BottomToolbar extends Container {
             e.preventDefault();
             events.fire('voice.toggleWakeWord');
 	        });
+        let brushVariant: 'boxer' | 'sam' = 'boxer';
+        const activateBrushVariant = (variant: 'boxer' | 'sam') => {
+            const activeTool = events.invoke('tool.active');
+            const currentVariant = (events.invoke('brushSelection.getVariant') as 'boxer' | 'sam' | undefined) ?? brushVariant;
+            if (activeTool === 'brushSelection' && currentVariant === variant) {
+                events.fire('tool.brushSelection');
+                return;
+            }
+
+            events.fire('brushSelection.variant', variant);
+            if (activeTool !== 'brushSelection') {
+                events.fire('tool.brushSelection');
+            }
+        };
+
 	        touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
 	        boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
-	        brushSelect.dom.addEventListener('click', () => events.fire('tool.brushSelection'));
+	        brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariant('boxer'));
+	        brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
 	        boxerAll.dom.addEventListener('click', async () => {
 	            try {
 	                await events.invoke('boxer.runDetectAll');
@@ -219,7 +251,8 @@ class BottomToolbar extends Container {
 	        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
 	        tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
 	        tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
-	        tooltips.register(brushSelect, tooltip('Brush Select', 'tool.brushSelection'));
+	        tooltips.register(brushBoxerSelect, 'Brush Boxer');
+	        tooltips.register(brushSamSelect, 'Brush SAM');
 	        tooltips.register(boxerAll, 'Boxer Detect All');
 	        tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(semanticScan, 'Scan Semantic Labels');
@@ -353,7 +386,7 @@ class BottomToolbar extends Container {
         picker.dom.addEventListener('click', () => events.fire('tool.rectSelection'));
         lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
         polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
-        brush.dom.addEventListener('click', () => events.fire('tool.brushSelection'));
+        brush.dom.addEventListener('click', () => activateBrushVariant('boxer'));
         flood.dom.addEventListener('click', () => events.fire('tool.floodSelection'));
         eyedropper.dom.addEventListener('click', () => events.fire('tool.eyedropperSelection'));
         sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
@@ -372,10 +405,15 @@ class BottomToolbar extends Container {
             redo.enabled = value;
         });
 
+        const syncBrushVariantActive = (toolName: string | null | undefined) => {
+            brushBoxerSelect.class[toolName === 'brushSelection' && brushVariant === 'boxer' ? 'add' : 'remove']('active');
+            brushSamSelect.class[toolName === 'brushSelection' && brushVariant === 'sam' ? 'add' : 'remove']('active');
+        };
+
 	        events.on('tool.activated', (toolName: string) => {
 	            touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
 	            boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
-	            brushSelect.class[toolName === 'brushSelection' ? 'add' : 'remove']('active');
+	            syncBrushVariantActive(toolName);
 	            manualBox.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
 
             picker.class[toolName === 'rectSelection' ? 'add' : 'remove']('active');
@@ -390,6 +428,11 @@ class BottomToolbar extends Container {
             scale.class[toolName === 'scale' ? 'add' : 'remove']('active');
             measure.class[toolName === 'measure' ? 'add' : 'remove']('active');
             eyedropper.class[toolName === 'eyedropperSelection' ? 'add' : 'remove']('active');
+        });
+
+        events.on('brushSelection.variant.changed', (variant: 'boxer' | 'sam') => {
+            brushVariant = variant === 'sam' ? 'sam' : 'boxer';
+            syncBrushVariantActive(events.invoke('tool.active'));
         });
 
         events.on('sam3.selectionMode.changed', (mode: string) => {

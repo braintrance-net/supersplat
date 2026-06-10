@@ -1,5 +1,7 @@
 import { Events } from '../events';
 
+type BrushSelectionVariant = 'boxer' | 'sam';
+
 class BrushSelection {
     activate: () => void;
     deactivate: () => void;
@@ -24,6 +26,7 @@ class BrushSelection {
         const prev = { x: 0, y: 0 };
         let dragId: number | undefined;
         let points: [number, number][] = [];
+        let variant: BrushSelectionVariant = 'boxer';
 
         const controls = document.createElement('div');
         controls.className = 'brush-selection-controls hidden';
@@ -110,7 +113,7 @@ class BrushSelection {
             ];
 
             return {
-                type: 'client_brush',
+                type: variant === 'sam' ? 'brush_sam' : 'client_brush',
                 click_xy: center,
                 brush: {
                     shape: 'stroke',
@@ -263,14 +266,20 @@ class BrushSelection {
             setRadius(radius * 1.08);
         });
 
+        events.on('brushSelection.variant', (value: BrushSelectionVariant) => {
+            variant = value === 'sam' ? 'sam' : 'boxer';
+            events.fire('brushSelection.variant.changed', variant);
+        });
+
         try {
             events.function('brushSelection.getRadius', () => radius);
             events.function('brushSelection.setRadius', (value: number) => {
                 setRadius(Number(value));
                 return radius;
             });
+            events.function('brushSelection.getVariant', () => variant);
         } catch (err) {
-            console.warn('[BrushSelection] brushSelection radius functions were already registered', err);
+            console.warn('[BrushSelection] brushSelection functions were already registered', err);
         }
     }
 }
