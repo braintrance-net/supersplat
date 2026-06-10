@@ -147,6 +147,8 @@ class BraintranceUI {
     private isolateMode = false;
     private isolatedHidden: SceneObject[] = []; // objects hidden while isolating
     private isolateBar: HTMLElement | null = null;
+    private isoSelectBtn: HTMLElement | null = null;  // the SAM/Crop/Lasso dropdown button
+    private isoSelectMenu: HTMLElement | null = null;  // its open flyout
 
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
@@ -315,9 +317,11 @@ class BraintranceUI {
         this.endLasso();
         this.endCrop();
         if (this.canvas) this.canvas.style.cursor = 'crosshair';
-        this.isolateBar?.querySelectorAll('.bt-iso-tool').forEach((b) => {
-            b.classList.toggle('is-active', (b as HTMLElement).dataset.mode === mode);
-        });
+        // reflect the chosen tool on the dropdown button
+        if (this.isoSelectBtn) {
+            this.isoSelectBtn.classList.add('is-active');
+            this.isoSelectBtn.innerHTML = this.isoSelectLabel();
+        }
     }
 
     // camera hints (Explore state)
@@ -520,21 +524,68 @@ class BraintranceUI {
         const bar = el('div', 'bt-isolate-bar');
         bar.appendChild(el('div', 'bt-iso-title', `${ICON.frame}<span>Cleaning <strong>${this.selection.name}</strong></span>`));
         bar.appendChild(el('div', 'bt-iso-spacer'));
-        // the old top "Select" dropdown tools now clean the isolated object
-        const tool = (icon: string, label: string, mode: string | null, onClick: () => void) => {
-            const b = el('button', 'bt-iso-tool', `${icon}<span>${label}</span>`);
-            if (mode) b.dataset.mode = mode;
-            b.addEventListener('click', onClick);
-            return b;
-        };
-        bar.appendChild(tool(ICON.sparkles, 'Auto-clean', null, () => this.cleanFloaters()));
-        bar.appendChild(tool(ICON.sam, 'SAM', 'sam', () => this.enableSelectMode('sam')));
-        bar.appendChild(tool(ICON.crop, 'Crop', 'crop', () => this.enableSelectMode('crop')));
-        bar.appendChild(tool(ICON.lasso, 'Lasso', 'lasso', () => this.enableSelectMode('lasso')));
+
+        const auto = el('button', 'bt-iso-tool', `${ICON.sparkles}<span>Auto-clean</span>`);
+        auto.addEventListener('click', () => this.cleanFloaters());
+        bar.appendChild(auto);
+
+        // SAM / Crop / Lasso live behind one dropdown (like the old top Select tool)
+        const dd = el('button', `bt-iso-tool bt-iso-select${this.selectMode ? ' is-active' : ''}`, this.isoSelectLabel());
+        dd.addEventListener('click', (e) => {
+            e.stopPropagation(); this.toggleIsoSelectMenu(dd);
+        });
+        this.isoSelectBtn = dd;
+        bar.appendChild(dd);
+
         const done = el('button', 'bt-iso-done', 'Done');
         done.addEventListener('click', () => this.exitIsolate());
         bar.appendChild(done);
         return bar;
+    }
+
+    private isoSelectLabel(): string {
+        const name = this.selectMode === 'sam' ? 'SAM' :
+            this.selectMode === 'crop' ? 'Crop' : this.selectMode === 'lasso' ? 'Lasso' : 'Select tool';
+        const icon = this.selectMode === 'crop' ? ICON.crop : this.selectMode === 'lasso' ? ICON.lasso : ICON.sam;
+        return `${icon}<span>${name}</span><span class="bt-iso-caret">${ICON.chevronDown}</span>`;
+    }
+
+    private toggleIsoSelectMenu(anchor: HTMLElement) {
+        if (this.isoSelectMenu) {
+            this.closeIsoSelectMenu(); return;
+        }
+        const menu = el('div', 'bt-select-menu bt-interactive');
+        const item = (icon: string, name: string, sub: string, mode: 'sam' | 'lasso' | 'crop') => {
+            const it = el('div', `bt-select-item${this.selectMode === mode ? ' is-active' : ''}`,
+                `${icon}<div class="bt-si-text"><div class="bt-si-name">${name}</div><div class="bt-si-sub">${sub}</div></div>`);
+            it.addEventListener('click', () => {
+                this.enableSelectMode(mode); this.closeIsoSelectMenu();
+            });
+            return it;
+        };
+        menu.appendChild(item(ICON.sam, 'SAM', 'AI click-to-segment', 'sam'));
+        menu.appendChild(item(ICON.lasso, 'Lasso', 'Draw a region', 'lasso'));
+        menu.appendChild(item(ICON.crop, 'Crop', 'Drag a volume box', 'crop'));
+        const r = anchor.getBoundingClientRect();
+        menu.style.left = `${r.left}px`;
+        menu.style.bottom = `${window.innerHeight - r.top + 6}px`; // open upward (bar sits low)
+        this.isoSelectMenu = menu;
+        this.root.appendChild(menu);
+        setTimeout(() => document.addEventListener('pointerdown', this.onIsoDocDown), 0);
+    }
+
+    private onIsoDocDown = (e: PointerEvent) => {
+        if (this.isoSelectMenu && !this.isoSelectMenu.contains(e.target as Node) && !this.isoSelectBtn?.contains(e.target as Node)) {
+            this.closeIsoSelectMenu();
+        }
+    };
+
+    private closeIsoSelectMenu() {
+        if (this.isoSelectMenu) {
+            this.isoSelectMenu.remove();
+            this.isoSelectMenu = null;
+            document.removeEventListener('pointerdown', this.onIsoDocDown);
+        }
     }
 
     // faked auto-cleanup (real splat floater removal isn't wired) — pulse + a count
@@ -562,6 +613,8 @@ class BraintranceUI {
     private exitIsolate() {
         if (!this.isolateMode) return;
         this.isolateMode = false;
+        this.closeIsoSelectMenu();
+        this.isoSelectBtn = null;
         this.endLasso(); this.endCrop();
         this.selectMode = null;
         this.isolatedHidden.forEach((o) => {
@@ -2056,6 +2109,9 @@ class BraintranceUI {
                 }
                 if (this.depthPop) {
                     this.cancelLasso(); return;
+                }
+                if (this.isoSelectMenu) {
+                    this.closeIsoSelectMenu(); return;
                 }
                 if (this.isolateMode && !this.cropBox && !this.lasso) {
                     this.exitIsolate(); return;

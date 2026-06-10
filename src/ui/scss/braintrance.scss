@@ -465,6 +465,8 @@ body.bt-mode {
         &.is-active { border-color: var(--bt-ink); background: var(--bt-active);
             svg { color: var(--bt-ink); } }
     }
+    .bt-iso-select .bt-iso-caret { display: inline-flex; margin-left: 2px;
+        svg { width: 12px; height: 12px; color: var(--bt-ink-3); } }
     .bt-iso-done {
         height: 34px; padding: 0 16px; border: none; border-radius: 9px;
         background: var(--bt-ink); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
