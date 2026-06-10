@@ -5,7 +5,7 @@ import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
-const DEFAULT_SAM3_BACKEND_URL = 'https://sam3.4dream.app';
+const DEFAULT_SAM3_BACKEND_URL = 'http://3.19.208.185:8000';
 
 const getSam3BackendUrl = () => {
     return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;

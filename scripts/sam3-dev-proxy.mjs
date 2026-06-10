@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_PORT = 47824;
-const DEFAULT_TARGET = 'https://sam3.4dream.app';
+const DEFAULT_TARGET = 'http://3.19.208.185:8000';
 const DEFAULT_TIMEOUT_MS = 15000;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const defaultEvalOut = path.join(repoRoot, 'scripts', 'boxer-evals', 'live-brush-evals.jsonl');

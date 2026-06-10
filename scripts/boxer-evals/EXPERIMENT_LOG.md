@@ -270,9 +270,9 @@ main things we tried, what happened, and which paths still look worth pursuing.
   - Outcome: keep CPU center z-buffer as the better current default. Revisit
     only with a native GPU readback path or a different splat-depth algorithm.
 
-- **Direct hosted SAM from the browser - fail/risky**
-  - Result: direct `https://sam3.4dream.app` browser access was not a reliable
-    production-like path.
+- **Old public SAM host from the browser - fail/risky**
+  - Result: the old public SAM hostname was not a reliable production-like
+    path.
   - Risk: CORS/auth/endpoint behavior makes it fragile, so the package script was
     renamed to `develop:desk:ai:hosted-cors-risk`.
   - Outcome: do not rely on direct hosted SAM from the viewer.
@@ -426,12 +426,9 @@ main things we tried, what happened, and which paths still look worth pursuing.
     - `POST http://3.19.208.185:8000/upload` without a file still returns the
       old FastAPI upload validation path.
 - Public-host caveat:
-  - `https://sam3.4dream.app` is not currently reaching this FastAPI service.
-    It serves an unrelated static "Splat Thumbnail Comparison" page, with
-    `/docs` and `/openapi.json` returning static HTML `404` and POSTs returning
-    static HTML `501`.
-  - Use `SAM3_PROXY_TARGET=http://3.19.208.185:8000` for evals until that DNS /
-    Cloudflare route is corrected.
+  - The old public SAM hostname is not used anymore. It did not reach this
+    FastAPI service and served an unrelated static page.
+  - Use the EC2 service directly: `http://3.19.208.185:8000`.
 - Replay command:
   - `SAM3_PROXY_TARGET=http://3.19.208.185:8000 SAM3_PROXY_TIMEOUT_MS=180000 node scripts/sam3-dev-proxy.mjs`
   - `PLAYWRIGHT_MODULE=/home/jonam/.nvm/versions/node/v25.9.0/lib/node_modules/playwright node scripts/replay-boxer-evals.mjs --file scripts/boxer-evals/live-brush-evals.jsonl --url http://127.0.0.1:47999/ --prompt-type brush_sam --fresh-browser --case-index 1 --case-timeout-ms 180000 --load-timeout-ms 90000 --require-brush-points --require-sam-success --out /tmp/boxer-brush-sam-segment-frame-proof-timeout-fixed.json`
