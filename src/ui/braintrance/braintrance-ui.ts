@@ -144,6 +144,11 @@ class BraintranceUI {
     private sequencer: HTMLElement | null = null;
     private seqPlayheadEl: HTMLElement | null = null;
     private focusAudioTrack: number | null = null; // audio source to highlight in the timeline
+    // isolate / cleanup mode
+    private isolateMode = false;
+    private isolatedHidden: SceneObject[] = []; // objects hidden while isolating
+    private isolateBar: HTMLElement | null = null;
+    private isolateVignette: HTMLElement | null = null;
 
     // scene integration (placeholder object + faked selection)
     private scene: any = null;
@@ -568,13 +573,101 @@ class BraintranceUI {
         const inter = el('button', 'bt-cb-btn bt-interaction',
             `<span>Interactions</span><span class="bt-cb-badge">${this.selection.interactions.length} ${ICON.zap}</span>`);
         inter.addEventListener('click', () => this.openInteractions());
+        const isolate = el('button', 'bt-cb-btn bt-isolate', `${ICON.frame}<span>Isolate &amp; clean</span>`);
+        isolate.addEventListener('click', () => this.enterIsolate());
         actions.appendChild(eff);
         actions.appendChild(inter);
-        actions.appendChild(el('button', 'bt-icon-btn', ICON.reset));
+        actions.appendChild(isolate);
         bar.appendChild(actions);
 
         bar.appendChild(el('div', 'bt-cb-hint', 'Shift click adds, ctrl click removes'));
         return bar;
+    }
+
+    // ── isolate the selection + clean up floaters ──
+    // Hide everything else and frame the selection so floater artefacts are easy to spot
+    // and remove, then expose the cleanup tools (crop / lasso away, auto-clean).
+    private enterIsolate() {
+        if (this.isolateMode || !this.selection?.entity) return;
+        this.isolateMode = true;
+        this.isolatedHidden = this.objects.filter(o => o !== this.selection && o.entity.enabled !== false);
+        this.isolatedHidden.forEach((o) => {
+            o.entity.enabled = false;
+        });
+        if (this.scene) this.scene.forceRender = true;
+        this.frameSelection();
+        // dim the surround so the isolated object reads as the focus
+        this.isolateVignette = el('div', 'bt-isolate-vignette');
+        this.root.appendChild(this.isolateVignette);
+        this.isolateBar = this.buildIsolateBar();
+        this.root.appendChild(this.isolateBar);
+        this.refreshBottom(); // context bar hides; the isolate toolbar takes over
+    }
+
+    private buildIsolateBar(): HTMLElement {
+        const bar = el('div', 'bt-isolate-bar');
+        bar.appendChild(el('div', 'bt-iso-title', `${ICON.frame}<span>Cleaning <strong>${this.selection.name}</strong></span>`));
+        bar.appendChild(el('div', 'bt-iso-spacer'));
+        const tool = (icon: string, label: string, onClick: () => void) => {
+            const b = el('button', 'bt-iso-tool', `${icon}<span>${label}</span>`);
+            b.addEventListener('click', onClick);
+            return b;
+        };
+        bar.appendChild(tool(ICON.sparkles, 'Auto-clean floaters', () => this.cleanFloaters()));
+        bar.appendChild(tool(ICON.crop, 'Crop away', () => this.enableSelectMode('crop')));
+        bar.appendChild(tool(ICON.lasso, 'Lasso away', () => this.enableSelectMode('lasso')));
+        const done = el('button', 'bt-iso-done', 'Done');
+        done.addEventListener('click', () => this.exitIsolate());
+        bar.appendChild(done);
+        return bar;
+    }
+
+    // faked auto-cleanup (real splat floater removal isn't wired) — pulse + a count
+    private cleanFloaters() {
+        const ent = this.selection?.entity;
+        const mat = this.selection?.mat;
+        if (ent && mat) {
+            const start = performance.now();
+            const tick = (now: number) => {
+                const t = Math.min((now - start) / 450, 1);
+                mat.emissiveIntensity = 1 + Math.sin(t * Math.PI) * 1.2; mat.update();
+                if (this.scene) this.scene.forceRender = true;
+                if (t < 1) requestAnimationFrame(tick);
+                else {
+                    mat.emissiveIntensity = 1; mat.update();
+                    if (this.scene) this.scene.forceRender = true;
+                }
+            };
+            requestAnimationFrame(tick);
+        }
+        const n = 800 + Math.floor((this.selection?.name.length ?? 4) * 137);
+        this.toast(`Removed ${n.toLocaleString()} floaters`);
+    }
+
+    private exitIsolate() {
+        if (!this.isolateMode) return;
+        this.isolateMode = false;
+        this.endLasso(); this.endCrop();
+        this.selectMode = null;
+        this.isolatedHidden.forEach((o) => {
+            o.entity.enabled = true;
+        });
+        this.isolatedHidden = [];
+        if (this.scene) this.scene.forceRender = true;
+        this.isolateBar?.remove(); this.isolateBar = null;
+        this.isolateVignette?.remove(); this.isolateVignette = null;
+        this.refreshBottom();
+    }
+
+    // brief transient confirmation toast
+    private toast(msg: string) {
+        const t = el('div', 'bt-toast', msg);
+        this.root.appendChild(t);
+        requestAnimationFrame(() => t.classList.add('is-in'));
+        setTimeout(() => {
+            t.classList.remove('is-in');
+            setTimeout(() => t.remove(), 250);
+        }, 1600);
     }
 
     private contextBarChips(): HTMLElement {
@@ -891,6 +984,7 @@ class BraintranceUI {
         // a lasso-depth / crop-confirm prompt owns the bottom-center zone — don't
         // stack the snapshot bar (or any panel) under it.
         if (this.depthPop || this.cropConfirm) next = el('div');
+        else if (this.isolateMode) next = el('div'); // the isolate toolbar takes over
         else if (this.recordingMode) next = el('div'); // center panel hidden; record bar is full-width
         else if (this.audioMode) next = this.buildAudioBar();
         else if (this.state === 'selected' && this.selection?.audioIndex != null) next = this.buildAudioBar();
@@ -1727,15 +1821,13 @@ class BraintranceUI {
         const worldDist = Math.max(camPos.distance(cam.focalPoint), 0.001);
         const obj = this.pickObjectAt(clientX, clientY);
         if (obj && obj.entity.enabled !== false) {
-            const objPos = obj.entity.getPosition();
-            // "close enough": within ~1.3× the current focal distance → centre it
-            if (camPos.distance(objPos) <= worldDist * 1.3) {
-                cam.setFocalPoint(objPos.clone(), 1);
-                this.pumpRender(700);
-                return;
-            }
+            // Explore: clicking an object selects it — so you can switch which object
+            // you're moving without leaving explore. (Camera nav stays on blank-click +
+            // drag + WASD; F frames it; the last-used gizmo re-attaches on select.)
+            this.selectSceneObject(obj);
+            return;
         }
-        // blank space (or a far object) → turn to face WHERE YOU CLICKED and step
+        // blank space → turn to face WHERE YOU CLICKED and step
         // forward in that direction (not just straight ahead).
         let rayDir = camEntity.forward.clone();
         const camComp = this.cameraComponent();
@@ -1793,6 +1885,41 @@ class BraintranceUI {
         if (poly && this.lasso) poly.setAttribute('points', this.lasso.pts.map(p => `${p.x},${p.y}`).join(' '));
     }
 
+    // extrude the closed lasso into the scene so the user SEES the selection volume —
+    // a receding back face (toward the vanishing point) + connector walls. Depth drives
+    // how far it recedes; no number is shown.
+    private drawLassoExtrusion(depth: number) {
+        const lasso = this.lasso;
+        if (!lasso) return;
+        const svg = lasso.el;
+        while (svg.firstChild) svg.removeChild(svg.firstChild);
+        const pts = lasso.pts;
+        const NS = 'http://www.w3.org/2000/svg';
+        const mk = (tag: string, cls: string) => {
+            const e = document.createElementNS(NS, tag); e.setAttribute('class', cls); return e;
+        };
+        const str = (ps: { x: number; y: number }[]) => ps.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+        // vanishing point = viewport centre (where the camera looks into the scene)
+        const vx = window.innerWidth / 2, vy = window.innerHeight / 2;
+        // deeper → back face recedes further toward the vanishing point (perspective)
+        const f = Math.max(0.4, 1 - Math.min(depth * 0.12, 0.58));
+        const back = pts.map(p => ({ x: vx + (p.x - vx) * f, y: vy + (p.y - vy) * f }));
+        // connector walls — sample ~14 so the prism reads cleanly on a dense freehand path
+        const stepN = Math.max(1, Math.floor(pts.length / 14));
+        for (let i = 0; i < pts.length; i += stepN) {
+            const ln = mk('line', 'bt-lasso-edge');
+            ln.setAttribute('x1', `${pts[i].x}`); ln.setAttribute('y1', `${pts[i].y}`);
+            ln.setAttribute('x2', `${back[i].x}`); ln.setAttribute('y2', `${back[i].y}`);
+            svg.appendChild(ln);
+        }
+        const bp = mk('polyline', 'bt-lasso-back');
+        bp.setAttribute('points', str([...back, back[0]]));
+        svg.appendChild(bp);
+        const fp = mk('polyline', 'bt-lasso-path');
+        fp.setAttribute('points', str([...pts, pts[0]]));
+        svg.appendChild(fp);
+    }
+
     private endLasso() {
         if (this.scene?.camera) this.scene.camera.inputDisabled = false;
         this.lasso?.el.remove();
@@ -1815,13 +1942,11 @@ class BraintranceUI {
         this.depthPop?.remove();
         const pop = el('div', 'bt-depth-pop bt-interactive');
         pop.appendChild(el('div', 'bt-dp-title', 'Selection depth'));
-        pop.appendChild(el('div', 'bt-dp-sub', 'How far into the scene the lasso selects'));
-        const row = el('div', 'bt-dp-row', '<input type="range" min="0.2" max="5" step="0.1" value="1.5"><span class="bt-dp-val">1.5 m</span>');
+        pop.appendChild(el('div', 'bt-dp-sub', 'Drag to extrude how deep into the scene it selects'));
+        const row = el('div', 'bt-dp-row', '<input type="range" min="0.2" max="5" step="0.1" value="1.5">');
         const slider = row.querySelector('input') as HTMLInputElement;
-        const valEl = row.querySelector('.bt-dp-val') as HTMLElement;
-        slider.addEventListener('input', () => {
-            valEl.textContent = `${(+slider.value).toFixed(1)} m`;
-        });
+        // no number — the lasso volume extrudes in the viewport instead
+        slider.addEventListener('input', () => this.drawLassoExtrusion(+slider.value));
         pop.appendChild(row);
         const actions = el('div', 'bt-dp-actions');
         const cancel = el('button', 'bt-dp-cancel', 'Cancel');
@@ -1834,6 +1959,7 @@ class BraintranceUI {
         pop.style.top = `${Math.min(cy + 14, window.innerHeight - 190)}px`;
         this.depthPop = pop;
         this.root.appendChild(pop);
+        this.drawLassoExtrusion(+slider.value); // initial extruded volume
         this.refreshBottom(); // hide the snapshot bar while the prompt is open
     }
 
@@ -1845,6 +1971,12 @@ class BraintranceUI {
     private commitLasso(cx: number, cy: number) {
         this.depthPop?.remove(); this.depthPop = null;
         this.endLasso();
+        if (this.isolateMode) { // "Lasso away" — faked removal of that region
+            this.selectMode = null;
+            this.toast('Cleaned the lassoed region');
+            this.refreshBottom();
+            return;
+        }
         // faked SAM: select whatever object sits under the lasso's centre
         const obj = this.pickObjectAt(cx, cy);
         if (obj) this.selectSceneObject(obj);
@@ -1920,6 +2052,13 @@ class BraintranceUI {
     }
 
     private applyCrop() {
+        if (this.isolateMode) { // "Crop away" — faked removal inside isolate, no object op
+            this.endCrop();
+            this.selectMode = null;
+            this.toast('Cropped away that region');
+            this.refreshBottom();
+            return;
+        }
         // Crop to the drawn volume: keep every object whose screen position falls inside
         // the box and drop the rest. Fall back to keeping the current selection.
         const inside = this.objectsInCropBox();
@@ -2020,6 +2159,9 @@ class BraintranceUI {
                 }
                 if (this.depthPop) {
                     this.cancelLasso(); return;
+                }
+                if (this.isolateMode && !this.cropBox && !this.lasso) {
+                    this.exitIsolate(); return;
                 }
                 if (this.cropConfirm || this.cropBox) {
                     this.endCrop(); return;

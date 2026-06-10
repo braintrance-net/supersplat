@@ -86,6 +86,7 @@ body.bt-mode {
     .bt-scrubber,
     .bt-contextbar,
     .bt-int-overview,
+    .bt-isolate-bar,
     .bt-effects-panel,
     .bt-strength-pop,
     .bt-frameall,
@@ -439,6 +440,48 @@ body.bt-mode {
         color: var(--bt-ink-3);
         cursor: pointer;
     }
+}
+
+// ── Isolate & clean mode ────────────────────────────────────────────────────
+// dim surround so the isolated object reads as the focus (doesn't block clicks)
+.bt-isolate-vignette {
+    position: fixed; inset: 0; z-index: 84; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 46%, transparent 30%, rgba(0, 0, 0, 0.45) 78%);
+}
+.bt-isolate-bar {
+    position: absolute;
+    left: 50%; bottom: 78px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    background: var(--bt-panel); border-radius: 14px; box-shadow: var(--bt-shadow);
+
+    .bt-iso-title { display: inline-flex; align-items: center; gap: 8px;
+        font-size: 14px; color: var(--bt-ink-2); padding: 0 6px;
+        strong { color: var(--bt-ink); }
+        svg { width: 16px; height: 16px; color: var(--bt-ink-2); } }
+    .bt-iso-spacer { width: 6px; }
+    .bt-iso-tool {
+        display: inline-flex; align-items: center; gap: 6px;
+        height: 34px; padding: 0 12px; border: 1px solid var(--bt-border);
+        border-radius: 9px; background: transparent; color: var(--bt-ink);
+        font-size: 13px; font-weight: 600; cursor: pointer;
+        svg { width: 14px; height: 14px; color: var(--bt-ink-2); }
+        &:hover { background: var(--bt-hover); }
+    }
+    .bt-iso-done {
+        height: 34px; padding: 0 16px; border: none; border-radius: 9px;
+        background: var(--bt-ink); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+        &:hover { background: #222; }
+    }
+}
+// transient confirmation toast
+.bt-toast {
+    position: absolute; left: 50%; bottom: 150px; transform: translate(-50%, 8px);
+    z-index: 210; pointer-events: none;
+    background: rgba(20, 20, 22, 0.92); color: #fff;
+    font-size: 13px; font-weight: 600; padding: 9px 16px; border-radius: 999px;
+    opacity: 0; transition: opacity 0.2s ease, transform 0.2s ease;
+    &.is-in { opacity: 1; transform: translate(-50%, 0); }
 }
 
 // ── Selection contextual bar (Selected / Move - best) ───────────────────────
@@ -1069,6 +1112,13 @@ body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its ow
         stroke: var(--bt-selection); stroke-width: 2;
         stroke-dasharray: 5 4; stroke-linejoin: round;
     }
+    // extruded selection volume: receding back face + connector walls
+    .bt-lasso-back {
+        fill: rgba(245, 217, 10, 0.04);
+        stroke: var(--bt-selection); stroke-width: 1.5;
+        stroke-dasharray: 4 4; stroke-linejoin: round; opacity: 0.45;
+    }
+    .bt-lasso-edge { stroke: var(--bt-selection); stroke-width: 1; opacity: 0.35; }
 }
 
 #bt-overlay .bt-depth-pop {
