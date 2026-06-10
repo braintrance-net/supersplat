@@ -117,7 +117,6 @@ class BraintranceUI {
     private headerCenter!: HTMLElement;
     private bottomCenter!: HTMLElement; // hosts snapshot panel or context bar
     private railItems: Partial<Record<RailTool, HTMLElement>> = {};
-    private toolTabs: Partial<Record<RailTool, HTMLElement>> = {}; // top Explore/Select toggle
 
     // selection mode: null/sam = click-select, lasso = draw region, crop = volume box
     private selectMode: 'sam' | 'lasso' | 'crop' | null = null;
@@ -292,24 +291,13 @@ class BraintranceUI {
 
     // ── project sub-header (back · title · center cluster) ──
     private buildHeader(): HTMLElement {
+        // One mode now (everything is Explore) — no mode toggle in the header.
         const header = el('div', 'bt-header');
         header.appendChild(el('div', 'bt-back', ICON.back));
         header.appendChild(el('div', 'bt-project-title', 'Untitled Project'));
-        header.appendChild(this.buildToolTabs()); // Explore / SAM toggle, right of the title
         this.headerCenter = el('div', 'bt-header-center');
         header.appendChild(this.headerCenter);
         return header;
-    }
-
-    // One mode now (everything is Explore). The header shows just an Explore home
-    // indicator; the selection sub-tools (SAM / Lasso / Crop) live in Isolate & clean.
-    private buildToolTabs(): HTMLElement {
-        const tabs = el('div', 'bt-tooltabs');
-        const explore = el('div', 'bt-tooltab is-active', `${ICON.explore}<span>Explore</span>`);
-        explore.addEventListener('click', () => this.selectTool('explore')); // home: exit panels
-        this.toolTabs.explore = explore;
-        tabs.appendChild(explore);
-        return tabs;
     }
 
     // turn on a cleanup selection tool inside Isolate & clean (SAM / lasso / crop)
@@ -1802,45 +1790,15 @@ class BraintranceUI {
                 if (this.isolateMode) this.addSamSelection(e.clientX, e.clientY);
                 return;
             }
-            // Explore (the only mode): click an object to select it, blank to navigate.
-            this.exploreNavigate(e.clientX, e.clientY);
+            // A click selects the object under it; clicking the already-selected object,
+            // or empty space, deselects. No camera movement on click — framing is the F key.
+            const obj = this.pickObjectAt(e.clientX, e.clientY);
+            if (obj && obj.entity.enabled !== false && !(this.state === 'selected' && obj === this.selection)) {
+                this.selectSceneObject(obj);
+            } else {
+                this.selectObject(false);
+            }
         });
-    }
-
-    // Explore navigation: centre a nearby object, else glide forward into the scene.
-    private exploreNavigate(clientX: number, clientY: number) {
-        const cam = this.scene?.camera;
-        const camEntity = this.scene?.app?.root?.findByName?.('Camera');
-        if (!cam || !camEntity) return;
-        const camPos = camEntity.getPosition();
-        const worldDist = Math.max(camPos.distance(cam.focalPoint), 0.001);
-        const obj = this.pickObjectAt(clientX, clientY);
-        if (obj && obj.entity.enabled !== false) {
-            // Explore: clicking an object selects it — so you can switch which object
-            // you're moving without leaving explore. (Camera nav stays on blank-click +
-            // drag + WASD; F frames it; the last-used gizmo re-attaches on select.)
-            this.selectSceneObject(obj);
-            return;
-        }
-        // blank space → turn to face WHERE YOU CLICKED and step
-        // forward in that direction (not just straight ahead).
-        let rayDir = camEntity.forward.clone();
-        const camComp = this.cameraComponent();
-        if (camComp && this.canvas) {
-            const rect = this.canvas.getBoundingClientRect();
-            // screenToWorld also takes CSS pixels (device.clientRect) — pass the pointer
-            // position straight through, no backing rescale (that aimed the ray wrong on
-            // retina screens, so blank clicks "faced somewhere else").
-            const far = new Vec3();
-            camComp.screenToWorld(clientX - rect.left, clientY - rect.top, 50, far);
-            const dir = far.sub(camPos);
-            if (dir.length() > 1e-4) rayDir = dir.normalize();
-        }
-        const step = Math.max(worldDist * 0.4, 0.3);
-        const newPos = camPos.clone().add(rayDir.clone().mulScalar(step));
-        const newTarget = newPos.clone().add(rayDir.clone().mulScalar(worldDist));
-        cam.setPose(newPos, newTarget, 1);
-        this.pumpRender(700);
     }
 
     // switch the active object mid-recording without exiting the recording session
