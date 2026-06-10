@@ -829,6 +829,11 @@ body.bt-mode {
         display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
         .bt-ab-name { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600;
             svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
+        .bt-ab-badge { font-size: 11px; font-weight: 600; color: var(--bt-ink-2);
+            background: #eee; border-radius: 6px; padding: 2px 8px;
+            &.is-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+                .bt-ab-swap { opacity: 0.5; font-size: 10px; }
+                &:hover { background: #e0e0e0; color: var(--bt-ink); } } }
         .bt-ab-spacer { flex: 1; }
         .bt-ab-replace { font-size: 13px; color: var(--bt-ink-2); cursor: pointer;
             padding: 4px 10px; border-radius: 6px; &:hover { background: var(--bt-hover); } }

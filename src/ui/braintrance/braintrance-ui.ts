@@ -1307,6 +1307,14 @@ class BraintranceUI {
         } catch (e) { /* preview is best-effort */ }
     }
 
+    // flip a PLACED sound between spatial (3D from its pin, ranged) and stereo (global)
+    private toggleAudioKind() {
+        const s = this.audioSources[this.activeAudio];
+        if (!s || !s.placed) return;
+        s.kind = s.kind === 'Spatial' ? 'Stereo' : 'Spatial';
+        this.refreshBottom();
+    }
+
     private dropAudioPin(x: number, y: number, z: number) {
         const scene = this.scene;
         if (!scene?.contentRoot) return;
@@ -1350,6 +1358,14 @@ class BraintranceUI {
 
         const head = el('div', 'bt-ab-head');
         head.appendChild(el('div', 'bt-ab-name', `${ICON.audio}<span>${s.name}</span>`));
+        if (s.placed) {
+            // once placed you can flip how it plays: Spatial (from its pin, ranged)
+            // vs Stereo (globally, everywhere)
+            const badge = el('div', 'bt-ab-badge is-toggle', `${s.kind}<span class="bt-ab-swap">⇄</span>`);
+            badge.title = 'Toggle spatial (3D, from its pin) vs stereo (global)';
+            badge.addEventListener('click', () => this.toggleAudioKind());
+            head.appendChild(badge);
+        }
         head.appendChild(el('div', 'bt-ab-spacer'));
         if (s.placed) { // only once it's in the scene — opens the library to swap the sound
             const replace = el('div', 'bt-ab-replace', 'Replace');
@@ -1370,7 +1386,8 @@ class BraintranceUI {
             });
             vol.appendChild(slider); vol.appendChild(val);
             controls.appendChild(vol);
-            controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
+            // range only applies while spatial; stereo plays at a fixed level everywhere
+            if (s.kind === 'Spatial') controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
             controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
             bar.appendChild(controls);
         } else {
