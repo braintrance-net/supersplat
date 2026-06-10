@@ -95,25 +95,27 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
-	        const boxer = new Button({
-	            id: 'bottom-toolbar-boxer',
-	            class: 'bottom-toolbar-tool'
-	        });
+        const boxer = new Button({
+            id: 'bottom-toolbar-boxer',
+            class: 'bottom-toolbar-tool'
+        });
 
-	        const brushBoxerSelect = new Button({
-	            id: 'bottom-toolbar-brush-boxer',
-	            class: 'bottom-toolbar-tool bottom-toolbar-variant-tool'
-	        });
+        const brushBoxerSelect = new Button({
+            id: 'bottom-toolbar-brush-boxer',
+            class: 'bottom-toolbar-tool'
+        });
+        brushBoxerSelect.dom.classList.add('bottom-toolbar-variant-tool');
 
-	        const brushSamSelect = new Button({
-	            id: 'bottom-toolbar-brush-sam',
-	            class: 'bottom-toolbar-tool bottom-toolbar-variant-tool'
-	        });
+        const brushSamSelect = new Button({
+            id: 'bottom-toolbar-brush-sam',
+            class: 'bottom-toolbar-tool'
+        });
+        brushSamSelect.dom.classList.add('bottom-toolbar-variant-tool');
 
-	        const boxerAll = new Button({
-	            id: 'bottom-toolbar-boxer-all',
-	            class: 'bottom-toolbar-text-tool',
-	            text: 'All'
+        const boxerAll = new Button({
+            id: 'bottom-toolbar-boxer-all',
+            class: 'bottom-toolbar-text-tool',
+            text: 'All'
         });
 
         const manualBox = new Button({
@@ -160,25 +162,25 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
-	        mic.dom.appendChild(createSvg(micSvg));
-	        touch.dom.appendChild(createSvg(touchSvg));
-	        boxer.dom.appendChild(createSvg(boxerSvg));
-	        brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
-	        brushSamSelect.dom.appendChild(createSvg(samSvg));
-	        addVariantBadge(brushBoxerSelect, 'B');
-	        addVariantBadge(brushSamSelect, 'S');
-	        manualBox.dom.appendChild(createSvg(boxSvg));
-	        semanticScan.dom.appendChild(createSvg(semanticScanSvg));
-	        simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
+        mic.dom.appendChild(createSvg(micSvg));
+        touch.dom.appendChild(createSvg(touchSvg));
+        boxer.dom.appendChild(createSvg(boxerSvg));
+        brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
+        brushSamSelect.dom.appendChild(createSvg(samSvg));
+        addVariantBadge(brushBoxerSelect, 'B');
+        addVariantBadge(brushSamSelect, 'S');
+        manualBox.dom.appendChild(createSvg(boxSvg));
+        semanticScan.dom.appendChild(createSvg(semanticScanSvg));
+        simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
-	        appendSimplified(mic);
-	        appendSimplified(touch);
-	        appendSimplified(boxer);
-	        appendSimplified(brushBoxerSelect);
-	        appendSimplified(brushSamSelect);
-	        appendSimplified(boxerAll);
-	        appendSimplified(manualBox);
-	        appendSimplified(samModeWrap);
+        appendSimplified(mic);
+        appendSimplified(touch);
+        appendSimplified(boxer);
+        appendSimplified(brushBoxerSelect);
+        appendSimplified(brushSamSelect);
+        appendSimplified(boxerAll);
+        appendSimplified(manualBox);
+        appendSimplified(samModeWrap);
         appendSimplified(semanticScan);
 
         const aiInputWrap = document.createElement('div');
@@ -216,7 +218,7 @@ class BottomToolbar extends Container {
         mic.dom.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             events.fire('voice.toggleWakeWord');
-	        });
+        });
         let brushVariant: 'boxer' | 'sam' = 'boxer';
         const activateBrushVariant = (variant: 'boxer' | 'sam') => {
             const activeTool = events.invoke('tool.active');
@@ -232,13 +234,13 @@ class BottomToolbar extends Container {
             }
         };
 
-	        touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
-	        boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
-	        brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariant('boxer'));
-	        brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
-	        boxerAll.dom.addEventListener('click', async () => {
-	            try {
-	                await events.invoke('boxer.runDetectAll');
+        touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
+        boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
+        brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariant('boxer'));
+        brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
+        boxerAll.dom.addEventListener('click', async () => {
+            try {
+                await events.invoke('boxer.runDetectAll');
             } catch (err) {
                 console.error('[Boxer] Detect-all probe failed', err);
                 events.fire('toast', 'Boxer detect-all probe failed', 'error');
@@ -248,13 +250,13 @@ class BottomToolbar extends Container {
         semanticScan.dom.addEventListener('click', () => events.fire('semanticScan.run'));
         simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
-	        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
-	        tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
-	        tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
-	        tooltips.register(brushBoxerSelect, 'Brush Boxer');
-	        tooltips.register(brushSamSelect, 'Brush SAM');
-	        tooltips.register(boxerAll, 'Boxer Detect All');
-	        tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
+        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
+        tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
+        tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
+        tooltips.register(brushBoxerSelect, 'Brush Boxer');
+        tooltips.register(brushSamSelect, 'Brush SAM');
+        tooltips.register(boxerAll, 'Boxer Detect All');
+        tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
@@ -410,11 +412,11 @@ class BottomToolbar extends Container {
             brushSamSelect.class[toolName === 'brushSelection' && brushVariant === 'sam' ? 'add' : 'remove']('active');
         };
 
-	        events.on('tool.activated', (toolName: string) => {
-	            touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
-	            boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
-	            syncBrushVariantActive(toolName);
-	            manualBox.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
+        events.on('tool.activated', (toolName: string) => {
+            touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
+            boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
+            syncBrushVariantActive(toolName);
+            manualBox.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
 
             picker.class[toolName === 'rectSelection' ? 'add' : 'remove']('active');
             brush.class[toolName === 'brushSelection' ? 'add' : 'remove']('active');
