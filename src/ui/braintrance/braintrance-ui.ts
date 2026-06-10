@@ -1684,10 +1684,11 @@ class BraintranceUI {
         const camComp = this.cameraComponent();
         if (camComp && this.canvas) {
             const rect = this.canvas.getBoundingClientRect();
-            const sx = (clientX - rect.left) * (this.canvas.width / rect.width);
-            const sy = (clientY - rect.top) * (this.canvas.height / rect.height);
+            // screenToWorld also takes CSS pixels (device.clientRect) — pass the pointer
+            // position straight through, no backing rescale (that aimed the ray wrong on
+            // retina screens, so blank clicks "faced somewhere else").
             const far = new Vec3();
-            camComp.screenToWorld(sx, sy, 50, far);
+            camComp.screenToWorld(clientX - rect.left, clientY - rect.top, 50, far);
             const dir = far.sub(camPos);
             if (dir.length() > 1e-4) rayDir = dir.normalize();
         }
@@ -1882,9 +1883,9 @@ class BraintranceUI {
         const hits: SceneObject[] = [];
         for (const o of this.objects) {
             if (o.entity.enabled === false) continue;
-            cam.worldToScreen(o.entity.getPosition(), sp);
-            const sx = rect.left + sp.x * (rect.width / canvas.width);
-            const sy = rect.top + sp.y * (rect.height / canvas.height);
+            cam.worldToScreen(o.entity.getPosition(), sp); // CSS pixels — no backing rescale
+            const sx = rect.left + sp.x;
+            const sy = rect.top + sp.y;
             if (sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1) hits.push(o);
         }
         return hits;
@@ -2005,10 +2006,11 @@ class BraintranceUI {
         let bestD = 150; // px threshold
         for (const obj of this.objects) {
             if (obj.entity.enabled === false) continue;
+            // worldToScreen returns CSS pixels (device.clientRect), same space as the
+            // pointer's clientX/Y — compare directly, NO canvas-backing rescale (that was
+            // halving positions on retina/DPR=2 screens and breaking selection).
             cam.worldToScreen(obj.entity.getPosition(), sp);
-            const sx = sp.x * (rect.width / canvas.width);
-            const sy = sp.y * (rect.height / canvas.height);
-            const d = Math.hypot((clientX - rect.left) - sx, (clientY - rect.top) - sy);
+            const d = Math.hypot((clientX - rect.left) - sp.x, (clientY - rect.top) - sp.y);
             if (d < bestD) {
                 bestD = d; best = obj;
             }
