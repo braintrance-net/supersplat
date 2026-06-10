@@ -17,7 +17,7 @@ Options:
   --case-index <n|a,b|a-b>
                          Replay only selected zero-based case indexes
   --limit <n>            Replay at most this many cases after filtering
-  --prompt-type <type>   Override click prompts, e.g. client_click, client_brush, direct_lift_click, detect_all_click, or client_lift_target_box
+  --prompt-type <type>   Override click prompts, e.g. client_click, client_brush, brush_sam, direct_lift_click, detect_all_click, or client_lift_target_box
   --brush-shape <shape>  For client_brush: circle or rect (default: circle)
   --brush-radius <px>    For client_brush circle prompts (default: 180)
   --brush-width <px>     For client_brush rect prompts (default: radius * 2)
@@ -184,7 +184,10 @@ const withPromptOverride = (evalCase, args) => {
     const canOmitClick = type === 'lift_target_box' || type === 'client_lift_target_box';
     if (!evalCase.prompt?.click_xy && !canOmitClick) return evalCase;
     const buildBrush = () => {
-        if (type !== 'client_brush') return {};
+        if (type !== 'client_brush' && type !== 'brush_sam') return {};
+        if (evalCase.prompt.brush && !args.brushShape && args.brushRadius === undefined && args.brushWidth === undefined && args.brushHeight === undefined && args.brushPad === undefined) {
+            return { brush: evalCase.prompt.brush };
+        }
         const click = evalCase.prompt.click_xy;
         const shape = args.brushShape ?? 'circle';
         const radius = Number.isFinite(args.brushRadius) ? args.brushRadius : 180;
@@ -716,6 +719,36 @@ const leakStatus = (check) => {
     return check.passed ? 'passed' : 'failed';
 };
 
+const bb2dArea = (bb) => {
+    if (!Array.isArray(bb) || bb.length !== 4 || !bb.every(finite)) return null;
+    return Math.max(0, bb[2] - bb[0]) * Math.max(0, bb[3] - bb[1]);
+};
+
+const bb2dIntersectionArea = (a, b) => {
+    if (bb2dArea(a) === null || bb2dArea(b) === null) return null;
+    return Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) *
+        Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+};
+
+const bb2dOverlapStats = (a, b) => {
+    const areaA = bb2dArea(a);
+    const areaB = bb2dArea(b);
+    const intersection = bb2dIntersectionArea(a, b);
+    if (areaA === null || areaB === null || intersection === null) return null;
+    const union = areaA + areaB - intersection;
+    const centerA = [(a[0] + a[2]) / 2, (a[1] + a[3]) / 2];
+    const centerB = [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+    const diagA = Math.max(1, Math.hypot(a[2] - a[0], a[3] - a[1]));
+    const diagB = Math.max(1, Math.hypot(b[2] - b[0], b[3] - b[1]));
+    return {
+        iou: union > 0 ? intersection / union : 0,
+        a_covered_by_b: areaA > 0 ? intersection / areaA : 0,
+        b_covered_by_a: areaB > 0 ? intersection / areaB : 0,
+        center_distance_ratio: Math.hypot(centerA[0] - centerB[0], centerA[1] - centerB[1]) / Math.max(diagA, diagB),
+        area_ratio_a_to_b: areaB > 0 ? areaA / areaB : null
+    };
+};
+
 const buildCaseReport = (result) => {
     const selected = selectedCandidateSummary(result);
     const brush = result.candidate_debug?.client_brush;
@@ -730,6 +763,7 @@ const buildCaseReport = (result) => {
         aabb_iou: result.metrics?.aabb_iou ?? null,
         center_distance: result.metrics?.center_distance ?? null,
         bb2d_target_iou: result.bb2d_target_metrics?.bb2d_iou ?? null,
+        rough_target: roughTargetDiagnostics(result),
         selected_candidate: selected,
         depth: {
             source: result.depth?.source ?? result.timing?.depth_source ?? null,
@@ -835,6 +869,74 @@ const aabbIou = (a, b) => {
     const intersectionVolume = aabbVolume(intersection);
     const unionVolume = aabbVolume(a) + aabbVolume(b) - intersectionVolume;
     return unionVolume > 0 ? intersectionVolume / unionVolume : 0;
+};
+
+const aabbOverlapStats = (a, b) => {
+    if (!a || !b) return null;
+    const intersection = {
+        min: [0, 1, 2].map(axis => Math.max(a.min[axis], b.min[axis])),
+        max: [0, 1, 2].map(axis => Math.min(a.max[axis], b.max[axis]))
+    };
+    const intersectionVolume = aabbVolume(intersection);
+    const volumeA = aabbVolume(a);
+    const volumeB = aabbVolume(b);
+    const union = volumeA + volumeB - intersectionVolume;
+    return {
+        iou: union > 0 ? intersectionVolume / union : 0,
+        a_covered_by_b: volumeA > 0 ? intersectionVolume / volumeA : 0,
+        b_covered_by_a: volumeB > 0 ? intersectionVolume / volumeB : 0,
+        volume_ratio_a_to_b: volumeB > 0 ? volumeA / volumeB : null
+    };
+};
+
+const padAabb = (aabb, scale) => {
+    if (!aabb) return null;
+    const center = [0, 1, 2].map(axis => (aabb.min[axis] + aabb.max[axis]) / 2);
+    const half = [0, 1, 2].map(axis => Math.max(0, (aabb.max[axis] - aabb.min[axis]) / 2) * scale);
+    return {
+        min: [0, 1, 2].map(axis => center[axis] - half[axis]),
+        max: [0, 1, 2].map(axis => center[axis] + half[axis])
+    };
+};
+
+const roughTargetDiagnostics = (result) => {
+    const predictedAabb = result.metrics?.predicted_aabb;
+    const targetAabb = result.metrics?.target_aabb;
+    const predictionTarget3d = aabbOverlapStats(predictedAabb, targetAabb);
+    const predBb = result.bb2d;
+    const targetBb = result.target_projected_bb2d;
+    const brushBb = result.candidate_debug?.client_brush?.brush_bb2d ??
+        result.client_brush_probe?.brush_bb2d ??
+        result.replay_prompt?.brush?.bb2d ??
+        result.source_prompt?.brush?.bb2d;
+    const targetBrush2d = brushBb && targetBb ? bb2dOverlapStats(targetBb, brushBb) : null;
+    const predBrush2d = brushBb && predBb ? bb2dOverlapStats(predBb, brushBb) : null;
+    const predTarget2d = predBb && targetBb ? bb2dOverlapStats(predBb, targetBb) : null;
+    const targetDiag = targetAabb ? Math.hypot(
+        targetAabb.max[0] - targetAabb.min[0],
+        targetAabb.max[1] - targetAabb.min[1],
+        targetAabb.max[2] - targetAabb.min[2]
+    ) : null;
+    const centerDistanceRatio = finite(result.metrics?.center_distance) && targetDiag ?
+        result.metrics.center_distance / Math.max(1e-6, targetDiag) :
+        null;
+    return {
+        target_vs_brush_2d: targetBrush2d,
+        prediction_vs_brush_2d: predBrush2d,
+        prediction_vs_target_2d: predTarget2d,
+        prediction_vs_target_3d: predictionTarget3d,
+        target_padded_iou_3d: {
+            scale_1_15: predictedAabb && targetAabb ? aabbIou(predictedAabb, padAabb(targetAabb, 1.15)) : null,
+            scale_1_30: predictedAabb && targetAabb ? aabbIou(predictedAabb, padAabb(targetAabb, 1.30)) : null
+        },
+        center_distance_target_diag_ratio: centerDistanceRatio,
+        likely_rough_target_2d: !!targetBrush2d &&
+            targetBrush2d.iou < 0.45 &&
+            targetBrush2d.b_covered_by_a >= 0.75,
+        likely_tight_prediction_inside_target: !!predictionTarget3d &&
+            predictionTarget3d.a_covered_by_b >= 0.75 &&
+            predictionTarget3d.b_covered_by_a < 0.45
+    };
 };
 
 const centerDistance = (a, b) => {
@@ -998,6 +1100,7 @@ const summarizeResults = (results, options = {}) => {
             aabb_iou: report.aabb_iou,
             center_distance: report.center_distance,
             bb2d_target_iou: report.bb2d_target_iou,
+            rough_target: report.rough_target,
             selected_candidate: report.selected_candidate,
             target_leak: report.target_leak
         })),
@@ -1181,7 +1284,12 @@ const samSucceeded = (result) => {
 const hasRequiredBrushPoints = (result) => {
     const replayPrompt = result.replay_prompt;
     const sourcePrompt = result.source_prompt;
-    if (replayPrompt?.type !== 'client_brush' && sourcePrompt?.type !== 'client_brush') return true;
+    if (
+        replayPrompt?.type !== 'client_brush' &&
+        sourcePrompt?.type !== 'client_brush' &&
+        replayPrompt?.type !== 'brush_sam' &&
+        sourcePrompt?.type !== 'brush_sam'
+    ) return true;
     const points = replayPrompt?.brush?.points ?? sourcePrompt?.brush?.points;
     const consumedPointCount = result.report?.client_brush?.brush_stroke_point_count ??
         result.candidate_debug?.client_brush?.brush_stroke_point_count;
@@ -1190,7 +1298,7 @@ const hasRequiredBrushPoints = (result) => {
 };
 
 const evalCaseHasRequiredBrushPoints = (evalCase) => {
-    if (evalCase.prompt?.type !== 'client_brush') return true;
+    if (evalCase.prompt?.type !== 'client_brush' && evalCase.prompt?.type !== 'brush_sam') return true;
     const points = evalCase.prompt?.brush?.points;
     return Array.isArray(points) && points.length > 0;
 };

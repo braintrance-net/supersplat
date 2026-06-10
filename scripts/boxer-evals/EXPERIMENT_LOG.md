@@ -168,6 +168,50 @@ main things we tried, what happened, and which paths still look worth pursuing.
 
 ## What We Tried
 
+## 2026-06-09 Brush Suite Calibration, SAM+BRUSH, and DA3 Gate
+
+- **Live brush suite - clean product-path gate**
+  - Command: replay `scripts/boxer-evals/live-brush-evals.jsonl` with
+    `--require-brush-points --verify-target-leak`.
+  - Result: `7/7` ok, target-leak `7/7` passed, avg AABB IoU
+    `0.8744972375537593`, avg center distance `0.0952235086087305`, avg 2D
+    target IoU `0.8282424426311332`.
+  - Selected sources: `brush_ray` on all seven cases.
+  - Outcome: use this as the current clean brush regression gate.
+
+- **Recovered human brush suite - rough/manual-target diagnostic gate**
+  - Result: `7/7` ok, target-leak `7/7` passed, avg AABB IoU
+    `0.6521555415949315`, avg center distance `0.2732129826459802`, avg 2D
+    target IoU `0.6626836016065587`.
+  - Outlier case `2026-06-05T20:57:41.557Z` has AABB IoU
+    `0.20344898771464112`, but rough-target diagnostics show the prediction is
+    mostly inside a broad manual target (`prediction_vs_target_3d.a_covered_by_b`
+    `0.9288721274027176`) and the brush is fully inside the target in 2D.
+  - Outcome: do not treat the recovered suite as a pure miss/fail gate without
+    reading `report.rough_target`.
+
+- **SAM+BRUSH proof lane - contract wired, upstream blocked**
+  - Added `brush_sam` replay support so real brush stroke points are sampled as
+    positive SAM prompts. The local SAM3D fallback can now call
+    `/segment_points`.
+  - Proof command: replay case `1` from `live-brush-evals.jsonl` with
+    `--prompt-type brush_sam --require-brush-points --require-sam-success`.
+  - Result: brush output still good (`0.8198103010997552` AABB IoU), but SAM
+    success gate failed.
+  - Proxy evidence: `/api/sam3/refine` received 16 sampled brush points and
+    returned `502`; `/api/sam3/segment` returned `501`; `/upload` returned
+    `502`.
+  - Outcome: Boxer-side experiment wiring is ready, but quality comparison is
+    blocked until the SAM backend returns a mask.
+
+- **DA3 feasibility - gate only, no local model run**
+  - Official DA3 quick start is CUDA-first. This shell has no `nvidia-smi`, so
+    a local DA3 install/run would not be a trustworthy proof.
+  - Added `scripts/boxer-evals/DA3_PROOF_GATE_PLAN.md` to keep the experiment
+    scoped to depth-prior alignment against SuperSplat visible anchors.
+  - Outcome: run DA3 on a GPU host or remote backend; do not make it the metric
+    depth source.
+
 - **Old calibrated/grouped high score - fail for honesty**
   - Result: produced exciting numbers during calibration work, but it was not a
     valid final product path.
@@ -365,6 +409,52 @@ main things we tried, what happened, and which paths still look worth pursuing.
   - This unlocks the next DEPTH pass, but it is not the `0.8` IoU solution by
     itself. The main remaining issue is hidden object extent, not projection
     cost.
+
+## 2026-06-09 SAM3 Stateless Endpoint Proof
+
+- SAM backend update:
+  - `braintrance-net/sam3d-web` commit `a2e0e05` adds `/segment_frame`,
+    `/api/sam3/refine`, and `/api/sam3/segment` without changing the existing
+    upload/job endpoints used by BrainTrance/create.
+  - Deployed to EC2 `3.19.208.185`, service `sam3d.service`, commit
+    `a2e0e05`.
+  - Direct EC2 smoke passed:
+    - `POST http://3.19.208.185:8000/segment_frame` with `{}` returns FastAPI
+      `400 {"detail":"image is required"}`.
+    - `POST http://3.19.208.185:8000/api/sam3/refine` with `{}` returns
+      FastAPI `400 {"detail":"image is required"}`.
+    - `POST http://3.19.208.185:8000/upload` without a file still returns the
+      old FastAPI upload validation path.
+- Public-host caveat:
+  - `https://sam3.4dream.app` is not currently reaching this FastAPI service.
+    It serves an unrelated static "Splat Thumbnail Comparison" page, with
+    `/docs` and `/openapi.json` returning static HTML `404` and POSTs returning
+    static HTML `501`.
+  - Use `SAM3_PROXY_TARGET=http://3.19.208.185:8000` for evals until that DNS /
+    Cloudflare route is corrected.
+- Replay command:
+  - `SAM3_PROXY_TARGET=http://3.19.208.185:8000 SAM3_PROXY_TIMEOUT_MS=180000 node scripts/sam3-dev-proxy.mjs`
+  - `PLAYWRIGHT_MODULE=/home/jonam/.nvm/versions/node/v25.9.0/lib/node_modules/playwright node scripts/replay-boxer-evals.mjs --file scripts/boxer-evals/live-brush-evals.jsonl --url http://127.0.0.1:47999/ --prompt-type brush_sam --fresh-browser --case-index 1 --case-timeout-ms 180000 --load-timeout-ms 90000 --require-brush-points --require-sam-success --out /tmp/boxer-brush-sam-segment-frame-proof-timeout-fixed.json`
+- Result:
+  - SAM route succeeded and applied: `sam3.succeeded=1`, `sam3.applied=1`.
+  - `/api/sam3/refine` proxy response: HTTP `200`, `mask` present, `960x510`,
+    score `0.6836`; duration was `4754` ms on the second replay.
+  - The Boxer SAM request timeout had to move from `1800` ms to `10000` ms; the
+    first successful backend response took `1827` ms and was aborted by the old
+    client timeout.
+  - Quality regressed on this rough brush fixture after SAM applied:
+    - brush-only baseline from the same replay setup: AABB IoU `0.820`,
+      center distance `0.240`.
+    - `brush_sam` after timeout fix: AABB IoU `0.162`, center distance `1.556`.
+    - 2D brush/target IoU stayed high at `0.907`, but the lifted SAM support
+      collapsed to a tight interior 3D box.
+- Interpretation:
+  - The SAM contract is now wired and callable. The next blocker is quality
+    gating/fusion, not backend reachability.
+  - Do not blindly replace rough-brush geometry with SAM output. Add a guard
+    such as "only apply SAM if lifted support volume is not a tiny interior
+    subset of the brush candidate" or use SAM as a soft 2D prior while retaining
+    brush/depth extent.
 
 ## Repro Commands
 

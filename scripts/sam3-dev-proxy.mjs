@@ -18,7 +18,9 @@ let requestSequence = 0;
 
 const pathAliases = new Map([
     ['/api/sam3d/upload', '/upload'],
-    ['/api/sam3d/segment-point', '/segment_point']
+    ['/api/sam3d/segment-point', '/segment_point'],
+    ['/api/sam3d/segment-points', '/segment_points'],
+    ['/api/sam3d/segment-frame', '/segment_frame']
 ]);
 
 const allowedPaths = new Set([
@@ -27,7 +29,9 @@ const allowedPaths = new Set([
     '/api/sam3/segment-text',
     '/api/boxer-evals/append',
     '/upload',
+    '/segment_frame',
     '/segment_point',
+    '/segment_points',
     ...pathAliases.keys()
 ]);
 

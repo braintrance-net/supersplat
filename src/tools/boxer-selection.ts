@@ -29,7 +29,7 @@ const CLUSTER_DEPTH_FRAC_OF_DEPTH = 0.04;
 const CLUSTER_DEPTH_MIN = 0.35;
 const CLUSTER_DEPTH_MAX = 1.25;
 const DEFAULT_SAM3_BACKEND_URL = 'https://sam3.4dream.app';
-const SAM3_REQUEST_TIMEOUT_MS = 1800;
+const SAM3_REQUEST_TIMEOUT_MS = 10000;
 const LOCAL_EVAL_SAVE_PATH = '/api/boxer-evals/append';
 const LOCAL_EVAL_SAVE_TIMEOUT_MS = 10000;
 const SAM3_MAX_IMAGE_SIDE = 960;
@@ -499,6 +499,7 @@ type BoxerEvalPrompt =
     { type: 'click_sam'; click_xy: [number, number] } |
     { type: 'client_click'; click_xy: [number, number] } |
     { type: 'client_brush'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'brush_sam'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
     { type: 'detect_all_click'; click_xy: [number, number] } |
     { type: 'direct_lift_click'; click_xy: [number, number]; use_sam?: boolean; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
     { type: 'lift_box'; bb2d: NormalizedBb2d; click_xy?: [number, number]; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
@@ -1382,6 +1383,35 @@ const findProjectedSeed = (
     return best;
 };
 
+const sampleSam3BrushPoints = (
+    brush: BoxerBrushPrompt | undefined,
+    fallback: [number, number],
+    maxPoints = 16
+): [number, number][] => {
+    const points = brush?.points?.length ? brush.points : [];
+    const deduped: [number, number][] = [];
+    const seen = new Set<string>();
+    const addPoint = (point: [number, number]) => {
+        const rounded: [number, number] = [Math.round(point[0]), Math.round(point[1])];
+        const key = `${rounded[0]},${rounded[1]}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        deduped.push(rounded);
+    };
+
+    addPoint(fallback);
+    if (points.length) {
+        const slots = Math.max(1, maxPoints - deduped.length);
+        const step = Math.max(1, Math.floor(points.length / slots));
+        for (let i = 0; i < points.length && deduped.length < maxPoints; i += step) {
+            addPoint(points[i]);
+        }
+        addPoint(points[points.length - 1]);
+    }
+
+    return deduped.slice(0, maxPoints);
+};
+
 const buildCandidateHash = (candidates: ProjectedSplatCandidate[], eps: number) => {
     const cells = new Map<number, number[]>();
     const inv = 1 / eps;
@@ -2045,6 +2075,162 @@ const maskBb2d = (
     };
 };
 
+type MaskPixelBounds = { x0: number; y0: number; x1: number; y1: number; count: number };
+
+const maskPixelBounds = (mask: Uint8Array, maskWidth: number, maskHeight: number): MaskPixelBounds | null => {
+    let x0 = maskWidth;
+    let y0 = maskHeight;
+    let x1 = -1;
+    let y1 = -1;
+    let count = 0;
+    for (let y = 0; y < maskHeight; y++) {
+        for (let x = 0; x < maskWidth; x++) {
+            if (mask[y * maskWidth + x] === 0) continue;
+            count++;
+            if (x < x0) x0 = x;
+            if (y < y0) y0 = y;
+            if (x > x1) x1 = x;
+            if (y > y1) y1 = y;
+        }
+    }
+    if (count === 0) return null;
+    return { x0, y0, x1: x1 + 1, y1: y1 + 1, count };
+};
+
+const worldRayFromPixel = (
+    scene: Scene,
+    intrinsics: Intrinsics,
+    pixelX: number,
+    pixelY: number
+): { origin: [number, number, number]; dir: [number, number, number] } => {
+    const camera = scene.camera;
+    const pos = camera.position;
+    const view = camera.camera.viewMatrix.data as Float32Array;
+    const ogX = (pixelX - intrinsics.cx) / Math.max(1e-6, intrinsics.fx);
+    const ogY = -(pixelY - intrinsics.cy) / Math.max(1e-6, intrinsics.fy);
+    const ogZ = -1;
+    const dx = view[0] * ogX + view[1] * ogY + view[2] * ogZ;
+    const dy = view[4] * ogX + view[5] * ogY + view[6] * ogZ;
+    const dz = view[8] * ogX + view[9] * ogY + view[10] * ogZ;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    return {
+        origin: [pos.x, pos.y, pos.z],
+        dir: [dx / len, dy / len, dz / len]
+    };
+};
+
+const projectDepthOnly = (
+    scene: Scene,
+    worldX: number,
+    worldY: number,
+    worldZ: number
+) => {
+    const view = scene.camera.camera.viewMatrix.data as Float32Array;
+    const ogZ = view[2] * worldX + view[6] * worldY + view[10] * worldZ + view[14];
+    return -ogZ;
+};
+
+const computeMaskWorldQueryAabb = (
+    grid: DepthVisibilitySpatialGrid,
+    scene: Scene,
+    intrinsics: Intrinsics,
+    bounds: MaskPixelBounds,
+    maskWidth: number,
+    maskHeight: number,
+    imageWidth: number,
+    imageHeight: number
+): { min: [number, number, number]; max: [number, number, number] } | null => {
+    let nearDepth = Infinity;
+    let farDepth = -Infinity;
+    for (let xi = 0; xi < 2; xi++) {
+        for (let yi = 0; yi < 2; yi++) {
+            for (let zi = 0; zi < 2; zi++) {
+                const x = xi ? grid.boundsMax[0] : grid.boundsMin[0];
+                const y = yi ? grid.boundsMax[1] : grid.boundsMin[1];
+                const z = zi ? grid.boundsMax[2] : grid.boundsMin[2];
+                const depth = projectDepthOnly(scene, x, y, z);
+                if (depth <= 0) return null;
+                if (depth < nearDepth) nearDepth = depth;
+                if (depth > farDepth) farDepth = depth;
+            }
+        }
+    }
+    if (!Number.isFinite(nearDepth) || !Number.isFinite(farDepth) || farDepth <= 0) return null;
+
+    const padPx = 2;
+    const sx = imageWidth / Math.max(1, maskWidth);
+    const sy = imageHeight / Math.max(1, maskHeight);
+    const x0 = Math.max(0, (bounds.x0 - padPx) * sx);
+    const y0 = Math.max(0, (bounds.y0 - padPx) * sy);
+    const x1 = Math.min(imageWidth, (bounds.x1 + padPx) * sx);
+    const y1 = Math.min(imageHeight, (bounds.y1 + padPx) * sy);
+    if (x1 <= x0 || y1 <= y0) return null;
+
+    const forward = worldRayFromPixel(scene, intrinsics, imageWidth * 0.5, imageHeight * 0.5).dir;
+    const min: [number, number, number] = [Infinity, Infinity, Infinity];
+    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    const expand = (x: number, y: number, z: number) => {
+        if (x < min[0]) min[0] = x;
+        if (y < min[1]) min[1] = y;
+        if (z < min[2]) min[2] = z;
+        if (x > max[0]) max[0] = x;
+        if (y > max[1]) max[1] = y;
+        if (z > max[2]) max[2] = z;
+    };
+
+    let expanded = false;
+    for (const [px, py] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] as [number, number][]) {
+        const ray = worldRayFromPixel(scene, intrinsics, px, py);
+        const cos = ray.dir[0] * forward[0] + ray.dir[1] * forward[1] + ray.dir[2] * forward[2];
+        if (cos <= 1e-3) continue;
+        for (const depth of [Math.max(nearDepth, 0.01), farDepth]) {
+            const t = depth / cos;
+            expand(
+                ray.origin[0] + ray.dir[0] * t,
+                ray.origin[1] + ray.dir[1] * t,
+                ray.origin[2] + ray.dir[2] * t
+            );
+            expanded = true;
+        }
+    }
+    if (!expanded) return null;
+
+    const padWorld = grid.cellSize + Math.max(0.05, farDepth * 0.0025);
+    return {
+        min: [min[0] - padWorld, min[1] - padWorld, min[2] - padWorld],
+        max: [max[0] + padWorld, max[1] + padWorld, max[2] + padWorld]
+    };
+};
+
+const queryDepthVisibilitySpatialGrid = (
+    grid: DepthVisibilitySpatialGrid,
+    min: [number, number, number],
+    max: [number, number, number]
+): Uint32Array => {
+    const inv = 1 / grid.cellSize;
+    const clampCell = (value: number) => Math.max(-1000000, Math.min(1000000, Math.floor(value * inv) | 0));
+    const ix0 = clampCell(min[0] - grid.boundsMin[0]);
+    const iy0 = clampCell(min[1] - grid.boundsMin[1]);
+    const iz0 = clampCell(min[2] - grid.boundsMin[2]);
+    const ix1 = clampCell(max[0] - grid.boundsMin[0]);
+    const iy1 = clampCell(max[1] - grid.boundsMin[1]);
+    const iz1 = clampCell(max[2] - grid.boundsMin[2]);
+    const cellVisits = Math.max(0, ix1 - ix0 + 1) * Math.max(0, iy1 - iy0 + 1) * Math.max(0, iz1 - iz0 + 1);
+    if (cellVisits > 350000) return new Uint32Array();
+
+    const pending: number[] = [];
+    for (let iz = iz0; iz <= iz1; iz++) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+            for (let ix = ix0; ix <= ix1; ix++) {
+                const bucket = grid.cells.get(hashGridCell(ix, iy, iz));
+                if (!bucket) continue;
+                for (let i = 0; i < bucket.length; i++) pending.push(bucket[i]);
+            }
+        }
+    }
+    return Uint32Array.from(pending);
+};
+
 const collectMaskSplatCandidates = (
     splat: Splat,
     scene: Scene,
@@ -2057,30 +2243,59 @@ const collectMaskSplatCandidates = (
 ): ProjectedSplatCandidate[] => {
     const cache = getSplatWorldCenterCache(splat);
     if (!cache) return [];
-    const centers = cache.worldCenters;
-    const view = scene.camera.camera.viewMatrix.data as Float32Array;
+    const index = getDepthVisibilityIndex(splat);
+    const bounds = maskPixelBounds(mask, maskWidth, maskHeight);
+    let indexList: Uint32Array | null = null;
+    if (index && bounds) {
+        const aabb = computeMaskWorldQueryAabb(index.spatialGrid, scene, intrinsics, bounds, maskWidth, maskHeight, imageWidth, imageHeight);
+        if (aabb) {
+            const culled = queryDepthVisibilitySpatialGrid(index.spatialGrid, aabb.min, aabb.max);
+            if (culled.length > 0) indexList = culled;
+        }
+    }
+
     const scaleX = maskWidth / imageWidth;
     const scaleY = maskHeight / imageHeight;
     const candidates: ProjectedSplatCandidate[] = [];
-    const count = cache.count;
+    const viewCache = getDepthVisibilityViewCache(splat, scene, intrinsics, imageWidth, imageHeight);
+    const centers = cache.worldCenters;
+    const view = scene.camera.camera.viewMatrix.data as Float32Array;
 
-    for (let i = 0; i < count; i++) {
+    const visit = (i: number) => {
+        let u: number;
+        let v: number;
+        let cvZ: number;
+        let layerClass: 0 | 1 | 2 | 3 | undefined;
+        let tileIndex: number | undefined;
+        if (viewCache) {
+            if (!viewCache.inFrame[i]) return;
+            u = viewCache.pixelX[i];
+            v = viewCache.pixelY[i];
+            cvZ = viewCache.depth[i];
+            layerClass = viewCache.layerClass[i] as 0 | 1 | 2 | 3;
+            tileIndex = viewCache.tileIndex[i];
+        } else {
+            const wx = centers[i * 3];
+            const wy = centers[i * 3 + 1];
+            const wz = centers[i * 3 + 2];
+            const ogX = view[0] * wx + view[4] * wy + view[8]  * wz + view[12];
+            const ogY = view[1] * wx + view[5] * wy + view[9]  * wz + view[13];
+            const ogZ = view[2] * wx + view[6] * wy + view[10] * wz + view[14];
+            cvZ = -ogZ;
+            if (cvZ <= 0) return;
+            u = intrinsics.fx * ogX / cvZ + intrinsics.cx;
+            v = intrinsics.fy * (-ogY) / cvZ + intrinsics.cy;
+            if (u < 0 || u >= imageWidth || v < 0 || v >= imageHeight) return;
+        }
+
+        if (cvZ <= 0 || u < 0 || u >= imageWidth || v < 0 || v >= imageHeight) return;
+        const maskX = Math.min(maskWidth - 1, Math.max(0, Math.round(u * scaleX)));
+        const maskY = Math.min(maskHeight - 1, Math.max(0, Math.round(v * scaleY)));
+        if (mask[maskY * maskWidth + maskX] === 0) return;
+
         const wx = centers[i * 3];
         const wy = centers[i * 3 + 1];
         const wz = centers[i * 3 + 2];
-        const ogX = view[0] * wx + view[4] * wy + view[8]  * wz + view[12];
-        const ogY = view[1] * wx + view[5] * wy + view[9]  * wz + view[13];
-        const ogZ = view[2] * wx + view[6] * wy + view[10] * wz + view[14];
-        const cvZ = -ogZ;
-        if (cvZ <= 0) continue;
-
-        const u = intrinsics.fx * ogX / cvZ + intrinsics.cx;
-        const v = intrinsics.fy * (-ogY) / cvZ + intrinsics.cy;
-        if (u < 0 || u >= imageWidth || v < 0 || v >= imageHeight) continue;
-
-        const maskX = Math.min(maskWidth - 1, Math.max(0, Math.round(u * scaleX)));
-        const maskY = Math.min(maskHeight - 1, Math.max(0, Math.round(v * scaleY)));
-        if (mask[maskY * maskWidth + maskX] === 0) continue;
 
         candidates.push({
             point: [wx, wy, wz],
@@ -2088,10 +2303,18 @@ const collectMaskSplatCandidates = (
             world: [wx, wy, wz],
             pixel: [u, v],
             depth: cvZ,
-            in_frame: true
+            in_frame: true,
+            layer_class: layerClass,
+            tile_index: tileIndex
         });
+    };
+
+    if (indexList) {
+        for (let k = 0; k < indexList.length; k++) visit(indexList[k]);
+        if (candidates.length > 0) return candidates;
     }
 
+    for (let i = 0; i < cache.count; i++) visit(i);
     return candidates;
 };
 
@@ -2101,7 +2324,8 @@ const fetchSam3ClickMaskRegion = async (
     scene: Scene,
     clickX: number,
     clickY: number,
-    debug?: Sam3MaskDebug
+    debug?: Sam3MaskDebug,
+    options?: { promptPoints?: [number, number][] }
 ): Promise<Sam3MaskRegion | null> => {
     const sam3BackendUrl = getSam3BackendUrl();
     const resized = await resizePngBase64(frame.image, frame.image_width, frame.image_height, SAM3_MAX_IMAGE_SIDE);
@@ -2115,6 +2339,14 @@ const fetchSam3ClickMaskRegion = async (
         Math.min(1, Math.max(0, clickX / Math.max(1, frame.image_width))),
         Math.min(1, Math.max(0, clickY / Math.max(1, frame.image_height)))
     ];
+    const promptPoints = (options?.promptPoints?.length ? options.promptPoints : [[clickX, clickY]])
+    .filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    const normalizedPoints = (promptPoints.length ? promptPoints : [[clickX, clickY]])
+    .map(([x, y]) => [
+        Math.min(1, Math.max(0, x / Math.max(1, frame.image_width))),
+        Math.min(1, Math.max(0, y / Math.max(1, frame.image_height)))
+    ] as [number, number]);
+    const labels = normalizedPoints.map(() => 1);
 
     const refineBody = {
         image: resized.image,
@@ -2123,8 +2355,8 @@ const fetchSam3ClickMaskRegion = async (
         clear_old_points: true,
         coordinate_space: 'normalized',
         image_size: { width: resized.width, height: resized.height },
-        points: [normalizedClick],
-        labels: [1]
+        points: normalizedPoints.length ? normalizedPoints : [normalizedClick],
+        labels: labels.length ? labels : [1]
     };
 
     try {
@@ -2141,7 +2373,7 @@ const fetchSam3ClickMaskRegion = async (
             ok: res.ok
         });
 
-        if (res.status === 404 || res.status === 405 || res.status === 501) {
+        if (!res.ok) {
             res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2169,8 +2401,53 @@ const fetchSam3ClickMaskRegion = async (
             mask?: string;
             width?: number;
             height?: number;
+            masks?: { mask_png?: string; mask?: string; width?: number; height?: number }[];
             error?: string;
         };
+
+        if (!res.ok || !data.mask || data.width === undefined || data.height === undefined) {
+            const pixelPoints = (promptPoints.length ? promptPoints : [[clickX, clickY]])
+            .map(([x, y]) => ({
+                x: Math.round(x * resized.scale),
+                y: Math.round(y * resized.scale),
+                label: 1
+            }));
+            const frameRes = await fetch(`${sam3BackendUrl}/segment_frame`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: getSam3FetchCredentials(sam3BackendUrl),
+                body: JSON.stringify({
+                    image: resized.image,
+                    width: resized.width,
+                    height: resized.height,
+                    prompts: { points: pixelPoints },
+                    coordinate_space: 'pixel',
+                    multimask: false
+                }),
+                signal: controller.signal
+            });
+            const frameData = await frameRes.json().catch(() => ({})) as {
+                masks?: { mask_png?: string; mask?: string }[];
+                width?: number;
+                height?: number;
+                detail?: string;
+            };
+            debug?.attempts.push({
+                endpoint: '/segment_frame',
+                status: frameRes.status,
+                ok: frameRes.ok,
+                detail: frameData.detail
+            });
+            const firstMask = frameData.masks?.[0]?.mask_png ?? frameData.masks?.[0]?.mask;
+            if (frameRes.ok && firstMask && frameData.width !== undefined && frameData.height !== undefined) {
+                data = {
+                    mask: firstMask.includes(',') ? firstMask.split(',', 2)[1] : firstMask,
+                    width: frameData.width,
+                    height: frameData.height
+                };
+                res = frameRes;
+            }
+        }
 
         if (!res.ok || !data.mask || data.width === undefined || data.height === undefined) {
             const uploadForm = new FormData();
@@ -2190,24 +2467,46 @@ const fetchSam3ClickMaskRegion = async (
                 detail: uploadData.detail
             });
             if (uploadRes.ok && uploadData.job_id) {
-                const pointForm = new FormData();
-                pointForm.append('job_id', uploadData.job_id);
-                pointForm.append('x', String(Math.round(clickX * resized.scale)));
-                pointForm.append('y', String(Math.round(clickY * resized.scale)));
-                pointForm.append('label', '1');
-                const pointRes = await fetch(`${sam3BackendUrl}/segment_point`, {
-                    method: 'POST',
-                    credentials: getSam3FetchCredentials(sam3BackendUrl),
-                    body: pointForm,
-                    signal: controller.signal
-                });
+                const pixelPoints = (promptPoints.length ? promptPoints : [[clickX, clickY]])
+                .map(([x, y]) => [
+                    Math.round(x * resized.scale),
+                    Math.round(y * resized.scale)
+                ] as [number, number]);
+                let pointRes: Response;
+                if (pixelPoints.length > 1) {
+                    pointRes = await fetch(`${sam3BackendUrl}/segment_points`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: getSam3FetchCredentials(sam3BackendUrl),
+                        body: JSON.stringify({
+                            job_id: uploadData.job_id,
+                            points: pixelPoints,
+                            labels: pixelPoints.map(() => 1),
+                            coordinate_space: 'pixel',
+                            multimask_output: false
+                        }),
+                        signal: controller.signal
+                    });
+                } else {
+                    const pointForm = new FormData();
+                    pointForm.append('job_id', uploadData.job_id);
+                    pointForm.append('x', String(pixelPoints[0]?.[0] ?? Math.round(clickX * resized.scale)));
+                    pointForm.append('y', String(pixelPoints[0]?.[1] ?? Math.round(clickY * resized.scale)));
+                    pointForm.append('label', '1');
+                    pointRes = await fetch(`${sam3BackendUrl}/segment_point`, {
+                        method: 'POST',
+                        credentials: getSam3FetchCredentials(sam3BackendUrl),
+                        body: pointForm,
+                        signal: controller.signal
+                    });
+                }
                 const pointData = await pointRes.json().catch(() => ({})) as {
                     masks?: { mask_image?: string }[];
                     detail?: string;
                 };
                 const maskImage = pointData.masks?.[0]?.mask_image;
                 debug?.attempts.push({
-                    endpoint: '/segment_point',
+                    endpoint: pixelPoints.length > 1 ? '/segment_points' : '/segment_point',
                     status: pointRes.status,
                     ok: pointRes.ok,
                     detail: pointData.detail
@@ -5334,7 +5633,7 @@ class BoxerSelection {
                 }
 
                 const { frame } = await buildBoxerFramePayload(events, scene, splat, canvas);
-                const region = await fetchSam3ClickMaskRegion(frame, splat, scene, click[0], click[1]);
+            const region = await fetchSam3ClickMaskRegion(frame, splat, scene, click[0], click[1]);
                 if (!region) return null;
                 return {
                     mask_bb2d: region.mask_bb2d,
@@ -5933,7 +6232,8 @@ class BoxerSelection {
         const executeClientBrush = async (
             brush: BoxerBrushPrompt | undefined,
             click: [number, number] | undefined,
-            target?: BoxerEvalTarget | null
+            target?: BoxerEvalTarget | null,
+            options?: { useSam?: boolean }
         ) => {
             const t0 = performance.now();
             const splat = (events.invoke('selection') as Splat | null) ??
@@ -5943,19 +6243,41 @@ class BoxerSelection {
             }
 
             const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
-                includeImage: false,
+                includeImage: !!options?.useSam,
                 includeEncodedDepth: false
             });
             const tFrame = performance.now();
             publishBoxerFrameDebug(frame);
-            lastEvalPrompt = { type: 'client_brush', ...(click ? { click_xy: click } : {}), brush };
+            lastEvalPrompt = { type: options?.useSam ? 'brush_sam' : 'client_brush', ...(click ? { click_xy: click } : {}), brush };
             lastEvalFrame = summarizeFrameForEval(frame);
             lastEvalCamera = events.invoke('camera.debugState') as CameraDebugState;
 
             const local = buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
             const obb = local.obb;
             const rawObb = cloneObb(obb);
-            const geometryRefinement = local.debug.selected_candidate_source === 'brush_ray' || local.debug.preserve_client_brush_geometry ?
+            let sam3Region: Sam3MaskRegion | null = null;
+            let sam3Debug: Sam3MaskDebug | undefined;
+            if (options?.useSam) {
+                const samClick = click ?? brush?.center_xy;
+                if (samClick) {
+                    sam3Debug = { attempts: [] };
+                    const brushPoints = sampleSam3BrushPoints(brush, samClick);
+                    sam3Region = await fetchSam3ClickMaskRegion(frame, splat, scene, samClick[0], samClick[1], sam3Debug, {
+                        promptPoints: brushPoints
+                    });
+                }
+            }
+            const geometryRefinement = sam3Region ?
+                refineObbFromBoxedPoints(
+                    obb,
+                    frame,
+                    splat,
+                    scene,
+                    local.bb2d,
+                    click ? { click_xy: click, depthBuffer } : undefined,
+                    sam3Region
+                ) :
+                (local.debug.selected_candidate_source === 'brush_ray' || local.debug.preserve_client_brush_geometry ?
                 { applied: false as const, reason: 'client-brush-ray-prior' } :
                 refineObbFromBoxedPoints(
                     obb,
@@ -5964,7 +6286,7 @@ class BoxerSelection {
                     scene,
                     local.bb2d,
                     click ? { click_xy: click, depthBuffer } : undefined
-                );
+                ));
             const tRefine = performance.now();
 
             publishBoxerResultDebug(
@@ -5983,6 +6305,19 @@ class BoxerSelection {
                 target_projected_bb2d: targetProjectedBb2d,
                 ...local.debug
             };
+            if (sam3Debug) {
+                debugResult.sam3_augmentation = {
+                    applied: geometryRefinement.reason === 'sam3-click-mask-connected-region',
+                    region: sam3Region ? {
+                        mask_bb2d: sam3Region.mask_bb2d,
+                        point_count: sam3Region.point_count,
+                        projected_candidate_count: sam3Region.projected_candidate_count,
+                        front_surface_candidate_count: sam3Region.front_surface_candidate_count,
+                        mask_area_ratio: sam3Region.mask_area_ratio
+                    } : null,
+                    debug: sam3Debug
+                };
+            }
 
             currentCorners = buildWireframeCorners(obb);
             scene.forceRender = true;
@@ -6007,7 +6342,7 @@ class BoxerSelection {
             show2DBoxLayers(overlayLayers);
             const tDone = performance.now();
             updateDebugPanel({
-                mode: 'client brush',
+                mode: options?.useSam ? 'brush sam' : 'client brush',
                 endpoint: 'local geometry',
                 label: obb.label,
                 confidence: obb.confidence,
@@ -6851,13 +7186,14 @@ class BoxerSelection {
                     evalCase.prompt?.type !== 'click_sam' &&
                     evalCase.prompt?.type !== 'client_click' &&
                     evalCase.prompt?.type !== 'client_brush' &&
+                    evalCase.prompt?.type !== 'brush_sam' &&
                     evalCase.prompt?.type !== 'detect_all_click' &&
                     evalCase.prompt?.type !== 'direct_lift_click' &&
                     evalCase.prompt?.type !== 'lift_target_box' &&
                     evalCase.prompt?.type !== 'client_lift_target_box' &&
                     evalCase.prompt?.type !== 'lift_box'
                 ) {
-                    throw new Error('Only click, click_sam, client_click, client_brush, detect_all_click, direct_lift_click, lift_target_box, client_lift_target_box, and lift_box eval cases can be replayed right now');
+                    throw new Error('Only click, click_sam, client_click, client_brush, brush_sam, detect_all_click, direct_lift_click, lift_target_box, client_lift_target_box, and lift_box eval cases can be replayed right now');
                 }
 
                 busy = true;
@@ -6913,6 +7249,14 @@ class BoxerSelection {
                             scaleBrush(brushPrompt.brush),
                             click ? [click.x, click.y] : undefined,
                             evalCase.target ?? null
+                        );
+                    } else if (evalCase.prompt.type === 'brush_sam') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_sam' }>;
+                        replay = await executeClientBrush(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            { useSam: true }
                         );
                     } else if (evalCase.prompt.type === 'detect_all_click' && click) {
                         const detectAll = await executeDetectAll({ x: click.x, y: click.y, target: evalCase.target ?? null });

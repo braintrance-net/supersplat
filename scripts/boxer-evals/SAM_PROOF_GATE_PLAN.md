@@ -59,9 +59,11 @@ Recommended fields:
 - `timing.total_ms` or equivalent backend timing fields.
 - `error` or `detail` on non-200 responses.
 
-For a future `brush_sam` experiment, use the same `/api/sam3/refine` response.
-The planned request should send accumulated positive and negative prompt points
-derived from the brush stroke, not a target box or target-derived mask.
+For `brush_sam`, use the same `/api/sam3/refine` response. Boxer sends sampled
+positive prompt points derived from the brush stroke, not a target box or
+target-derived mask. If the `/api/sam3/refine` and `/api/sam3/segment` JSON
+contracts are unavailable, the local SAM3D fallback uploads the frame and calls
+`/segment_points` with pixel-space brush points.
 
 ## Latency Budget
 
@@ -98,6 +100,23 @@ node scripts/replay-boxer-evals.mjs \
   --load-timeout-ms 90000 \
   --require-sam-success \
   --out /tmp/boxer-click-sam-proxy-proof.json
+```
+
+Run the brush-prompt gate:
+
+```bash
+PLAYWRIGHT_MODULE=/home/jonam/.nvm/versions/node/v25.9.0/lib/node_modules/playwright \
+node scripts/replay-boxer-evals.mjs \
+  --file scripts/boxer-evals/live-brush-evals.jsonl \
+  --url http://localhost:<serve-port>/ \
+  --prompt-type brush_sam \
+  --fresh-browser \
+  --case-index 1 \
+  --case-timeout-ms 90000 \
+  --load-timeout-ms 90000 \
+  --require-brush-points \
+  --require-sam-success \
+  --out /tmp/boxer-brush-sam-proxy-proof.json
 ```
 
 Pass criteria:

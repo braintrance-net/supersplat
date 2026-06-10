@@ -147,6 +147,9 @@ required only once the request contains more than one prompt point. The proxy
 logs sanitized request/response summaries with an `X-SAM3-Proxy-Request-Id`;
 attach those logs to proof-gate results.
 
+To test SAM with the real brush stroke points instead of a single click, replay
+the brush suite with `--prompt-type brush_sam` and `--require-sam-success`.
+
 Latency target: keep product click-to-box under 5 seconds. The current Boxer
 client SAM timeout is 1800 ms, while the proxy default timeout is 15000 ms so
 backend failures stay diagnosable during local experiments.
