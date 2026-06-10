@@ -40,6 +40,7 @@ import { registerTransformHandlerEvents } from './transform-handler';
 import { EditorUI } from './ui/editor';
 import { localizeInit } from './ui/localization';
 import { SemanticAnnotationOverlay } from './ui/semantic-annotation-overlay';
+import { registerCollisionSurfaceLoader } from './utils/collision-surface';
 import { VoiceController } from './voice/voice-controller';
 
 type DebugCameraState = {
@@ -285,6 +286,9 @@ const main = async () => {
         canvas: maskCanvas,
         context: maskContext
     };
+
+    // load collision surface sidecars for brush/boxer 3D anchoring
+    registerCollisionSurfaceLoader(events, scene);
 
     // tool manager
     const toolManager = new ToolManager(events);

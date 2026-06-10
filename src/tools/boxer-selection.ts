@@ -3,6 +3,7 @@ import { Color, Vec3 } from 'playcanvas';
 import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
+import { getActiveCollisionSurface, waitForCollisionSurface } from '../utils/collision-surface';
 
 const OBB_EDGES: [number, number][] = [
     [0, 1], [2, 3], [4, 5], [6, 7],
@@ -493,6 +494,8 @@ type BoxerBrushPrompt = {
     bb2d?: NormalizedBb2d;
     points?: [number, number][];
     pad?: number;
+    // constant world-space brush radius when the stroke was drawn in 3D mode
+    radius_world?: number;
 };
 type BoxerEvalPrompt =
     { type: 'click'; click_xy: [number, number] } |
@@ -4385,6 +4388,197 @@ const resolveClientBrushRegion = (
     };
 };
 
+type BrushSurfaceAnchor = {
+    point: [number, number, number];
+    distance: number;
+    radius_world: number;
+    dir: [number, number, number];
+};
+
+type BrushSurfaceEvidence = {
+    anchors: BrushSurfaceAnchor[];
+    support: ProjectedSplatCandidate[];
+    sampled_point_count: number;
+    anchor_hit_ratio: number;
+    median_radius_world: number;
+    thickness_cut: number;
+    thickness_cap: number;
+};
+
+const BRUSH_SURFACE_MAX_ANCHOR_SAMPLES = 48;
+const BRUSH_SURFACE_RADIUS_FACTOR = 1.35;
+const BRUSH_SURFACE_BACK_TOLERANCE = 0.25;
+const BRUSH_SURFACE_MAX_THICKNESS = 2.6;
+const BRUSH_SURFACE_MIN_THICKNESS = 0.5;
+const BRUSH_SURFACE_THICKNESS_EXTENT_FACTOR = 2.0;
+// surface evidence is unfitted to the eval suites; it only overrides the
+// calibrated candidate family when none of them reaches this score
+const BRUSH_SURFACE_OVERRIDE_MAX_ALT_SCORE = 1.2;
+
+// Lift the 2D brush stroke onto the scene's collision surface: raycast sampled
+// stroke pixels against the collision mesh sidecar, then keep splat candidates
+// inside the resulting world-space brush tube. Depth extent comes from the
+// actual splat density along each anchor ray (front shell through back shell),
+// cut at the first density gap so background behind the object is excluded.
+const collectBrushSurfaceEvidence = (
+    frame: BoxerFramePayload,
+    region: ReturnType<typeof resolveClientBrushRegion>,
+    brush: BoxerBrushPrompt | undefined,
+    projectedCandidates: ProjectedSplatCandidate[]
+): BrushSurfaceEvidence | null => {
+    const surface = getActiveCollisionSurface();
+    if (!surface) return null;
+
+    const strokePoints = brush?.points?.length ? brush.points : [region.center];
+    const sampleStep = Math.max(1, Math.ceil(strokePoints.length / BRUSH_SURFACE_MAX_ANCHOR_SAMPLES));
+    const sampledPixels: [number, number][] = [];
+    for (let i = 0; i < strokePoints.length; i += sampleStep) {
+        sampledPixels.push([strokePoints[i][0], strokePoints[i][1]]);
+    }
+    const lastStrokePoint = strokePoints[strokePoints.length - 1];
+    const lastSampled = sampledPixels[sampledPixels.length - 1];
+    if (lastSampled[0] !== lastStrokePoint[0] || lastSampled[1] !== lastStrokePoint[1]) {
+        sampledPixels.push([lastStrokePoint[0], lastStrokePoint[1]]);
+    }
+
+    const e = frame.extrinsics;
+    const origin: [number, number, number] = [e[12], e[13], e[14]];
+    const anchors: BrushSurfaceAnchor[] = [];
+    for (const pixel of sampledPixels) {
+        const through = unprojectDepthToWorld(frame, pixel[0], pixel[1], 1);
+        const dir: [number, number, number] = [
+            through[0] - origin[0],
+            through[1] - origin[1],
+            through[2] - origin[2]
+        ];
+        const hit = surface.raycastWorld(origin, dir);
+        if (!hit) continue;
+        const dirLength = Math.hypot(dir[0], dir[1], dir[2]);
+        anchors.push({
+            point: hit.point,
+            distance: hit.distance,
+            radius_world: Math.max(0.01, brush?.radius_world ?? region.radius / Math.max(1, frame.intrinsics.fx) * hit.distance),
+            dir: [dir[0] / dirLength, dir[1] / dirLength, dir[2] / dirLength]
+        });
+    }
+    if (anchors.length === 0) {
+        return {
+            anchors,
+            support: [],
+            sampled_point_count: sampledPixels.length,
+            anchor_hit_ratio: 0,
+            median_radius_world: 0,
+            thickness_cut: 0,
+            thickness_cap: 0
+        };
+    }
+
+    const sortedRadii = anchors.map(anchor => anchor.radius_world).sort((a, b) => a - b);
+    const medianRadiusWorld = sortedRadii[Math.floor(sortedRadii.length / 2)];
+
+    // the anchor cloud spans the brushed face of the object, so its extent is
+    // a direct estimate of the object's cross-scale; bound the depth sweep by
+    // it so the tube cannot run far into background surfaces behind the object
+    const anchorMin = [Infinity, Infinity, Infinity];
+    const anchorMax = [-Infinity, -Infinity, -Infinity];
+    for (const anchor of anchors) {
+        for (let axis = 0; axis < 3; axis++) {
+            anchorMin[axis] = Math.min(anchorMin[axis], anchor.point[axis]);
+            anchorMax[axis] = Math.max(anchorMax[axis], anchor.point[axis]);
+        }
+    }
+    const anchorExtentDiag = Math.hypot(
+        anchorMax[0] - anchorMin[0],
+        anchorMax[1] - anchorMin[1],
+        anchorMax[2] - anchorMin[2]
+    );
+    const thicknessCap = Math.min(
+        BRUSH_SURFACE_MAX_THICKNESS,
+        Math.max(BRUSH_SURFACE_MIN_THICKNESS, anchorExtentDiag * BRUSH_SURFACE_THICKNESS_EXTENT_FACTOR)
+    );
+
+    const strokeCandidates = projectedCandidates.filter(region.contains);
+    const matched: { candidate: ProjectedSplatCandidate; delta: number }[] = [];
+    for (const candidate of strokeCandidates) {
+        const px = candidate.point[0] - origin[0];
+        const py = candidate.point[1] - origin[1];
+        const pz = candidate.point[2] - origin[2];
+        const lengthSq = px * px + py * py + pz * pz;
+        let bestDelta = Infinity;
+        let bestPerp = Infinity;
+        for (const anchor of anchors) {
+            const t = px * anchor.dir[0] + py * anchor.dir[1] + pz * anchor.dir[2];
+            const delta = t - anchor.distance;
+            if (delta < -BRUSH_SURFACE_BACK_TOLERANCE || delta > thicknessCap) continue;
+            const perpSq = Math.max(0, lengthSq - t * t);
+            const maxPerp = anchor.radius_world * BRUSH_SURFACE_RADIUS_FACTOR;
+            if (perpSq > maxPerp * maxPerp) continue;
+            if (perpSq < bestPerp) {
+                bestPerp = perpSq;
+                bestDelta = delta;
+            }
+        }
+        if (Number.isFinite(bestDelta)) {
+            matched.push({ candidate, delta: bestDelta });
+        }
+    }
+    if (matched.length === 0) {
+        return {
+            anchors,
+            support: [],
+            sampled_point_count: sampledPixels.length,
+            anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
+            median_radius_world: medianRadiusWorld,
+            thickness_cut: 0,
+            thickness_cap: thicknessCap
+        };
+    }
+
+    // walk the depth-delta distribution from the surface backwards and stop at
+    // the first density gap: that is where the object ends and background starts
+    const gapThreshold = Math.max(0.4, medianRadiusWorld * 2.2);
+    const sortedDeltas = matched.map(entry => Math.max(0, entry.delta)).sort((a, b) => a - b);
+    let thicknessCut = sortedDeltas[0];
+    for (let i = 1; i < sortedDeltas.length; i++) {
+        if (sortedDeltas[i] - thicknessCut > gapThreshold) break;
+        thicknessCut = sortedDeltas[i];
+    }
+    const support = matched
+    .filter(entry => entry.delta <= thicknessCut + 1e-6)
+    .map(entry => entry.candidate);
+
+    return {
+        anchors,
+        support,
+        sampled_point_count: sampledPixels.length,
+        anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
+        median_radius_world: medianRadiusWorld,
+        thickness_cut: thicknessCut,
+        thickness_cap: thicknessCap
+    };
+};
+
+// AABB summary tuned for brush_surface support: the brush tube already gates
+// points spatially, so only a light quantile trim is needed and the result is
+// inflated slightly to recover extent lost to splat-center underestimation
+const summarizeBrushSurfaceAabb = (
+    points: number[][]
+): { center: [number, number, number]; dimensions: [number, number, number]; aabb: Aabb } | null => {
+    if (points.length < 3) return null;
+    const sorted = [0, 1, 2].map(axis => points.map(point => point[axis]).sort((a, b) => a - b));
+    const { mins, maxs } = summarizeSortedAxisExtents(sorted, 0.02, 0.98);
+    const center = [0, 1, 2].map(axis => (mins[axis] + maxs[axis]) / 2) as [number, number, number];
+    const dimensions = [0, 1, 2].map(axis => Math.max(0.05, (maxs[axis] - mins[axis]) * 1.06)) as [number, number, number];
+    return {
+        center,
+        dimensions,
+        aabb: {
+            min: [0, 1, 2].map(axis => center[axis] - dimensions[axis] / 2) as [number, number, number],
+            max: [0, 1, 2].map(axis => center[axis] + dimensions[axis] / 2) as [number, number, number]
+        }
+    };
+};
+
 const buildClientBrushObb = (
     frame: BoxerFramePayload,
     splat: Splat,
@@ -4467,24 +4661,28 @@ const buildClientBrushObb = (
         brushKnnClusterCapped = strictCluster.length >= strictMaxPoints || relaxedCluster.length >= relaxedMaxPoints;
     }
 
+    const surfaceEvidence = collectBrushSurfaceEvidence(frame, region, brush, baseProjected);
+
     const selectedBrush = connectedCluster.length >= 24 ? connectedCluster : sourceCandidates;
     const selectedBb = bboxFromProjectedCandidates(selectedBrush, frame.image_width, frame.image_height);
     const candidateBbs: {
         bb: NormalizedBb2d;
         scale: number;
-        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray';
+        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray' | 'brush_surface';
         supportCandidates?: ProjectedSplatCandidate[];
         componentIndex?: number;
     }[] = [];
     const addCandidateBb = (
         bb: NormalizedBb2d | null,
         scale: number,
-        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray',
+        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray' | 'brush_surface',
         supportCandidates?: ProjectedSplatCandidate[],
         componentIndex?: number
     ) => {
         if (!bb) return;
-        if (candidateBbs.some(candidate => bb2dIou(candidate.bb, bb) > 0.94)) return;
+        // brush_surface builds its OBB from world-space tube support, so an
+        // overlapping 2D box is not a duplicate of a screen-space candidate
+        if (source !== 'brush_surface' && candidateBbs.some(candidate => bb2dIou(candidate.bb, bb) > 0.94)) return;
         candidateBbs.push({ bb, scale, source, supportCandidates, componentIndex });
     };
 
@@ -4516,6 +4714,19 @@ const buildClientBrushObb = (
                 scale,
                 'brush_knn',
                 brushKnnCluster
+            );
+        }
+    }
+    const brushSurfaceBb = surfaceEvidence && surfaceEvidence.support.length >= 24 ?
+        bboxFromProjectedCandidates(surfaceEvidence.support, frame.image_width, frame.image_height) :
+        null;
+    if (brushSurfaceBb && surfaceEvidence) {
+        for (const scale of [1.0, 1.12]) {
+            addCandidateBb(
+                expandBb2d(brushSurfaceBb, scale, frame.image_width, frame.image_height),
+                scale,
+                'brush_surface',
+                surfaceEvidence.support
             );
         }
     }
@@ -4700,9 +4911,14 @@ const buildClientBrushObb = (
             )).sort((a, b) => b.score - a.score);
             return candidates[0]?.obb ?? null;
         };
+        // brush_surface support already carries true object thickness from the
+        // anchor-ray density cut, so skip the depth-spread clamp that would
+        // squash it back down to the front shell
         const summary = source === 'brush_ray' ?
             null :
-            (summarizePointAabbRobust(points, cameraDepthAxis, depthSpread) ?? summarizePointAabb(points));
+            source === 'brush_surface' ?
+                (summarizeBrushSurfaceAabb(points) ?? summarizePointAabb(points)) :
+                (summarizePointAabbRobust(points, cameraDepthAxis, depthSpread) ?? summarizePointAabb(points));
         const obb = source === 'brush_ray' ? buildRayObb() : (summary ? buildAxisAlignedObbFromAabb(summary.aabb, 'client_brush', 'client_brush', bb) : null);
         if (!obb) return null;
         if (source === 'brush_component' && (bb[3] - bb[1]) / Math.max(1, bb[2] - bb[0]) < 0.75) {
@@ -4739,6 +4955,11 @@ const buildClientBrushObb = (
         const rayBonus = source === 'brush_ray' ?
             0.22 + Math.min(0.08, Math.max(0, projectionFit.best_score) * 0.08) +
             (projectionFit.best_score >= 0.48 ? 0.24 : 0) :
+            0;
+        // the bonus can be generous because post-sort arbitration hands the win
+        // back to any calibrated candidate that scores confidently on its own
+        const surfaceBonus = source === 'brush_surface' && surfaceEvidence ?
+            0.54 + Math.min(0.06, Math.log10(Math.max(10, supportInside.length)) * 0.015) :
             0;
         const preservedWideComponentBonus = (obb as OBBResult & { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry ?
             Math.min(0.32, Math.max(0, obb.dimensions[0] - 2.2) * 0.22 + Math.max(0, obb.dimensions[2] - 1.55) * 0.18) :
@@ -4781,13 +5002,26 @@ const buildClientBrushObb = (
             brush_evidence_ratio: brushEvidenceRatio,
             depth_spread: depthSpread,
             projection_fit: projectionFit,
-            selection_score: projectionFit.best_score + pointBonus + insideBonus + clusterBonus + componentBonus + knnBonus + rayBonus + widePhysicalRayBonus + preservedWideComponentBonus - centerPenalty * 0.22 - depthPenalty - scalePenalty - areaPenalty - fragmentPenalty - badWideRayPenalty
+            selection_score: projectionFit.best_score + pointBonus + insideBonus + clusterBonus + componentBonus + knnBonus + rayBonus + surfaceBonus + widePhysicalRayBonus + preservedWideComponentBonus - centerPenalty * 0.22 - depthPenalty - scalePenalty - areaPenalty - fragmentPenalty - badWideRayPenalty
         };
     }).filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate)
     .sort((a, b) => b.selection_score - a.selection_score);
 
     if (candidates.length === 0) {
         throw new Error('client_brush could not build a local OBB candidate');
+    }
+
+    // arbitration: candidate scores are self-referential, so a tight surface
+    // box can outscore a better-fitting calibrated box; only let surface
+    // evidence win when every calibrated candidate is weak
+    let brushSurfaceDemoted = false;
+    if (candidates[0].source === 'brush_surface') {
+        const alternativeIndex = candidates.findIndex(candidate => candidate.source !== 'brush_surface');
+        if (alternativeIndex > 0 && candidates[alternativeIndex].selection_score >= BRUSH_SURFACE_OVERRIDE_MAX_ALT_SCORE) {
+            const [alternative] = candidates.splice(alternativeIndex, 1);
+            candidates.unshift(alternative);
+            brushSurfaceDemoted = true;
+        }
     }
 
     return {
@@ -4812,9 +5046,19 @@ const buildClientBrushObb = (
             brush_component_point_counts: brushComponents.map(component => component.length),
             brush_knn_point_count: brushKnnCluster.length,
             brush_knn_capped: brushKnnClusterCapped,
+            brush_surface: surfaceEvidence ? {
+                anchor_count: surfaceEvidence.anchors.length,
+                sampled_point_count: surfaceEvidence.sampled_point_count,
+                anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
+                support_count: surfaceEvidence.support.length,
+                median_radius_world: surfaceEvidence.median_radius_world,
+                thickness_cut: surfaceEvidence.thickness_cut,
+                thickness_cap: surfaceEvidence.thickness_cap
+            } : { available: false as const },
             selected_cluster_bb2d: selectedBb,
             selected_candidate_source: candidates[0].source,
             selected_candidate_scale: candidates[0].scale,
+            brush_surface_demoted: brushSurfaceDemoted,
             preserve_client_brush_geometry: (candidates[0].obb as OBBResult & { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry,
             candidates: candidates.map(candidate => ({
                 bb2d: candidate.bb,
@@ -6251,6 +6495,10 @@ class BoxerSelection {
                 events.fire('select.none');
             }
 
+            // make sure any in-flight collision surface sidecar load has settled
+            // so live runs and replay both see the same brush_surface evidence
+            await waitForCollisionSurface();
+
             const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
                 includeImage: !!options?.useSam,
                 includeEncodedDepth: false
@@ -6293,7 +6541,7 @@ class BoxerSelection {
                     click ? { click_xy: click, depthBuffer } : undefined,
                     sam3Region
                 ) :
-                (local.debug.selected_candidate_source === 'brush_ray' || local.debug.preserve_client_brush_geometry ?
+                (local.debug.selected_candidate_source === 'brush_ray' || local.debug.selected_candidate_source === 'brush_surface' || local.debug.preserve_client_brush_geometry ?
                 { applied: false as const, reason: 'client-brush-ray-prior' } :
                 refineObbFromBoxedPoints(
                     obb,

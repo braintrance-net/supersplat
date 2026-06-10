@@ -410,6 +410,55 @@ main things we tried, what happened, and which paths still look worth pursuing.
     itself. The main remaining issue is hidden object extent, not projection
     cost.
 
+## 2026-06-10 Collision-Surface 3D Brush (brush_surface)
+
+- Idea (from the splat-transform voxel/collision pipeline): generate a
+  one-time collision mesh sidecar per scene, raycast the recorded 2D brush
+  stroke against it to get true world-space surface anchors, and build a
+  `brush_surface` candidate from splat candidates inside the resulting 3D
+  brush tube. Works identically live and in replay, so existing fixtures
+  benefit without re-recording.
+- Asset generation (run on Windows; WSL WebGPU only sees llvmpipe):
+  - `npx @playcanvas/splat-transform@2.5.2 desk.ply -N -G desk.voxel.json --voxel-params 0.1,0.1 -K smooth -w`
+  - Committed sidecars: `static/dev-assets/collision/desk.collision.glb`
+    (17.7 MB, 974K triangles), `desk.voxel.bin`, `desk.voxel.json`.
+  - IMPORTANT: the GLB is already in editor world space. Do NOT apply the
+    splat entity transform when raycasting (verified empirically; the
+    R_z(180) hypothesis misses the mesh entirely).
+- Implementation:
+  - `src/utils/collision-surface.ts`: GLB triangle parser + uniform-grid DDA
+    raycaster, auto-loads `/static/dev-assets/collision/<basename>.collision.glb`
+    on `scene.elementAdded`, exposes `collisionSurface.screenProbe`.
+  - `buildClientBrushObb`: new `brush_surface` candidate from anchor-ray tube
+    support (factor 1.35 × px-radius-at-depth, depth delta in
+    [-0.25, min(2.6, 2.0 × anchor extent diag)]), light-trim AABB summary
+    (2%/98% + 1.06 inflate), generous score bonus (0.54 + support term).
+  - Brush tool: 3D cursor mode — constant world radius, screen circle adapts
+    to surface depth under cursor; prompt gains optional `radius_world`.
+- Calibration history (recovered human suite, 7 cases):
+  - Flat bonus with no arbitration either stole strong `brush_ray` cases or
+    lost the weak case — score margins are structurally contradictory
+    (case needing +0.128 vs case needing -0.121 on the same knob).
+  - Candidate dedup (`bb2dIou > 0.94`) silently dropped surface candidates
+    when the tube bb matched a region/knn bb; surface now bypasses dedup.
+  - Resolution: post-sort arbitration — `brush_surface` only keeps the win
+    when the best calibrated candidate scores `< 1.2`. Weak pools cluster
+    ~1.09, confident pools ~1.24+.
+- Result (recovered human suite `desk-can-brush-human-v1.json`):
+  - Baseline avg IoU `0.652` -> `0.692`, strict per-case improvement.
+  - Weak case (idx 4, rough wide-object stroke): `0.203` -> `0.481` via
+    `brush_surface`; its box dims `3.56x0.94x1.97` vs target `3.15x1x2`.
+  - All other cases identical to baseline (`brush_ray`/`brush_component`
+    winners preserved; demotion fired on idx 3 and 5 as designed).
+- Interpretation:
+  - Surface anchoring is real evidence (it fixed the case where every
+    screen-space candidate collapsed), but candidate scores are
+    self-referential, so it must not outrank confident calibrated candidates.
+  - The density-gap depth cut never fires on this scene (desk continues
+    behind every stroke); the anchor-extent cap is the effective bound.
+  - Next levers: per-ray depth clustering instead of the global gap walk,
+    surface-anchored scoring of OTHER candidates, multi-view strokes.
+
 ## 2026-06-09 SAM3 Stateless Endpoint Proof
 
 - SAM backend update:

@@ -26,7 +26,21 @@ class BrushSelection {
         const prev = { x: 0, y: 0 };
         let dragId: number | undefined;
         let points: [number, number][] = [];
+        let pointRadii: number[] = [];
         let variant: BrushSelectionVariant = 'boxer';
+
+        // 3D brush mode: when a collision surface is loaded for the scene, the
+        // brush keeps a constant world-space radius and the screen circle
+        // adapts to the surface depth under the cursor.
+        let radiusWorld: number | null = null;
+        let lastPxPerWorld: number | null = null;
+
+        const probeSurface = (x: number, y: number) => {
+            const width = parent.clientWidth || 1;
+            const height = parent.clientHeight || 1;
+            return events.invoke('collisionSurface.screenProbe', x / width, y / height) as
+                { point: [number, number, number]; distance: number; world_per_screen_height: number } | null | undefined;
+        };
 
         const controls = document.createElement('div');
         controls.className = 'brush-selection-controls hidden';
@@ -78,15 +92,37 @@ class BrushSelection {
             radius = clampRadius(value);
             circle.setAttribute('r', radius.toString());
             radiusInput.value = Math.round(radius).toString();
-            radiusValue.textContent = `${Math.round(radius)}px`;
+            radiusValue.textContent = radiusWorld !== null ?
+                `${Math.round(radius)}px · ${radiusWorld.toFixed(2)}wu` :
+                `${Math.round(radius)}px`;
         };
 
         setRadius(radius);
+
+        // keep the world radius in sync after explicit user resizes (wheel/slider)
+        const syncWorldRadius = () => {
+            if (radiusWorld !== null && lastPxPerWorld) {
+                radiusWorld = radius / lastPxPerWorld;
+            }
+        };
+
+        const applySurfaceRadius = (x: number, y: number) => {
+            const hit = probeSurface(x, y);
+            if (!hit || !(hit.world_per_screen_height > 0)) return;
+            const pxPerWorld = (parent.clientHeight || 1) / hit.world_per_screen_height;
+            if (!(pxPerWorld > 0)) return;
+            if (radiusWorld === null) {
+                radiusWorld = radius / pxPerWorld;
+            }
+            lastPxPerWorld = pxPerWorld;
+            setRadius(radiusWorld * pxPerWorld);
+        };
 
         const addPoint = (x: number, y: number) => {
             const last = points[points.length - 1];
             if (last && Math.hypot(last[0] - x, last[1] - y) < 3) return;
             points.push([x, y]);
+            pointRadii.push(radius);
         };
 
         const buildBrushPrompt = () => {
@@ -105,11 +141,17 @@ class BrushSelection {
             }, [0, 0] as [number, number]);
             center[0] = Math.round(center[0] / points.length);
             center[1] = Math.round(center[1] / points.length);
+            // in 3D mode the px radius varies along the stroke; the prompt
+            // carries the mean for region tests and the max for bounds padding
+            const promptRadius = pointRadii.length ?
+                pointRadii.reduce((sum, value) => sum + value, 0) / pointRadii.length :
+                radius;
+            const paddingRadius = pointRadii.length ? Math.max(...pointRadii) : radius;
             const bb2d: [number, number, number, number] = [
-                Math.max(0, bounds[0] - radius),
-                Math.max(0, bounds[1] - radius),
-                Math.min(canvas.width, bounds[2] + radius),
-                Math.min(canvas.height, bounds[3] + radius)
+                Math.max(0, bounds[0] - paddingRadius),
+                Math.max(0, bounds[1] - paddingRadius),
+                Math.min(canvas.width, bounds[2] + paddingRadius),
+                Math.min(canvas.height, bounds[3] + paddingRadius)
             ];
 
             return {
@@ -118,9 +160,10 @@ class BrushSelection {
                 brush: {
                     shape: 'stroke',
                     center_xy: center,
-                    radius,
+                    radius: promptRadius,
                     bb2d,
-                    points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number])
+                    points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
+                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {})
                 }
             };
         };
@@ -129,6 +172,7 @@ class BrushSelection {
             const x = e.offsetX;
             const y = e.offsetY;
 
+            applySurfaceRadius(x, y);
             circle.setAttribute('cx', x.toString());
             circle.setAttribute('cy', y.toString());
 
@@ -170,6 +214,7 @@ class BrushSelection {
                 prev.x = e.offsetX;
                 prev.y = e.offsetY;
                 points = [];
+                pointRadii = [];
                 addPoint(prev.x, prev.y);
 
                 update(e);
@@ -215,6 +260,7 @@ class BrushSelection {
             if (delta === 0) return;
             const scale = fast ? 1.18 : 1.08;
             setRadius(delta > 0 ? radius / scale : radius * scale);
+            syncWorldRadius();
         };
 
         const wheel = (e: WheelEvent) => {
@@ -226,6 +272,7 @@ class BrushSelection {
 
         radiusInput.addEventListener('input', () => {
             setRadius(Number(radiusInput.value));
+            syncWorldRadius();
         });
 
         radiusInput.addEventListener('pointerdown', (e) => {
@@ -235,6 +282,10 @@ class BrushSelection {
         controls.addEventListener('wheel', wheel);
 
         this.activate = () => {
+            // re-derive the world radius from the current px radius on first
+            // probe, in case the scene or camera changed since last activation
+            radiusWorld = null;
+            lastPxPerWorld = null;
             svg.classList.remove('hidden');
             controls.classList.remove('hidden');
             parent.style.display = 'block';
