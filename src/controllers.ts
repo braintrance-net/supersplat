@@ -334,10 +334,10 @@ class PointerController {
 
                 moveVec.set(0, 0, 0);
 
-                // Forward/backward along horizontal forward direction (fixed Y)
+                // Forward/backward along the FULL camera facing (including pitch), so
+                // travel follows where you're looking — look down + W goes down-forward.
                 if (forward) {
                     const zAxis = worldTransform.getZ();
-                    zAxis.y = 0;
                     zAxis.normalize();
                     moveVec.add(zAxis.mulScalar(-forward * factor));
                 }

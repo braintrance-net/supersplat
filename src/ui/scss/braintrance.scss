@@ -387,6 +387,16 @@ body.bt-mode {
             }
         }
     }
+    .bt-preview-all {
+        flex-shrink: 0;
+        display: inline-flex; align-items: center; gap: 6px;
+        height: 30px; padding: 0 12px;
+        border: 1px solid var(--bt-border); border-radius: 8px;
+        background: transparent; color: var(--bt-interaction);
+        font-size: 13px; font-weight: 600; cursor: pointer;
+        svg { width: 12px; height: 12px; }
+        &:hover { background: rgba(91, 91, 214, 0.1); border-color: var(--bt-interaction); }
+    }
     .bt-expand {
         flex-shrink: 0;
         width: 24px; height: 24px;
@@ -422,11 +432,12 @@ body.bt-mode {
             border: none; border-radius: 8px; background: transparent; color: var(--bt-interaction);
             font-size: 13px; font-weight: 600; cursor: pointer;
             svg { width: 13px; height: 13px; }
-            &:hover { background: rgba(91, 91, 214, 0.1); }
-            &.is-all { background: var(--bt-interaction); color: #fff; &:hover { background: #4a4ac0; } } }
-        .bt-io-save { height: 30px; padding: 0 14px; border: none; border-radius: 8px;
-            background: var(--bt-ink); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
-            &:hover { background: #222; } }
+            &:hover { background: rgba(91, 91, 214, 0.1); } }
+        .bt-io-edit { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+            border: 1px solid var(--bt-border); border-radius: 8px; background: transparent; color: var(--bt-ink);
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            svg { width: 13px; height: 13px; }
+            &:hover { background: var(--bt-hover); } }
     }
     .bt-io-when {
         font-size: 14px; color: var(--bt-ink-2); margin-bottom: 12px;

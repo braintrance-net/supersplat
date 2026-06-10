@@ -21,6 +21,7 @@ type EditorState = 'explore' | 'selected';
 // Placeholder colours (matching the frames: idle cube red, selected cube yellow)
 const IDLE_DIFFUSE = new Color(0.83, 0.20, 0.18);
 const SEL_DIFFUSE = new Color(1.0, 0.90, 0.0);
+const AUDIO_DIFFUSE = new Color(0.13, 0.78, 0.6); // audio pins idle green
 
 // ── icons (Lucide 24×24, matching the frame's stroke icons) ─────────────────
 const stroke = (paths: string, size = 24) => `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
@@ -82,7 +83,9 @@ type InteractionTarget = { name: string; changes: string; timing?: string; thisO
 type Interaction = { trigger: string; label: string; targets: InteractionTarget[] };
 
 // A selectable world object — each carries its own effects / interactions.
-type SceneObject = { entity: Entity; mat: StandardMaterial; name: string; effects: Effect[]; interactions: Interaction[] };
+// `idle` is its un-selected emissive colour; `audioIndex` links audio-pin objects
+// back to their entry in `audioSources`.
+type SceneObject = { entity: Entity; mat: StandardMaterial; name: string; effects: Effect[]; interactions: Interaction[]; idle?: Color; audioIndex?: number };
 
 // Asset browser catalogue (hardcoded, per spec §7.10) + thumbnail gradients.
 const ASSETS: Record<string, string[]> = {
@@ -162,6 +165,7 @@ class BraintranceUI {
     private effectsMode = false;            // context bar in chip view + library open
     private interactionsMode = false;       // context bar showing interaction chips + Add
     private openChip: number | null = null; // index of the chip whose strength popover is open
+    private editingInteraction: number | null = null; // interaction being re-recorded, if any
     private effectsPanel: HTMLElement | null = null;
     private strengthPop: HTMLElement | null = null;
 
@@ -609,6 +613,13 @@ class BraintranceUI {
         s.appendChild(track);
 
         s.appendChild(el('div', 'bt-time', fmtTime(DURATION)));
+
+        // global "Preview all" — rolls the timeline + fires every object's interactions
+        const previewAll = el('button', 'bt-preview-all', `${ICON.play}<span>Preview all</span>`);
+        previewAll.title = 'Preview the whole experience — timeline + interactions';
+        previewAll.addEventListener('click', () => this.previewAll());
+        s.appendChild(previewAll);
+
         const expand = el('button', 'bt-expand', ICON.expand);
         expand.title = 'Open timeline';
         expand.addEventListener('click', () => this.toggleSequencer());
@@ -792,6 +803,7 @@ class BraintranceUI {
         if (this.depthPop || this.cropConfirm) next = el('div');
         else if (this.recordingMode) next = el('div'); // center panel hidden; record bar is full-width
         else if (this.audioMode) next = this.buildAudioBar();
+        else if (this.state === 'selected' && this.selection?.audioIndex != null) next = this.buildAudioBar();
         else if (this.state === 'selected') next = this.contextBar();
         else next = this.snapshotPanel();
         this.bottomCenter.replaceWith(next);
@@ -985,20 +997,15 @@ class BraintranceUI {
         head.appendChild(el('div', 'bt-io-spacer'));
         const prev = el('button', 'bt-io-preview', `${ICON.play}<span>Preview</span>`);
         prev.addEventListener('click', () => this.previewInteraction(i));
-        const prevAll = el('button', 'bt-io-preview is-all', `${ICON.play}<span>Preview all</span>`);
-        prevAll.addEventListener('click', () => this.previewAll(i));
         head.appendChild(prev);
-        head.appendChild(prevAll);
+        const edit = el('button', 'bt-io-edit', `${ICON.zap}<span>Edit changes</span>`);
+        edit.addEventListener('click', () => this.editInteraction(i));
+        head.appendChild(edit);
         const remove = el('button', 'bt-icon-btn', ICON.trash);
         remove.addEventListener('click', () => {
             this.selection.interactions.splice(i, 1); this.openChip = null; this.refreshBottom();
         });
         head.appendChild(remove);
-        const save = el('button', 'bt-io-save', 'Save Interaction');
-        save.addEventListener('click', () => {
-            this.openChip = null; this.closeInteractions();
-        });
-        head.appendChild(save);
         bar.appendChild(head);
 
         // When <trigger>
@@ -1029,14 +1036,19 @@ class BraintranceUI {
         });
         bar.appendChild(cards);
 
-        bar.appendChild(el('div', 'bt-io-note', 'Make changes within the scene to play on interaction. Click save when finished.'));
+        bar.appendChild(el('div', 'bt-io-note', 'Preview to play this interaction, or Edit changes to re-record what it does.'));
         return bar;
     }
 
     // play a single interaction: spin + glow-pulse the object that owns it
-    private previewInteraction(i: number) {
-        const ent = this.selection.entity;
-        const mat = this.selection.mat;
+    private previewInteraction(_i: number) {
+        this.previewObject(this.selection);
+    }
+
+    // spin + glow-pulse one object to show its interaction "playing"
+    private previewObject(obj: SceneObject) {
+        const ent = obj.entity;
+        const mat = obj.mat;
         if (!ent) return;
         const start = performance.now();
         const dur = 900;
@@ -1062,10 +1074,21 @@ class BraintranceUI {
         requestAnimationFrame(tick);
     }
 
-    // preview everything together: roll the timeline (video) and play the interaction
-    private previewAll(i: number) {
-        if (!this.playing) this.togglePlay();
-        this.previewInteraction(i);
+    // global "preview all": roll the timeline (video) and fire every object's interactions
+    private previewAll() {
+        if (!this.playing) {
+            this.togglePlay(); this.refreshBottom();
+        }
+        this.objects.forEach((o) => {
+            if (o.interactions.length) this.previewObject(o);
+        });
+    }
+
+    // re-record an existing interaction's changes (Edit)
+    private editInteraction(i: number) {
+        this.editingInteraction = i;
+        this.openChip = null;
+        this.startRecording();
     }
 
     // ── audio mode (Objects panel + audio contextual bar + placed pins) ──
@@ -1166,10 +1189,14 @@ class BraintranceUI {
         } catch (e) { /* preview is best-effort */ }
     }
 
-    // add a stereo (global) sound to the scene — no positioning needed
+    // add a stereo (global) sound — it still gets a world-space pin (at the origin) so it
+    // can be selected/moved later, even though it plays globally.
     private addStereo() {
         const s = this.audioSources[this.activeAudio];
-        if (s) s.placed = true;
+        if (s) {
+            this.dropAudioPin(0, 0, 0);
+            s.placed = true;
+        }
         this.rebuildAudio();
     }
 
@@ -1185,7 +1212,8 @@ class BraintranceUI {
         const scene = this.scene;
         if (!scene?.contentRoot) return;
         const mat = new StandardMaterial();
-        mat.useLighting = false; mat.diffuse.set(0, 0, 0); mat.emissive.set(0.13, 0.78, 0.6); mat.update();
+        mat.useLighting = false;
+        mat.diffuse.copy(AUDIO_DIFFUSE); mat.emissive.copy(AUDIO_DIFFUSE); mat.emissiveIntensity = 1; mat.update();
         const pin = new Entity('bt-audio-pin');
         pin.addComponent('render', { type: 'sphere' });
         if (pin.render) pin.render.material = mat;
@@ -1193,6 +1221,17 @@ class BraintranceUI {
         pin.setLocalPosition(x, y, z);
         scene.contentRoot.addChild(pin);
         this.audioMarkers.push(pin);
+        // the pin is a selectable object linked back to its sound (green idle, not red)
+        const src = this.audioSources[this.activeAudio];
+        this.objects.push({
+            entity: pin,
+            mat,
+            name: src?.name ?? 'Audio',
+            effects: [],
+            interactions: [],
+            idle: AUDIO_DIFFUSE.clone(),
+            audioIndex: this.activeAudio
+        });
         scene.forceRender = true;
     }
 
@@ -1213,22 +1252,23 @@ class BraintranceUI {
         if (s.placed) head.appendChild(el('div', 'bt-ab-replace', 'Replace')); // only once it's in the scene
         bar.appendChild(head);
 
-        const controls = el('div', 'bt-ab-controls');
-        const vol = el('div', 'bt-ab-vol', '<span>Volume</span>');
-        const slider = el('input') as HTMLInputElement;
-        slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(s.volume);
-        const val = el('span', 'bt-ab-val', String(s.volume));
-        slider.addEventListener('input', () => {
-            s.volume = +slider.value; val.textContent = String(s.volume);
-        });
-        vol.appendChild(slider); vol.appendChild(val);
-        controls.appendChild(vol);
-        // range only applies to spatial (3D) sounds; stereo plays at a fixed level everywhere
-        if (s.kind === 'Spatial') controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
-        controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
-        bar.appendChild(controls);
-
-        if (!s.placed) {
+        if (s.placed) {
+            // Volume / Range / Loop only matter once the sound is actually in the scene.
+            const controls = el('div', 'bt-ab-controls');
+            const vol = el('div', 'bt-ab-vol', '<span>Volume</span>');
+            const slider = el('input') as HTMLInputElement;
+            slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = String(s.volume);
+            const val = el('span', 'bt-ab-val', String(s.volume));
+            slider.addEventListener('input', () => {
+                s.volume = +slider.value; val.textContent = String(s.volume);
+            });
+            vol.appendChild(slider); vol.appendChild(val);
+            controls.appendChild(vol);
+            // range only applies to spatial (3D) sounds; stereo plays at a fixed level everywhere
+            if (s.kind === 'Spatial') controls.appendChild(el('div', 'bt-ab-range', `<span>Range</span><strong>${s.range}m</strong>`));
+            controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
+            bar.appendChild(controls);
+        } else {
             const label = s.kind === 'Spatial' ?
                 (this.placingAudio ? 'Click in the scene to place…' : 'Place in scene') :
                 'Add to scene';
@@ -1296,17 +1336,28 @@ class BraintranceUI {
         this.recordingMode = false;
         this.recordBorder?.remove(); this.recordBorder = null;
         this.recordBar?.remove(); this.recordBar = null;
+        const editing = this.editingInteraction;
+        this.editingInteraction = null;
         if (commit) {
             const phrase: Record<string, string> = {
                 Clicked: 'On click', Hovered: 'On hover', 'Looked at': 'On look', Nearby: 'When nearby'
             };
-            this.selection.interactions.push({
-                trigger,
-                label: `${phrase[trigger] ?? 'On click'} → changes`,
-                targets: [{ name: this.selection.name, changes: 'Move, Rotate', thisObject: true }]
-            }); // bumps the badge
+            if (editing != null && this.selection.interactions[editing]) {
+                // editing an existing interaction: update its trigger/label, keep its targets
+                const it = this.selection.interactions[editing];
+                it.trigger = trigger;
+                it.label = `${phrase[trigger] ?? 'On click'} → changes`;
+                this.openChip = editing; // reopen its overview
+            } else {
+                this.selection.interactions.push({
+                    trigger,
+                    label: `${phrase[trigger] ?? 'On click'} → changes`,
+                    targets: [{ name: this.selection.name, changes: 'Move, Rotate', thisObject: true }]
+                }); // bumps the badge
+                this.openChip = null; // show the chip list with the new one
+            }
         }
-        this.interactionsMode = true; // return to the interaction list (showing the new one)
+        this.interactionsMode = true; // back to the interaction list / overview
         this.refreshBottom();
     }
 
@@ -1578,7 +1629,8 @@ class BraintranceUI {
     // switch the active object mid-recording without exiting the recording session
     private selectDuringRecording(obj: SceneObject) {
         if (this.boxMat && this.boxMat !== obj.mat) {
-            this.boxMat.diffuse.copy(IDLE_DIFFUSE); this.boxMat.emissive.copy(IDLE_DIFFUSE); this.boxMat.update();
+            const idle = this.selection?.idle ?? IDLE_DIFFUSE;
+            this.boxMat.diffuse.copy(idle); this.boxMat.emissive.copy(idle); this.boxMat.update();
         }
         this.box = obj.entity; this.boxMat = obj.mat; this.selection = obj;
         this.boxMat.diffuse.copy(SEL_DIFFUSE); this.boxMat.emissive.copy(SEL_DIFFUSE); this.boxMat.update();
@@ -1895,13 +1947,15 @@ class BraintranceUI {
     // switch the active selection to a different world object
     private selectSceneObject(obj: SceneObject) {
         if (this.boxMat && this.boxMat !== obj.mat) { // revert the old object's colour
-            this.boxMat.diffuse.copy(IDLE_DIFFUSE);
-            this.boxMat.emissive.copy(IDLE_DIFFUSE);
+            const idle = this.selection?.idle ?? IDLE_DIFFUSE;
+            this.boxMat.diffuse.copy(idle);
+            this.boxMat.emissive.copy(idle);
             this.boxMat.update();
         }
         this.box = obj.entity;
         this.boxMat = obj.mat;
         this.selection = obj;
+        if (obj.audioIndex != null) this.activeAudio = obj.audioIndex; // selecting a pin edits its sound
         this.selectObject(true); // yellow + selected chrome + gizmo
     }
 
@@ -1917,7 +1971,7 @@ class BraintranceUI {
         this.recordBar?.remove(); this.recordBar = null;
         this.clearGizmo(); // drop any gizmo from the previously-selected object so it re-attaches to this one
         if (this.boxMat && this.box?.enabled !== false) {
-            const c = sel ? SEL_DIFFUSE : IDLE_DIFFUSE;
+            const c = sel ? SEL_DIFFUSE : (this.selection?.idle ?? IDLE_DIFFUSE);
             this.boxMat.diffuse.copy(c);
             this.boxMat.emissive.copy(c);
             this.boxMat.update();
