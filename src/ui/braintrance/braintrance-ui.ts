@@ -164,6 +164,7 @@ class BraintranceUI {
     private audioPanel: HTMLElement | null = null;
     private audioBar: HTMLElement | null = null;
     private placingAudio = false;
+    private audioCtx: AudioContext | null = null;   // lazily-created, for audition tones
     private audioMarkers: Entity[] = [];
     private activeAudio = 1;
     private audioSources = [
@@ -1040,16 +1041,53 @@ class BraintranceUI {
     private audioTile(name: string, kind: string): HTMLElement {
         const tile = el('div', 'bt-tile',
             `<div class="bt-tile-sw is-audio">${ICON.audio}</div><span class="bt-tile-label">${name}</span>`);
-        tile.addEventListener('click', () => this.spawnAudio(name, kind));
+        tile.addEventListener('click', () => this.previewAudio(name, kind));
         return tile;
     }
 
-    // spawn the clicked sound; spatial ones drop a pin at world origin (then re-Place to move)
-    private spawnAudio(name: string, kind: string) {
-        this.audioSources.push({ name, kind, volume: 50, range: 8, loop: false, placed: kind === 'Stereo' });
-        this.activeAudio = this.audioSources.length - 1;
-        if (kind === 'Spatial') this.dropAudioPin(0, 0.3, 0);
-        this.refreshBottom(); // audio bar for the new source
+    // Audition the clicked sound and set it as the pending source — but DON'T add it to
+    // the scene yet. That happens via the bar's "Place in scene" / "Add to scene" button.
+    private previewAudio(name: string, kind: string) {
+        this.playPreviewTone(name);
+        const cur = this.audioSources[this.activeAudio];
+        if (cur && !cur.placed) {
+            cur.name = name; cur.kind = kind;   // still auditioning → swap the pending sound
+        } else {
+            this.audioSources.push({ name, kind, volume: 50, range: 8, loop: false, placed: false });
+            this.activeAudio = this.audioSources.length - 1;
+        }
+        this.refreshBottom(); // show the audio bar (Preview + Place button)
+    }
+
+    // short synthesized audition tone (the library is faked), pitched by the sound name
+    private playPreviewTone(name: string) {
+        try {
+            const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+            this.audioCtx = this.audioCtx ?? new Ctx();
+            const ctx = this.audioCtx;
+            if (ctx.state === 'suspended') ctx.resume();
+            const now = ctx.currentTime;
+            let h = 0;
+            for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
+            const base = 200 + (h % 14) * 32;
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = (['sine', 'triangle', 'square', 'sawtooth'] as const)[h % 4];
+            osc.frequency.setValueAtTime(base, now);
+            osc.frequency.exponentialRampToValueAtTime(base * 1.5, now + 0.16);
+            gain.gain.setValueAtTime(0.0001, now);
+            gain.gain.exponentialRampToValueAtTime(0.16, now + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
+            osc.connect(gain); gain.connect(ctx.destination);
+            osc.start(now); osc.stop(now + 0.52);
+        } catch (e) { /* preview is best-effort */ }
+    }
+
+    // add a stereo (global) sound to the scene — no positioning needed
+    private addStereo() {
+        const s = this.audioSources[this.activeAudio];
+        if (s) s.placed = true;
+        this.rebuildAudio();
     }
 
     private dropAudioPin(x: number, y: number, z: number) {
@@ -1074,6 +1112,10 @@ class BraintranceUI {
         const head = el('div', 'bt-ab-head');
         head.appendChild(el('div', 'bt-ab-name', `${ICON.globe}<span>${s.name}</span>`));
         head.appendChild(el('div', 'bt-ab-badge', s.kind));
+        head.appendChild(el('div', 'bt-ab-spacer'));
+        const preview = el('div', 'bt-ab-preview', `${ICON.play}<span>Preview</span>`);
+        preview.addEventListener('click', () => this.playPreviewTone(s.name));
+        head.appendChild(preview);
         head.appendChild(el('div', 'bt-ab-replace', 'Replace'));
         bar.appendChild(head);
 
@@ -1091,9 +1133,12 @@ class BraintranceUI {
         controls.appendChild(el('label', 'bt-ab-loop', `<input type="checkbox" ${s.loop ? 'checked' : ''}/><span>Loop audio</span>`));
         bar.appendChild(controls);
 
-        if (s.kind === 'Spatial' && !s.placed) {
-            const place = el('button', 'bt-ab-place', this.placingAudio ? 'Click in the scene to place…' : 'Place in scene');
-            place.addEventListener('click', () => this.armPlace());
+        if (!s.placed) {
+            const label = s.kind === 'Spatial' ?
+                (this.placingAudio ? 'Click in the scene to place…' : 'Place in scene') :
+                'Add to scene';
+            const place = el('button', 'bt-ab-place', label);
+            place.addEventListener('click', () => (s.kind === 'Spatial' ? this.armPlace() : this.addStereo()));
             bar.appendChild(place);
         }
         return bar;
@@ -1359,15 +1404,62 @@ class BraintranceUI {
                 this.placeAudioAt(e.clientX, e.clientY); return;
             }
             if (this.audioMode) return;
-            if (this.recordingMode) return;
-            // selection-first: a click selects whatever's under it (any tool but a draw
-            // mode). Camera navigation stays on drag/WASD; F frames the selection.
-            if (!drawMode()) {
+            if (this.recordingMode) {
+                // While recording an interaction you can retarget which object you're
+                // changing — pick it without tearing down the recording session.
+                if (!drawMode()) {
+                    const obj = this.pickObjectAt(e.clientX, e.clientY);
+                    if (obj) this.selectDuringRecording(obj);
+                }
+                return;
+            }
+            if (drawMode()) return; // lasso/crop draws are handled above
+            if (this.selectMode === 'sam') {
+                // Select mode: a click picks/selects the object under it.
                 const obj = this.pickObjectAt(e.clientX, e.clientY);
                 if (obj) this.selectSceneObject(obj);
                 else this.selectObject(false);
+            } else {
+                // Explore mode: navigate — click an object to centre it (if it's near),
+                // click blank space to step forward into the scene.
+                this.exploreNavigate(e.clientX, e.clientY);
             }
         });
+    }
+
+    // Explore navigation: centre a nearby object, else glide forward into the scene.
+    private exploreNavigate(clientX: number, clientY: number) {
+        const cam = this.scene?.camera;
+        const camEntity = this.scene?.app?.root?.findByName?.('Camera');
+        if (!cam || !camEntity) return;
+        const camPos = camEntity.getPosition();
+        const worldDist = Math.max(camPos.distance(cam.focalPoint), 0.001);
+        const obj = this.pickObjectAt(clientX, clientY);
+        if (obj && obj.entity.enabled !== false) {
+            const objPos = obj.entity.getPosition();
+            // "close enough": within ~1.3× the current focal distance → centre it
+            if (camPos.distance(objPos) <= worldDist * 1.3) {
+                cam.setFocalPoint(objPos.clone(), 1);
+                this.pumpRender(700);
+                return;
+            }
+        }
+        // blank space (or a far object) → step forward along the view direction
+        const step = Math.max(worldDist * 0.4, 0.3);
+        const newFocal = cam.focalPoint.add(camEntity.forward.clone().mulScalar(step));
+        cam.setFocalPoint(newFocal, 1);
+        this.pumpRender(700);
+    }
+
+    // switch the active object mid-recording without exiting the recording session
+    private selectDuringRecording(obj: SceneObject) {
+        if (this.boxMat && this.boxMat !== obj.mat) {
+            this.boxMat.diffuse.copy(IDLE_DIFFUSE); this.boxMat.emissive.copy(IDLE_DIFFUSE); this.boxMat.update();
+        }
+        this.box = obj.entity; this.boxMat = obj.mat; this.selection = obj;
+        this.boxMat.diffuse.copy(SEL_DIFFUSE); this.boxMat.emissive.copy(SEL_DIFFUSE); this.boxMat.update();
+        this.clearGizmo(); // a transform tool re-attaches to the newly targeted object
+        if (this.scene) this.scene.forceRender = true;
     }
 
     // ── lasso (Shape) selection: draw a region, then choose its depth ──

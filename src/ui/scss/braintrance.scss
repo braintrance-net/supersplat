@@ -690,7 +690,13 @@ body.bt-mode {
             svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
         .bt-ab-badge { font-size: 11px; font-weight: 600; color: var(--bt-ink-2);
             background: #eee; border-radius: 6px; padding: 2px 8px; }
-        .bt-ab-replace { margin-left: auto; font-size: 13px; color: var(--bt-ink-2); cursor: pointer;
+        .bt-ab-spacer { flex: 1; }
+        .bt-ab-preview { display: inline-flex; align-items: center; gap: 5px;
+            font-size: 13px; font-weight: 600; color: var(--bt-audio); cursor: pointer;
+            padding: 4px 10px; border-radius: 6px;
+            svg { width: 13px; height: 13px; }
+            &:hover { background: rgba(33, 163, 102, 0.1); } }
+        .bt-ab-replace { font-size: 13px; color: var(--bt-ink-2); cursor: pointer;
             padding: 4px 10px; border-radius: 6px; &:hover { background: var(--bt-hover); } }
     }
     .bt-ab-controls {
