@@ -17,7 +17,7 @@ Options:
   --case-index <n|a,b|a-b>
                          Replay only selected zero-based case indexes
   --limit <n>            Replay at most this many cases after filtering
-  --prompt-type <type>   Override click prompts, e.g. client_click, client_brush, brush_sam, direct_lift_click, detect_all_click, or client_lift_target_box
+  --prompt-type <type>   Override click prompts, e.g. client_click, client_brush, client_brush_floor_snap, brush_sam, brush_sam_clean, direct_lift_click, detect_all_click, or client_lift_target_box
   --brush-shape <shape>  For client_brush: circle or rect (default: circle)
   --brush-radius <px>    For client_brush circle prompts (default: 180)
   --brush-width <px>     For client_brush rect prompts (default: radius * 2)
@@ -184,7 +184,7 @@ const withPromptOverride = (evalCase, args) => {
     const canOmitClick = type === 'lift_target_box' || type === 'client_lift_target_box';
     if (!evalCase.prompt?.click_xy && !canOmitClick) return evalCase;
     const buildBrush = () => {
-        if (type !== 'client_brush' && type !== 'brush_sam') return {};
+        if (type !== 'client_brush' && type !== 'client_brush_floor_snap' && type !== 'brush_sam' && type !== 'brush_sam_clean') return {};
         if (evalCase.prompt.brush && !args.brushShape && args.brushRadius === undefined && args.brushWidth === undefined && args.brushHeight === undefined && args.brushPad === undefined) {
             return { brush: evalCase.prompt.brush };
         }
@@ -479,6 +479,7 @@ const buildCandidateDebug = (replay) => {
         } : null,
         sam3: sam3 ? {
             applied: sam3.applied,
+            mode: sam3.mode ?? null,
             mask_area_ratio: sam3.mask_area_ratio,
             region: sam3.region,
             error: sam3.error ?? sam3.debug?.error,
@@ -830,6 +831,7 @@ const buildCaseReport = (result) => {
         } : undefined,
         sam3: sam3 ? {
             applied: sam3.applied,
+            mode: sam3.mode ?? null,
             succeeded: samSucceeded(result),
             mask_area_ratio: sam3.mask_area_ratio ?? sam3.debug?.mask_area_ratio ?? null,
             rejection_reason: sam3.debug?.rejection_reason ?? null,
@@ -1287,8 +1289,12 @@ const hasRequiredBrushPoints = (result) => {
     if (
         replayPrompt?.type !== 'client_brush' &&
         sourcePrompt?.type !== 'client_brush' &&
+        replayPrompt?.type !== 'client_brush_floor_snap' &&
+        sourcePrompt?.type !== 'client_brush_floor_snap' &&
         replayPrompt?.type !== 'brush_sam' &&
-        sourcePrompt?.type !== 'brush_sam'
+        sourcePrompt?.type !== 'brush_sam' &&
+        replayPrompt?.type !== 'brush_sam_clean' &&
+        sourcePrompt?.type !== 'brush_sam_clean'
     ) return true;
     const points = replayPrompt?.brush?.points ?? sourcePrompt?.brush?.points;
     const consumedPointCount = result.report?.client_brush?.brush_stroke_point_count ??
@@ -1298,7 +1304,12 @@ const hasRequiredBrushPoints = (result) => {
 };
 
 const evalCaseHasRequiredBrushPoints = (evalCase) => {
-    if (evalCase.prompt?.type !== 'client_brush' && evalCase.prompt?.type !== 'brush_sam') return true;
+    if (
+        evalCase.prompt?.type !== 'client_brush' &&
+        evalCase.prompt?.type !== 'client_brush_floor_snap' &&
+        evalCase.prompt?.type !== 'brush_sam' &&
+        evalCase.prompt?.type !== 'brush_sam_clean'
+    ) return true;
     const points = evalCase.prompt?.brush?.points;
     return Array.isArray(points) && points.length > 0;
 };

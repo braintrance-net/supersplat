@@ -510,7 +510,9 @@ type BoxerEvalPrompt =
     { type: 'click_sam'; click_xy: [number, number] } |
     { type: 'client_click'; click_xy: [number, number] } |
     { type: 'client_brush'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'client_brush_floor_snap'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
     { type: 'brush_sam'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'brush_sam_clean'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
     { type: 'brush_boxer'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; preprocess_mode?: 'full_frame' | 'square_crop'; object_crop?: ObjectCropOptions } |
     { type: 'brush_fused'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; fuse_mode?: 'model_dims' | 'model_depth' } |
     { type: 'detect_all_click'; click_xy: [number, number] } |
@@ -3608,6 +3610,7 @@ const compactBoxerFramePayload = (frame: BoxerFramePayload) => ({
 
 const publishBoxerFrameDebug = (frame: BoxerFramePayload) => {
     (window as any).__lastBoxerFrame = compactBoxerFramePayload(frame);
+    (window as any).__lastBoxerFrameRaw = frame;
 };
 
 const publishBoxerResultDebug = (
@@ -4414,6 +4417,18 @@ type BrushSurfaceEvidence = {
     median_radius_world: number;
     thickness_cut: number;
     thickness_cap: number;
+    support_floor_y?: number;
+    support_floor_sample_count?: number;
+    sam_filter?: {
+        applied: boolean;
+        reason?: string;
+        mask_point_count: number;
+        unfiltered_support_count: number;
+        filtered_support_count: number;
+        unfiltered_core_count: number;
+        filtered_core_count: number;
+        pixel_radius: number;
+    };
 };
 
 const BRUSH_SURFACE_MAX_ANCHOR_SAMPLES = 48;
@@ -4426,6 +4441,130 @@ const BRUSH_SURFACE_THICKNESS_EXTENT_FACTOR = 2.0;
 // calibrated candidate family when none of them reaches this score
 const BRUSH_SURFACE_OVERRIDE_MAX_ALT_SCORE = 1.2;
 
+const filterCandidatesBySamRegion = (
+    frame: BoxerFramePayload,
+    scene: Scene,
+    candidates: ProjectedSplatCandidate[],
+    sam3Region: Sam3MaskRegion | null | undefined
+) => {
+    if (!sam3Region?.mask_bb2d || sam3Region.point_count < 24) {
+        return {
+            candidates,
+            applied: false,
+            reason: 'missing-sam-region',
+            mask_point_count: sam3Region?.point_count ?? 0,
+            pixel_radius: 0
+        };
+    }
+
+    const projectedMaskPoints = sam3Region.points
+    .map(point => projectWorldPointToImage(point, scene, frame.intrinsics))
+    .filter(sample => sample.in_frame);
+    if (projectedMaskPoints.length < 12) {
+        return {
+            candidates,
+            applied: false,
+            reason: 'too-few-projected-mask-points',
+            mask_point_count: sam3Region.point_count,
+            pixel_radius: 0
+        };
+    }
+
+    const maskWidth = Math.max(1, sam3Region.mask_bb2d[2] - sam3Region.mask_bb2d[0]);
+    const maskHeight = Math.max(1, sam3Region.mask_bb2d[3] - sam3Region.mask_bb2d[1]);
+    const pixelRadius = clamp(
+        Math.sqrt(maskWidth * maskHeight / Math.max(1, projectedMaskPoints.length)) * 2.2,
+        4,
+        26
+    );
+    const pixelRadius2 = pixelRadius * pixelRadius;
+    const cellSize = Math.max(4, pixelRadius);
+    const cells = new Map<string, [number, number][]>();
+    for (const sample of projectedMaskPoints) {
+        const key = `${Math.floor(sample.pixel[0] / cellSize)},${Math.floor(sample.pixel[1] / cellSize)}`;
+        const list = cells.get(key) ?? [];
+        list.push(sample.pixel);
+        cells.set(key, list);
+    }
+
+    const nearMaskPoint = (x: number, y: number) => {
+        const cx = Math.floor(x / cellSize);
+        const cy = Math.floor(y / cellSize);
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (const point of cells.get(`${cx + dx},${cy + dy}`) ?? []) {
+                    const px = x - point[0];
+                    const py = y - point[1];
+                    if (px * px + py * py <= pixelRadius2) return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    return {
+        candidates: candidates.filter(candidate => (
+            bbContainsPoint(sam3Region.mask_bb2d, candidate.pixel[0], candidate.pixel[1]) &&
+            nearMaskPoint(candidate.pixel[0], candidate.pixel[1])
+        )),
+        applied: true,
+        mask_point_count: sam3Region.point_count,
+        pixel_radius: pixelRadius
+    };
+};
+
+const estimateSupportFloorY = (
+    surface: ReturnType<typeof getActiveCollisionSurface>,
+    support: ProjectedSplatCandidate[],
+    anchors: BrushSurfaceAnchor[],
+    medianRadiusWorld: number
+) => {
+    if (support.length < 8) return null;
+
+    const hitYs: number[] = [];
+    const anchorStep = Math.max(1, Math.ceil(anchors.length / 16));
+    for (let i = 0; i < anchors.length; i += anchorStep) {
+        const anchor = anchors[i];
+        const lift = Math.max(0.12, medianRadiusWorld * 0.8);
+        const hit = surface?.raycastWorld(
+            [anchor.point[0], anchor.point[1] + lift, anchor.point[2]],
+            [0, -1, 0],
+            Math.max(0.4, lift + medianRadiusWorld * 3.0)
+        );
+        if (hit && hit.point[1] <= anchor.point[1] + 0.08) {
+            hitYs.push(hit.point[1]);
+        }
+    }
+
+    if (hitYs.length >= 3) {
+        hitYs.sort((a, b) => a - b);
+        return {
+            y: hitYs[Math.floor(hitYs.length * 0.15)],
+            sample_count: hitYs.length
+        };
+    }
+
+    const supportYs = support.map(candidate => candidate.point[1]).sort((a, b) => a - b);
+    return {
+        y: supportYs[Math.floor(supportYs.length * 0.02)],
+        sample_count: supportYs.length
+    };
+};
+
+const snapSummaryToFloor = (
+    summary: { center: [number, number, number]; dimensions: [number, number, number]; aabb: Aabb },
+    floorY: number | undefined
+) => {
+    if (floorY === undefined || !(floorY < summary.aabb.max[1])) return summary;
+    const aabb: Aabb = {
+        min: [summary.aabb.min[0], floorY, summary.aabb.min[2]],
+        max: [...summary.aabb.max] as [number, number, number]
+    };
+    const center = [0, 1, 2].map(axis => (aabb.min[axis] + aabb.max[axis]) / 2) as [number, number, number];
+    const dimensions = [0, 1, 2].map(axis => Math.max(0.05, aabb.max[axis] - aabb.min[axis])) as [number, number, number];
+    return { center, dimensions, aabb };
+};
+
 // Lift the 2D brush stroke onto the scene's collision surface: raycast sampled
 // stroke pixels against the collision mesh sidecar, then keep splat candidates
 // inside the resulting world-space brush tube. Depth extent comes from the
@@ -4433,9 +4572,11 @@ const BRUSH_SURFACE_OVERRIDE_MAX_ALT_SCORE = 1.2;
 // cut at the first density gap so background behind the object is excluded.
 const collectBrushSurfaceEvidence = (
     frame: BoxerFramePayload,
+    scene: Scene,
     region: ReturnType<typeof resolveClientBrushRegion>,
     brush: BoxerBrushPrompt | undefined,
-    projectedCandidates: ProjectedSplatCandidate[]
+    projectedCandidates: ProjectedSplatCandidate[],
+    sam3Region?: Sam3MaskRegion | null
 ): BrushSurfaceEvidence | null => {
     const surface = getActiveCollisionSurface();
     if (!surface) return null;
@@ -4563,7 +4704,7 @@ const collectBrushSurfaceEvidence = (
     // distribution from the surface backwards and stops at the first density
     // gap, so a stroke crossing object + background cuts each sightline where
     // ITS object ends instead of using one global thickness
-    const anchorDeltas: number[][] = anchors.map(() => []);
+    const anchorDeltas: number[][] = anchors.map((): number[] => []);
     for (const entry of matched) {
         anchorDeltas[entry.anchorIndex].push(Math.max(0, entry.delta));
     }
@@ -4582,13 +4723,34 @@ const collectBrushSurfaceEvidence = (
     });
     const validCuts = anchorCuts.filter((cut): cut is number => cut !== null).sort((a, b) => a - b);
     const fallbackCut = validCuts.length ? validCuts[Math.floor(validCuts.length / 2)] : thicknessCap;
-    const support = matched
+    let support = matched
     .filter(entry => entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
     .map(entry => entry.candidate);
-    const coreSupport = matched
+    let coreSupport = matched
     .filter(entry => entry.core && entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
     .map(entry => entry.candidate);
+    let samFilter: BrushSurfaceEvidence['sam_filter'];
+    if (sam3Region) {
+        const filteredSupport = filterCandidatesBySamRegion(frame, scene, support, sam3Region);
+        const filteredCore = filterCandidatesBySamRegion(frame, scene, coreSupport, sam3Region);
+        const canApply = filteredSupport.applied && filteredSupport.candidates.length >= 8;
+        samFilter = {
+            applied: canApply,
+            reason: canApply ? undefined : (filteredSupport.reason ?? 'too-few-filtered-support'),
+            mask_point_count: filteredSupport.mask_point_count,
+            unfiltered_support_count: support.length,
+            filtered_support_count: filteredSupport.candidates.length,
+            unfiltered_core_count: coreSupport.length,
+            filtered_core_count: filteredCore.candidates.length,
+            pixel_radius: filteredSupport.pixel_radius
+        };
+        if (canApply) {
+            support = filteredSupport.candidates;
+            coreSupport = filteredCore.candidates.length >= 3 ? filteredCore.candidates : filteredSupport.candidates;
+        }
+    }
     const thicknessCut = validCuts.length ? validCuts[validCuts.length - 1] : 0;
+    const floor = estimateSupportFloorY(surface, support, anchors, medianRadiusWorld);
 
     return {
         anchors,
@@ -4598,7 +4760,10 @@ const collectBrushSurfaceEvidence = (
         anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
         median_radius_world: medianRadiusWorld,
         thickness_cut: thicknessCut,
-        thickness_cap: thicknessCap
+        thickness_cap: thicknessCap,
+        support_floor_y: floor?.y,
+        support_floor_sample_count: floor?.sample_count,
+        sam_filter: samFilter
     };
 };
 
@@ -4636,7 +4801,7 @@ const buildRawBrushObb = (
 ) => {
     const region = resolveClientBrushRegion(frame, brush, click);
     const baseProjected = collectProjectedSplatCandidates(splat, scene, frame.intrinsics, region.bb2d);
-    const surfaceEvidence = collectBrushSurfaceEvidence(frame, region, brush, baseProjected);
+    const surfaceEvidence = collectBrushSurfaceEvidence(frame, scene, region, brush, baseProjected);
 
     let selected: ProjectedSplatCandidate[];
     let selectionSource: 'surface_tube' | 'mask_2d';
@@ -4684,7 +4849,7 @@ const buildRawBrushObb = (
                 thickness_cap: surfaceEvidence.thickness_cap
             } : { available: false as const },
             selected_candidate_source: 'raw_extents',
-            candidates: []
+            candidates: [] as { selection_score: number; bb2d: NormalizedBb2d }[]
         }
     };
 };
@@ -4695,7 +4860,8 @@ const buildClientBrushObb = (
     scene: Scene,
     depthBuffer: DepthBuffer,
     brush: BoxerBrushPrompt | undefined,
-    click?: [number, number]
+    click?: [number, number],
+    options?: { sam3Region?: Sam3MaskRegion | null; floorSnap?: boolean }
 ) => {
     const region = resolveClientBrushRegion(frame, brush, click);
     const clickDepth = click ? sampleDepthArea(depthBuffer, frame.image_width, frame.image_height, click[0], click[1]) : 0;
@@ -4771,7 +4937,7 @@ const buildClientBrushObb = (
         brushKnnClusterCapped = strictCluster.length >= strictMaxPoints || relaxedCluster.length >= relaxedMaxPoints;
     }
 
-    const surfaceEvidence = collectBrushSurfaceEvidence(frame, region, brush, baseProjected);
+    const surfaceEvidence = collectBrushSurfaceEvidence(frame, scene, region, brush, baseProjected, options?.sam3Region);
 
     const selectedBrush = connectedCluster.length >= 24 ? connectedCluster : sourceCandidates;
     const selectedBb = bboxFromProjectedCandidates(selectedBrush, frame.image_width, frame.image_height);
@@ -5024,11 +5190,14 @@ const buildClientBrushObb = (
         // brush_surface support already carries true object thickness from the
         // anchor-ray density cut, so skip the depth-spread clamp that would
         // squash it back down to the front shell
-        const summary = source === 'brush_ray' ?
+        const rawSummary = source === 'brush_ray' ?
             null :
             source === 'brush_surface' ?
                 (summarizeBrushSurfaceAabb(points) ?? summarizePointAabb(points)) :
                 (summarizePointAabbRobust(points, cameraDepthAxis, depthSpread) ?? summarizePointAabb(points));
+        const summary = rawSummary && source === 'brush_surface' && options?.floorSnap ?
+            snapSummaryToFloor(rawSummary, surfaceEvidence?.support_floor_y) :
+            rawSummary;
         const obb = source === 'brush_ray' ? buildRayObb() : (summary ? buildAxisAlignedObbFromAabb(summary.aabb, 'client_brush', 'client_brush', bb) : null);
         if (!obb) return null;
         if (source === 'brush_component' && (bb[3] - bb[1]) / Math.max(1, bb[2] - bb[0]) < 0.75) {
@@ -5165,6 +5334,10 @@ const buildClientBrushObb = (
                 median_radius_world: surfaceEvidence.median_radius_world,
                 thickness_cut: surfaceEvidence.thickness_cut,
                 thickness_cap: surfaceEvidence.thickness_cap,
+                support_floor_y: surfaceEvidence.support_floor_y,
+                support_floor_sample_count: surfaceEvidence.support_floor_sample_count,
+                floor_snap_applied: !!options?.floorSnap,
+                sam_filter: surfaceEvidence.sam_filter,
                 core_aabb: summarizeBrushSurfaceAabb(surfaceEvidence.core_support.map(candidate => candidate.point))?.aabb ?? null,
                 // subsampled support cloud for offline multi-view fusion
                 support_sample: (() => {
@@ -5753,7 +5926,7 @@ class BoxerSelection {
         let busy = false;
         let currentCorners: Vec3[] | null = null;
         let lastEvalPrompt: BoxerEvalPrompt | null = null;
-        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' | 'brush_boxer' }> | null = null;
+        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'client_brush_floor_snap' | 'brush_sam' | 'brush_sam_clean' | 'brush_boxer' }> | null = null;
         let lastBrushReplay: unknown | null = null;
         let brushPanelStatus: 'idle' | 'running' | 'done' | 'failed' = 'idle';
         let lastEvalFrame: ReturnType<typeof summarizeFrameForEval> | null = null;
@@ -5929,7 +6102,7 @@ class BoxerSelection {
                 (brushPanelStatus === 'done' ? 'Ready to save' : (brushPanelStatus === 'failed' ? 'Run failed' : 'Ready'));
             brushPanel.innerHTML = `
                 <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;">
-                    <strong style="font-size:12px;">${lastBrushPrompt.type === 'brush_sam' ? 'SAM Brush Test' : 'Boxer Brush Test'}</strong>
+                    <strong style="font-size:12px;">${lastBrushPrompt.type === 'brush_sam' || lastBrushPrompt.type === 'brush_sam_clean' ? 'SAM Brush Test' : 'Boxer Brush Test'}</strong>
                     <span>${statusText}</span>
                 </div>
                 <div>stroke radius ${fmtNum(radius, 1)} · box ${Math.round(x1 - x0)}x${Math.round(y1 - y0)}</div>
@@ -6637,7 +6810,7 @@ class BoxerSelection {
             brush: BoxerBrushPrompt | undefined,
             click: [number, number] | undefined,
             target?: BoxerEvalTarget | null,
-            options?: { useSam?: boolean }
+            options?: { useSam?: boolean; samClean?: boolean; floorSnap?: boolean }
         ) => {
             const t0 = performance.now();
             const splat = (events.invoke('selection') as Splat | null) ??
@@ -6645,7 +6818,7 @@ class BoxerSelection {
             if (!splat) {
                 throw new Error('No splat loaded');
             }
-            if (options?.useSam) {
+            if (options?.useSam || options?.samClean) {
                 clearBoxerResultOverlay();
                 events.fire('select.none');
             }
@@ -6655,23 +6828,18 @@ class BoxerSelection {
             await waitForCollisionSurface();
 
             const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
-                includeImage: !!options?.useSam,
-                includeEncodedDepth: false
+                includeImage: !!options?.useSam || !!options?.samClean || (window as any).__boxerExportFullFrame === true,
+                includeEncodedDepth: (window as any).__boxerExportFullFrame === true
             });
             const tFrame = performance.now();
             publishBoxerFrameDebug(frame);
-            lastEvalPrompt = { type: options?.useSam ? 'brush_sam' : 'client_brush', ...(click ? { click_xy: click } : {}), brush };
+            lastEvalPrompt = { type: options?.samClean ? 'brush_sam_clean' : options?.floorSnap ? 'client_brush_floor_snap' : options?.useSam ? 'brush_sam' : 'client_brush', ...(click ? { click_xy: click } : {}), brush };
             lastEvalFrame = summarizeFrameForEval(frame);
             lastEvalCamera = events.invoke('camera.debugState') as CameraDebugState;
 
-            const local = brush?.mode === 'raw' ?
-                buildRawBrushObb(frame, splat, scene, brush, click) :
-                buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
-            const obb = local.obb;
-            const rawObb = cloneObb(obb);
             let sam3Region: Sam3MaskRegion | null = null;
             let sam3Debug: Sam3MaskDebug | undefined;
-            if (options?.useSam) {
+            if (options?.useSam || options?.samClean) {
                 const samClick = click ?? brush?.center_xy;
                 if (samClick) {
                     sam3Debug = { attempts: [] };
@@ -6688,8 +6856,16 @@ class BoxerSelection {
                 .join(', ');
                 throw new Error(`SAM brush failed: ${reason}${attempts ? ` (${attempts})` : ''}`);
             }
+            const local = brush?.mode === 'raw' ?
+                buildRawBrushObb(frame, splat, scene, brush, click) :
+                buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click, {
+                    sam3Region: options?.samClean ? sam3Region : null,
+                    floorSnap: options?.floorSnap
+                });
+            const obb = local.obb;
+            const rawObb = cloneObb(obb);
             const buildGeometryRefinement = (): GeometryRefinement => {
-                if (sam3Region) {
+                if (sam3Region && options?.useSam) {
                     return refineObbFromBoxedPoints(
                         obb,
                         frame,
@@ -6738,8 +6914,12 @@ class BoxerSelection {
                 ...local.debug
             };
             if (sam3Debug) {
+                const brushSurfaceDebug = local.debug.brush_surface as { sam_filter?: { applied?: boolean } } | undefined;
                 debugResult.sam3_augmentation = {
-                    applied: geometryRefinement.reason === 'sam3-click-mask-connected-region',
+                    applied: options?.samClean ?
+                        brushSurfaceDebug?.sam_filter?.applied === true :
+                        geometryRefinement.reason === 'sam3-click-mask-connected-region',
+                    mode: options?.samClean ? 'mask-cleanup' : 'geometry-refinement',
                     region: sam3Region ? {
                         mask_bb2d: sam3Region.mask_bb2d,
                         point_count: sam3Region.point_count,
@@ -6774,7 +6954,7 @@ class BoxerSelection {
             show2DBoxLayers(overlayLayers);
             const tDone = performance.now();
             updateDebugPanel({
-                mode: options?.useSam ? 'brush sam' : 'client brush',
+                mode: options?.samClean ? 'brush sam clean' : options?.floorSnap ? 'client brush floor snap' : options?.useSam ? 'brush sam' : 'client brush',
                 endpoint: 'local geometry',
                 label: obb.label,
                 confidence: obb.confidence,
@@ -7003,13 +7183,13 @@ class BoxerSelection {
             };
         };
 
-        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' | 'brush_boxer' }>) => {
+        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'client_brush_floor_snap' | 'brush_sam' | 'brush_sam_clean' | 'brush_boxer' }>) => {
             lastBrushPrompt = prompt;
             lastBrushReplay = null;
             brushPanelStatus = 'running';
             renderBrushPanel();
             console.log('[Boxer] captured brush prompt', prompt);
-            events.fire('toast', prompt.type === 'brush_sam' ? 'Running SAM brush selection' : prompt.type === 'brush_boxer' ? 'Running Boxer model brush lift' : 'Running local brush selection', 'info');
+            events.fire('toast', prompt.type === 'brush_sam' || prompt.type === 'brush_sam_clean' ? 'Running SAM brush selection' : prompt.type === 'brush_boxer' ? 'Running Boxer model brush lift' : 'Running local brush selection', 'info');
             void new Promise<void>(resolve => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }).then(() => runLastBrushBoxer()).then(() => {
@@ -7051,7 +7231,11 @@ class BoxerSelection {
                         lastBrushPrompt.brush,
                         lastBrushPrompt.click_xy,
                         target ? cloneEvalTarget(target) : null,
-                        { useSam: lastBrushPrompt.type === 'brush_sam' }
+                        {
+                            useSam: lastBrushPrompt.type === 'brush_sam',
+                            samClean: lastBrushPrompt.type === 'brush_sam_clean',
+                            floorSnap: lastBrushPrompt.type === 'client_brush_floor_snap'
+                        }
                     );
                 lastBrushReplay = replay;
                 brushPanelStatus = 'done';
@@ -7814,7 +7998,9 @@ class BoxerSelection {
                     evalCase.prompt?.type !== 'click_sam' &&
                     evalCase.prompt?.type !== 'client_click' &&
                     evalCase.prompt?.type !== 'client_brush' &&
+                    evalCase.prompt?.type !== 'client_brush_floor_snap' &&
                     evalCase.prompt?.type !== 'brush_sam' &&
+                    evalCase.prompt?.type !== 'brush_sam_clean' &&
                     evalCase.prompt?.type !== 'brush_boxer' &&
                     evalCase.prompt?.type !== 'brush_fused' &&
                     evalCase.prompt?.type !== 'detect_all_click' &&
@@ -7823,7 +8009,7 @@ class BoxerSelection {
                     evalCase.prompt?.type !== 'client_lift_target_box' &&
                     evalCase.prompt?.type !== 'lift_box'
                 ) {
-                    throw new Error('Only click, click_sam, client_click, client_brush, brush_sam, detect_all_click, direct_lift_click, lift_target_box, client_lift_target_box, and lift_box eval cases can be replayed right now');
+                    throw new Error('Only click, click_sam, client_click, client_brush, client_brush_floor_snap, brush_sam, brush_sam_clean, detect_all_click, direct_lift_click, lift_target_box, client_lift_target_box, and lift_box eval cases can be replayed right now');
                 }
 
                 busy = true;
@@ -7880,6 +8066,14 @@ class BoxerSelection {
                             click ? [click.x, click.y] : undefined,
                             evalCase.target ?? null
                         );
+                    } else if (evalCase.prompt.type === 'client_brush_floor_snap') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'client_brush_floor_snap' }>;
+                        replay = await executeClientBrush(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            { floorSnap: true }
+                        );
                     } else if (evalCase.prompt.type === 'brush_sam') {
                         const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_sam' }>;
                         replay = await executeClientBrush(
@@ -7887,6 +8081,14 @@ class BoxerSelection {
                             click ? [click.x, click.y] : undefined,
                             evalCase.target ?? null,
                             { useSam: true }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_sam_clean') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_sam_clean' }>;
+                        replay = await executeClientBrush(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            { samClean: true }
                         );
                     } else if (evalCase.prompt.type === 'brush_fused') {
                         const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_fused' }>;

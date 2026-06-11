@@ -507,6 +507,65 @@ main things we tried, what happened, and which paths still look worth pursuing.
     scripts/boxer-evals/live-brush-evals.jsonl
     scripts/boxer-evals/desk-can-brush-human-v1.json`
 
+## 2026-06-11 Four Last Single-View Bets After 0.815 Multi-View
+
+- Context: after the 0.815 multi-view result, Jonam asked whether the
+  single-view line was truly exhausted and asked to try four remaining ideas:
+  SAM mask cleanup of the brush tube, support-plane snap, BoxNet object-crop
+  scale/proposal sweep, and a real DA3 proof on the Windows RTX 5070.
+- Baseline rerun for comparison:
+  - Command family: replay both verified fixtures with `client_brush` and
+    summarize via `scripts/summarize-brush-variant-results.mjs`.
+  - Result: `20/20` ok, avg AABB IoU `0.562`; laptop `0.589`, can `0.602`,
+    glasses `0.430`.
+- Support-plane snap - fail:
+  - Added `client_brush_floor_snap`, estimating a support floor Y from the
+    collision surface / support cloud and snapping the brush-surface candidate
+    bottom to it.
+  - Result: `20/20` ok, avg AABB IoU `0.559`; floor snap applied on all 20.
+    Can stayed flat, laptop and glasses regressed slightly.
+  - Interpretation: support-floor evidence is diagnosable, but snapping the
+    visible tube to the floor is not a quality win on these verified targets.
+- SAM-clean tube filter - neutral:
+  - Added `brush_sam_clean`, preserving the local brush geometry but using a
+    returned SAM mask only to filter brush-surface support candidates.
+  - Result: `20/20` ok, avg AABB IoU `0.562`, identical to baseline at this
+    aggregate. SAM reports existed on all 20; the support filter applied on
+    only 4/20 because the projected SAM support was often too sparse.
+  - Interpretation: the endpoint path and reporting now work, but this mask
+    cleanup did not improve the current suite.
+- BoxNet object-crop sweep - fail:
+  - Ran `brush_boxer` one case per fresh browser session with object crop scale
+    `2.8` and world scale `0.2` to avoid the hosted Boxer wedge.
+  - Raw object-crop result: `20/20` ok, avg AABB IoU `0.532`; laptop `0.594`,
+    can `0.561`, glasses `0.350`.
+  - Tested using object-crop model dimensions as a coverage-placed prior over
+    the local support cloud: avg `0.317` on the same 20 rows versus baseline
+    `0.562`.
+  - Interpretation: object crop did not fix BoxNet placement, and its dimensions
+    are not a useful prior for this scene without a stronger placement signal.
+- DA3 single-frame CUDA proof - feasible but not a quality unlock yet:
+  - Windows proof env: Python `3.13.14`, `torch 2.11.0+cu128`, CUDA available
+    on `NVIDIA GeForce RTX 5070`.
+  - Exported exact replay artifact:
+    `/mnt/c/temp/da3-proof/frame-live-0/{frame.png,depth.float32.b64,metadata.json}`.
+  - Ran `depth-anything/DA3-SMALL` on the exported frame. It produced a
+    `266x504` depth/confidence map; model load was about `1.09s` after cache,
+    inference about `0.60s`.
+  - Alignment against SuperSplat CPU center-zbuffer depth:
+    all valid pixels `corr=0.442`, linear-aligned MAE `1.56`, RMSE `2.43`;
+    brush bbox `corr=0.391`, MAE `0.87`, RMSE `1.52`.
+  - Artifact:
+    `/mnt/c/temp/da3-proof/frame-live-0/{da3-small-output.npz,da3-small-summary.json}`.
+  - Interpretation: DA3 can run locally and is fast enough for more experiments,
+    but this first single-frame relative-depth prior is only moderately aligned
+    to the rendered splat depth. Do not wire it into candidate selection until
+    it changes a hard case positively.
+- Overall verdict: these four did not change the earlier single-view ceiling
+  story. The best proven quality path remains multi-view / more constrained
+  input; single-view needs a stronger semantic/shape prior, not another small
+  geometric cleanup knob.
+
 ## 2026-06-10 Per-Ray Depth Clustering + Raw Brush + Case Editor
 
 - Per-ray depth clustering (replaces the global gap walk):
