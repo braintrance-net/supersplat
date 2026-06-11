@@ -115,6 +115,7 @@ const application = {
                 { src: 'static/lib', dest: 'static' },
                 { src: 'static/locales', dest: 'static' },
                 { src: 'static/dev-assets', dest: 'static' },
+                { src: 'scripts/boxer-evals', dest: 'static', destFilename: 'evals' },
                 { src: 'static/env/VertebraeHDRI_v1_512.png', dest: 'static/env' }
             ]
         }),

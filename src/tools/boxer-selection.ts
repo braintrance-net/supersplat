@@ -498,6 +498,9 @@ type BoxerBrushPrompt = {
     pad?: number;
     // constant world-space brush radius when the stroke was drawn in 3D mode
     radius_world?: number;
+    // 'raw' = pure extents box from the brushed gaussians, no candidate
+    // competition, no calibrated priors, no refinement
+    mode?: 'raw';
 };
 type BoxerEvalPrompt =
     { type: 'click'; click_xy: [number, number] } |
@@ -4500,7 +4503,7 @@ const collectBrushSurfaceEvidence = (
     );
 
     const strokeCandidates = projectedCandidates.filter(region.contains);
-    const matched: { candidate: ProjectedSplatCandidate; delta: number }[] = [];
+    const matched: { candidate: ProjectedSplatCandidate; delta: number; anchorIndex: number }[] = [];
     for (const candidate of strokeCandidates) {
         const px = candidate.point[0] - origin[0];
         const py = candidate.point[1] - origin[1];
@@ -4508,7 +4511,9 @@ const collectBrushSurfaceEvidence = (
         const lengthSq = px * px + py * py + pz * pz;
         let bestDelta = Infinity;
         let bestPerp = Infinity;
-        for (const anchor of anchors) {
+        let bestAnchorIndex = -1;
+        for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex++) {
+            const anchor = anchors[anchorIndex];
             const t = px * anchor.dir[0] + py * anchor.dir[1] + pz * anchor.dir[2];
             const delta = t - anchor.distance;
             if (delta < -BRUSH_SURFACE_BACK_TOLERANCE || delta > thicknessCap) continue;
@@ -4518,10 +4523,11 @@ const collectBrushSurfaceEvidence = (
             if (perpSq < bestPerp) {
                 bestPerp = perpSq;
                 bestDelta = delta;
+                bestAnchorIndex = anchorIndex;
             }
         }
-        if (Number.isFinite(bestDelta)) {
-            matched.push({ candidate, delta: bestDelta });
+        if (bestAnchorIndex >= 0) {
+            matched.push({ candidate, delta: bestDelta, anchorIndex: bestAnchorIndex });
         }
     }
     if (matched.length === 0) {
@@ -4536,18 +4542,33 @@ const collectBrushSurfaceEvidence = (
         };
     }
 
-    // walk the depth-delta distribution from the surface backwards and stop at
-    // the first density gap: that is where the object ends and background starts
-    const gapThreshold = Math.max(0.4, medianRadiusWorld * 2.2);
-    const sortedDeltas = matched.map(entry => Math.max(0, entry.delta)).sort((a, b) => a - b);
-    let thicknessCut = sortedDeltas[0];
-    for (let i = 1; i < sortedDeltas.length; i++) {
-        if (sortedDeltas[i] - thicknessCut > gapThreshold) break;
-        thicknessCut = sortedDeltas[i];
+    // per-ray depth clustering: each anchor ray walks its own depth-delta
+    // distribution from the surface backwards and stops at the first density
+    // gap, so a stroke crossing object + background cuts each sightline where
+    // ITS object ends instead of using one global thickness
+    const anchorDeltas: number[][] = anchors.map(() => []);
+    for (const entry of matched) {
+        anchorDeltas[entry.anchorIndex].push(Math.max(0, entry.delta));
     }
+    const PER_RAY_MIN_SAMPLES = 4;
+    const anchorCuts: (number | null)[] = anchors.map((anchor, anchorIndex) => {
+        const deltas = anchorDeltas[anchorIndex];
+        if (deltas.length < PER_RAY_MIN_SAMPLES) return null;
+        deltas.sort((a, b) => a - b);
+        const gapThreshold = Math.max(0.35, anchor.radius_world * 1.8);
+        let cut = deltas[0];
+        for (let i = 1; i < deltas.length; i++) {
+            if (deltas[i] - cut > gapThreshold) break;
+            cut = deltas[i];
+        }
+        return cut;
+    });
+    const validCuts = anchorCuts.filter((cut): cut is number => cut !== null).sort((a, b) => a - b);
+    const fallbackCut = validCuts.length ? validCuts[Math.floor(validCuts.length / 2)] : thicknessCap;
     const support = matched
-    .filter(entry => entry.delta <= thicknessCut + 1e-6)
+    .filter(entry => entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
     .map(entry => entry.candidate);
+    const thicknessCut = validCuts.length ? validCuts[validCuts.length - 1] : 0;
 
     return {
         anchors,
@@ -4577,6 +4598,72 @@ const summarizeBrushSurfaceAabb = (
         aabb: {
             min: [0, 1, 2].map(axis => center[axis] - dimensions[axis] / 2) as [number, number, number],
             max: [0, 1, 2].map(axis => center[axis] + dimensions[axis] / 2) as [number, number, number]
+        }
+    };
+};
+
+// Pure-extents brush: box the gaussians the stroke actually touched and
+// nothing else. Uses the collision-surface tube when available (true 3D
+// selection including back-of-object splats), otherwise the 2D stroke mask
+// over front-surface candidates. No candidate competition, no priors.
+const buildRawBrushObb = (
+    frame: BoxerFramePayload,
+    splat: Splat,
+    scene: Scene,
+    brush: BoxerBrushPrompt | undefined,
+    click?: [number, number]
+) => {
+    const region = resolveClientBrushRegion(frame, brush, click);
+    const baseProjected = collectProjectedSplatCandidates(splat, scene, frame.intrinsics, region.bb2d);
+    const surfaceEvidence = collectBrushSurfaceEvidence(frame, region, brush, baseProjected);
+
+    let selected: ProjectedSplatCandidate[];
+    let selectionSource: 'surface_tube' | 'mask_2d';
+    if (surfaceEvidence && surfaceEvidence.support.length >= 8) {
+        selected = surfaceEvidence.support;
+        selectionSource = 'surface_tube';
+    } else {
+        const frontSurface = filterFrontSurfaceProjectedCandidates(baseProjected, frame.image_width, frame.image_height);
+        const pool = frontSurface.length >= 24 ? frontSurface : baseProjected;
+        selected = pool.filter(region.contains);
+        selectionSource = 'mask_2d';
+    }
+    if (selected.length < 8) {
+        throw new Error(`raw brush found too few gaussians in the stroke (${selected.length})`);
+    }
+
+    const summary = summarizeBrushSurfaceAabb(selected.map(candidate => candidate.point));
+    if (!summary) {
+        throw new Error('raw brush could not summarize the selected gaussians');
+    }
+    const bb2d = bboxFromProjectedCandidates(selected, frame.image_width, frame.image_height) ?? region.bb2d;
+    const obb = buildAxisAlignedObbFromAabb(summary.aabb, 'raw_brush', 'raw_brush', bb2d);
+
+    return {
+        obb,
+        bb2d,
+        debug: {
+            shape: region.shape,
+            center_xy: region.center,
+            radius: region.radius,
+            brush_bb2d: region.bb2d,
+            brush_area_ratio: region.area_ratio,
+            brush_stroke_point_count: region.point_count,
+            raw_mode: true,
+            raw_selection_source: selectionSource,
+            raw_selected_point_count: selected.length,
+            base_projected_candidate_count: baseProjected.length,
+            brush_surface: surfaceEvidence ? {
+                anchor_count: surfaceEvidence.anchors.length,
+                sampled_point_count: surfaceEvidence.sampled_point_count,
+                anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
+                support_count: surfaceEvidence.support.length,
+                median_radius_world: surfaceEvidence.median_radius_world,
+                thickness_cut: surfaceEvidence.thickness_cut,
+                thickness_cap: surfaceEvidence.thickness_cap
+            } : { available: false as const },
+            selected_candidate_source: 'raw_extents',
+            candidates: []
         }
     };
 };
@@ -6523,7 +6610,9 @@ class BoxerSelection {
             lastEvalFrame = summarizeFrameForEval(frame);
             lastEvalCamera = events.invoke('camera.debugState') as CameraDebugState;
 
-            const local = buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
+            const local = brush?.mode === 'raw' ?
+                buildRawBrushObb(frame, splat, scene, brush, click) :
+                buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
             const obb = local.obb;
             const rawObb = cloneObb(obb);
             let sam3Region: Sam3MaskRegion | null = null;
@@ -6555,7 +6644,9 @@ class BoxerSelection {
                     click ? { click_xy: click, depthBuffer } : undefined,
                     sam3Region
                 ) :
-                (local.debug.selected_candidate_source === 'brush_ray' || local.debug.selected_candidate_source === 'brush_surface' || local.debug.preserve_client_brush_geometry ?
+                (brush?.mode === 'raw' ?
+                { applied: false as const, reason: 'raw-brush-extents' } :
+                local.debug.selected_candidate_source === 'brush_ray' || local.debug.selected_candidate_source === 'brush_surface' || (local.debug as { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry ?
                 { applied: false as const, reason: 'client-brush-ray-prior' } :
                 refineObbFromBoxedPoints(
                     obb,

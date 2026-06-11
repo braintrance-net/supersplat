@@ -112,6 +112,12 @@ class BottomToolbar extends Container {
         });
         brushSamSelect.dom.classList.add('bottom-toolbar-variant-tool');
 
+        const brushRawSelect = new Button({
+            id: 'bottom-toolbar-brush-raw',
+            class: 'bottom-toolbar-tool'
+        });
+        brushRawSelect.dom.classList.add('bottom-toolbar-variant-tool');
+
         const boxerAll = new Button({
             id: 'bottom-toolbar-boxer-all',
             class: 'bottom-toolbar-text-tool',
@@ -167,8 +173,10 @@ class BottomToolbar extends Container {
         boxer.dom.appendChild(createSvg(boxerSvg));
         brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
         brushSamSelect.dom.appendChild(createSvg(samSvg));
+        brushRawSelect.dom.appendChild(createSvg(brushSvg));
         addVariantBadge(brushBoxerSelect, 'B');
         addVariantBadge(brushSamSelect, 'S');
+        addVariantBadge(brushRawSelect, 'R');
         manualBox.dom.appendChild(createSvg(boxSvg));
         semanticScan.dom.appendChild(createSvg(semanticScanSvg));
         simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
@@ -178,6 +186,7 @@ class BottomToolbar extends Container {
         appendSimplified(boxer);
         appendSimplified(brushBoxerSelect);
         appendSimplified(brushSamSelect);
+        appendSimplified(brushRawSelect);
         appendSimplified(boxerAll);
         appendSimplified(manualBox);
         appendSimplified(samModeWrap);
@@ -219,10 +228,10 @@ class BottomToolbar extends Container {
             e.preventDefault();
             events.fire('voice.toggleWakeWord');
         });
-        let brushVariant: 'boxer' | 'sam' = 'boxer';
-        const activateBrushVariant = (variant: 'boxer' | 'sam') => {
+        let brushVariant: 'boxer' | 'sam' | 'raw' = 'boxer';
+        const activateBrushVariant = (variant: 'boxer' | 'sam' | 'raw') => {
             const activeTool = events.invoke('tool.active');
-            const currentVariant = (events.invoke('brushSelection.getVariant') as 'boxer' | 'sam' | undefined) ?? brushVariant;
+            const currentVariant = (events.invoke('brushSelection.getVariant') as 'boxer' | 'sam' | 'raw' | undefined) ?? brushVariant;
             if (activeTool === 'brushSelection' && currentVariant === variant) {
                 events.fire('tool.brushSelection');
                 return;
@@ -238,6 +247,7 @@ class BottomToolbar extends Container {
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
         brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariant('boxer'));
         brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
+        brushRawSelect.dom.addEventListener('click', () => activateBrushVariant('raw'));
         boxerAll.dom.addEventListener('click', async () => {
             try {
                 await events.invoke('boxer.runDetectAll');
@@ -255,6 +265,7 @@ class BottomToolbar extends Container {
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
         tooltips.register(brushBoxerSelect, 'Brush Boxer');
         tooltips.register(brushSamSelect, 'Brush SAM');
+        tooltips.register(brushRawSelect, 'Brush Raw (no model, pure extents)');
         tooltips.register(boxerAll, 'Boxer Detect All');
         tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(semanticScan, 'Scan Semantic Labels');
@@ -410,6 +421,7 @@ class BottomToolbar extends Container {
         const syncBrushVariantActive = (toolName: string | null | undefined) => {
             brushBoxerSelect.class[toolName === 'brushSelection' && brushVariant === 'boxer' ? 'add' : 'remove']('active');
             brushSamSelect.class[toolName === 'brushSelection' && brushVariant === 'sam' ? 'add' : 'remove']('active');
+            brushRawSelect.class[toolName === 'brushSelection' && brushVariant === 'raw' ? 'add' : 'remove']('active');
         };
 
         events.on('tool.activated', (toolName: string) => {
@@ -432,8 +444,8 @@ class BottomToolbar extends Container {
             eyedropper.class[toolName === 'eyedropperSelection' ? 'add' : 'remove']('active');
         });
 
-        events.on('brushSelection.variant.changed', (variant: 'boxer' | 'sam') => {
-            brushVariant = variant === 'sam' ? 'sam' : 'boxer';
+        events.on('brushSelection.variant.changed', (variant: 'boxer' | 'sam' | 'raw') => {
+            brushVariant = variant === 'sam' || variant === 'raw' ? variant : 'boxer';
             syncBrushVariantActive(events.invoke('tool.active'));
         });
 

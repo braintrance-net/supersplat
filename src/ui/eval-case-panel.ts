@@ -281,11 +281,26 @@ class EvalCasePanel {
         }
 
         async function saveFile() {
-            if (!fileHandle || cases.length === 0) return;
+            if (cases.length === 0) return;
             try {
                 const text = format === 'jsonl' ?
                     `${cases.map(entry => JSON.stringify(entry)).join('\n')}\n` :
                     JSON.stringify(cases, null, 2);
+                // auto-loaded fixtures have no disk handle yet; ask for one so
+                // the user can overwrite the real scripts/boxer-evals file
+                if (!fileHandle) {
+                    const savePicker = (window as unknown as {
+                        showSaveFilePicker?: (options?: unknown) => Promise<FileSystemFileHandle>;
+                    }).showSaveFilePicker;
+                    if (!savePicker) {
+                        metricsInfo.textContent = 'File System Access API unavailable in this browser';
+                        return;
+                    }
+                    fileHandle = await savePicker({
+                        suggestedName: fileName || 'evals.json',
+                        types: [{ description: 'Eval fixtures', accept: { 'application/json': ['.json', '.jsonl'] } }]
+                    });
+                }
                 const writable = await (fileHandle as FileSystemFileHandle & {
                     createWritable: () => Promise<{ write: (data: string) => Promise<void>; close: () => Promise<void> }>;
                 }).createWritable();
@@ -295,11 +310,42 @@ class EvalCasePanel {
                 updateFileInfo();
                 metricsInfo.textContent = `saved ${fileName}`;
             } catch (err) {
-                metricsInfo.textContent = `save failed: ${err instanceof Error ? err.message : err}`;
+                if ((err as Error)?.name !== 'AbortError') {
+                    metricsInfo.textContent = `save failed: ${err instanceof Error ? err.message : err}`;
+                }
+            }
+        }
+
+        // auto-load the primary brush fixture served alongside the dev build;
+        // saving will prompt for the real file location on disk
+        async function autoLoad() {
+            const candidates = [
+                'desk-can-brush-human-v1.json',
+                'live-brush-evals.jsonl',
+                'desk-can-latest3.json'
+            ];
+            for (const name of candidates) {
+                try {
+                    const response = await fetch(`./static/evals/${name}`);
+                    if (!response.ok) continue;
+                    const parsed = parseFixture(await response.text(), name);
+                    fileHandle = null;
+                    fileName = name;
+                    cases = parsed.cases;
+                    format = parsed.format;
+                    selectedIndex = -1;
+                    dirty = false;
+                    updateFileInfo();
+                    renderList();
+                    return;
+                } catch {
+                    // try the next fixture
+                }
             }
         }
 
         updateFileInfo();
+        autoLoad();
     }
 }
 

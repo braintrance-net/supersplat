@@ -1,6 +1,6 @@
 import { Events } from '../events';
 
-type BrushSelectionVariant = 'boxer' | 'sam';
+type BrushSelectionVariant = 'boxer' | 'sam' | 'raw';
 
 class BrushSelection {
     activate: () => void;
@@ -17,6 +17,12 @@ class BrushSelection {
         const circle = document.createElementNS(svg.namespaceURI, 'circle') as SVGCircleElement;
         svg.appendChild(circle);
 
+        // surface-conforming outline used in 3D mode: a ring of raycasts
+        // against the collision mesh, so the cursor folds over corners
+        const surfaceOutline = document.createElementNS(svg.namespaceURI, 'polygon') as SVGPolygonElement;
+        surfaceOutline.style.display = 'none';
+        svg.appendChild(surfaceOutline);
+
         const { canvas, context } = mask;
 
         let radius = 40;
@@ -30,16 +36,28 @@ class BrushSelection {
         let variant: BrushSelectionVariant = 'boxer';
 
         // 3D brush mode: when a collision surface is loaded for the scene, the
-        // brush keeps a constant world-space radius and the screen circle
-        // adapts to the surface depth under the cursor.
+        // brush keeps a constant world-space radius and the cursor conforms to
+        // the surface depth/shape under the pointer.
         let radiusWorld: number | null = null;
         let lastPxPerWorld: number | null = null;
+        // transient probe misses (mesh gaps, edges) coast on the last good
+        // conversion instead of flickering back to 2D mode
+        let surfaceMissStreak = 0;
+        const SURFACE_MISS_TOLERANCE = 14;
+
+        type SurfaceProbeHit = { point: [number, number, number]; distance: number; world_per_screen_height: number };
 
         const probeSurface = (x: number, y: number) => {
             const width = parent.clientWidth || 1;
             const height = parent.clientHeight || 1;
-            return events.invoke('collisionSurface.screenProbe', x / width, y / height) as
-                { point: [number, number, number]; distance: number; world_per_screen_height: number } | null | undefined;
+            return events.invoke('collisionSurface.screenProbe', x / width, y / height) as SurfaceProbeHit | null | undefined;
+        };
+
+        const probeSurfaceRing = (x: number, y: number, rWorld: number) => {
+            const width = parent.clientWidth || 1;
+            const height = parent.clientHeight || 1;
+            return events.invoke('collisionSurface.ringProbe', x / width, y / height, rWorld, 20) as
+                { center: SurfaceProbeHit; ring: [number, number][] } | null | undefined;
         };
 
         const controls = document.createElement('div');
@@ -106,14 +124,24 @@ class BrushSelection {
             }
         };
 
+        const exitSurfaceMode = () => {
+            svg.classList.remove('surface-mode');
+            surfaceOutline.style.display = 'none';
+            circle.style.display = '';
+            controlLabel.textContent = 'Brush Size';
+        };
+
         const applySurfaceRadius = (x: number, y: number) => {
-            const hit = probeSurface(x, y);
+            const ringResult = radiusWorld !== null ? probeSurfaceRing(x, y, radiusWorld) : null;
+            const hit = ringResult?.center ?? probeSurface(x, y);
             if (!hit || !(hit.world_per_screen_height > 0)) {
-                svg.classList.remove('surface-mode');
-                controlLabel.textContent = 'Brush Size';
+                surfaceMissStreak += 1;
+                if (surfaceMissStreak > SURFACE_MISS_TOLERANCE) {
+                    exitSurfaceMode();
+                }
                 return;
             }
-            controlLabel.textContent = 'Brush Size · 3D';
+            surfaceMissStreak = 0;
             const pxPerWorld = (parent.clientHeight || 1) / hit.world_per_screen_height;
             if (!(pxPerWorld > 0)) return;
             if (radiusWorld === null) {
@@ -121,7 +149,25 @@ class BrushSelection {
             }
             lastPxPerWorld = pxPerWorld;
             svg.classList.add('surface-mode');
-            setRadius(radiusWorld * pxPerWorld);
+            controlLabel.textContent = 'Brush Size · 3D';
+
+            // ease toward the target size so depth edges do not snap the cursor
+            const targetRadius = radiusWorld * pxPerWorld;
+            setRadius(radius + (targetRadius - radius) * 0.45);
+
+            if (ringResult?.ring?.length) {
+                const width = parent.clientWidth || 1;
+                const height = parent.clientHeight || 1;
+                surfaceOutline.setAttribute(
+                    'points',
+                    ringResult.ring.map(point => `${(point[0] * width).toFixed(1)},${(point[1] * height).toFixed(1)}`).join(' ')
+                );
+                surfaceOutline.style.display = '';
+                circle.style.display = 'none';
+            } else {
+                surfaceOutline.style.display = 'none';
+                circle.style.display = '';
+            }
         };
 
         const addPoint = (x: number, y: number) => {
@@ -169,7 +215,8 @@ class BrushSelection {
                     radius: promptRadius,
                     bb2d,
                     points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
-                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {})
+                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {}),
+                    ...(variant === 'raw' ? { mode: 'raw' } : {})
                 }
             };
         };
@@ -292,6 +339,8 @@ class BrushSelection {
             // probe, in case the scene or camera changed since last activation
             radiusWorld = null;
             lastPxPerWorld = null;
+            surfaceMissStreak = 0;
+            exitSurfaceMode();
             svg.classList.remove('hidden');
             controls.classList.remove('hidden');
             parent.style.display = 'block';
@@ -324,7 +373,7 @@ class BrushSelection {
         });
 
         events.on('brushSelection.variant', (value: BrushSelectionVariant) => {
-            variant = value === 'sam' ? 'sam' : 'boxer';
+            variant = value === 'sam' || value === 'raw' ? value : 'boxer';
             events.fire('brushSelection.variant.changed', variant);
         });
 

@@ -459,6 +459,31 @@ main things we tried, what happened, and which paths still look worth pursuing.
   - Next levers: per-ray depth clustering instead of the global gap walk,
     surface-anchored scoring of OTHER candidates, multi-view strokes.
 
+## 2026-06-10 Per-Ray Depth Clustering + Raw Brush + Case Editor
+
+- Per-ray depth clustering (replaces the global gap walk):
+  - Each anchor ray sorts its own depth deltas and cuts at the first density
+    gap (`max(0.35, radius_world * 1.8)`); rays with < 4 samples fall back to
+    the median cut of the other rays.
+  - Recovered human suite: avg IoU `0.692` -> `0.700`. Only the
+    surface-selected case moved (`0.481` -> `0.536`); all calibrated winners
+    byte-identical.
+  - Tighter gap (`max(0.28, 1.3x)`) tested: `0.529` on the same case —
+    noise-level worse, reverted.
+- Brush Raw (`brush.mode='raw'`, toolbar badge `R`):
+  - Pure extents box of the gaussians the stroke touched: collision-surface
+    tube when available, else 2D stroke mask over front-surface candidates.
+    No candidates, no priors, no refinement.
+  - Case 0 sanity: raw `0.533` vs calibrated client_brush `0.891` — useful
+    as the honest "what does the brush alone give you" baseline in the UI.
+- Eval case editor (DEV_TOOLS): auto-loads `/static/evals/<fixture>` copies
+  (rollup now copies `scripts/boxer-evals` into the bundle); Save prompts
+  for the real on-disk fixture via showSaveFilePicker when auto-loaded.
+- 3D brush UX: probe-miss hysteresis (no orange/blue flicker at mesh gaps),
+  eased radius transitions, and a surface-conforming outline polygon
+  (`collisionSurface.ringProbe`, 20 ring raycasts re-projected to screen) so
+  the cursor folds over corners and edges.
+
 ## 2026-06-09 SAM3 Stateless Endpoint Proof
 
 - SAM backend update:

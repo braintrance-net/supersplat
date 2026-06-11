@@ -18,11 +18,13 @@
         }
 
         // depth-adaptive 3D mode: brush is anchored to the collision surface
-        &.surface-mode > circle {
+        &.surface-mode > circle,
+        &.surface-mode > polygon {
             fill: rgba(0, 210, 255, 0.16);
             stroke: #00d2ff;
             stroke-width: 1.5;
             stroke-dasharray: none;
+            stroke-linejoin: round;
         }
     }
 

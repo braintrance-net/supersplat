@@ -465,7 +465,7 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     // Returns the world hit plus the world-height the viewport spans at that
     // depth, so callers can convert between pixel and world brush radii.
     const probeRay = new Ray();
-    events.function('collisionSurface.screenProbe', (x: number, y: number) => {
+    const probeAt = (x: number, y: number) => {
         if (!activeSurface) return null;
         const { width, height } = scene.camera.targetSize;
         scene.camera.getRay(x * width, y * height, probeRay);
@@ -484,6 +484,53 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
             distance: hit.distance,
             world_per_screen_height: 2 * Math.tan(fovY / 2) * hit.distance
         };
+    };
+    events.function('collisionSurface.screenProbe', probeAt);
+
+    // Probe a ring of points around the cursor so the brush outline can
+    // conform to the surface: each ring direction is re-cast from the camera
+    // through a world-space circle around the central hit, and the actual
+    // surface hits are projected back to normalized screen coordinates. Over
+    // corners and edges the outline folds with the geometry.
+    const ringRay = new Ray();
+    const ringWorld = new Vec3();
+    const ringScreen = new Vec3();
+    events.function('collisionSurface.ringProbe', (x: number, y: number, radiusWorld: number, sampleCount = 20) => {
+        const center = probeAt(x, y);
+        if (!center || !activeSurface || !(radiusWorld > 0)) return null;
+        const { width, height } = scene.camera.targetSize;
+        const origin = scene.camera.mainCamera.getPosition();
+        const forward = scene.camera.mainCamera.forward;
+
+        // tangent basis perpendicular to the view direction
+        const upRef = Math.abs(forward.y) > 0.94 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
+        const u = new Vec3().cross(forward, upRef).normalize();
+        const v = new Vec3().cross(u, forward).normalize();
+
+        const ring: [number, number][] = [];
+        for (let i = 0; i < sampleCount; i++) {
+            const angle = i / sampleCount * Math.PI * 2;
+            const cos = Math.cos(angle) * radiusWorld;
+            const sin = Math.sin(angle) * radiusWorld;
+            ringWorld.set(
+                center.point[0] + u.x * cos + v.x * sin,
+                center.point[1] + u.y * cos + v.y * sin,
+                center.point[2] + u.z * cos + v.z * sin
+            );
+            ringRay.origin.copy(origin);
+            ringRay.direction.copy(ringWorld).sub(origin).normalize();
+            const hit = activeSurface.raycastWorld(
+                [ringRay.origin.x, ringRay.origin.y, ringRay.origin.z],
+                [ringRay.direction.x, ringRay.direction.y, ringRay.direction.z],
+                center.distance + radiusWorld * 6
+            );
+            const point = hit ? hit.point : [ringWorld.x, ringWorld.y, ringWorld.z];
+            ringScreen.set(point[0], point[1], point[2]);
+            scene.camera.camera.worldToScreen(ringScreen, ringScreen);
+            ring.push([ringScreen.x / Math.max(1, width), ringScreen.y / Math.max(1, height)]);
+        }
+
+        return { center, ring };
     });
 };
 
