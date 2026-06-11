@@ -97,6 +97,11 @@ declare global {
             runBoxerDetectAll: () => Promise<unknown>;
             copyBoxerEvalCase: (payload?: unknown) => Promise<unknown>;
             copyBoxerClickTestCase: (payload?: unknown) => Promise<unknown>;
+            getLastBrushBoxerPrompt: () => unknown;
+            runLastBrushBoxer: (payload?: unknown) => Promise<unknown>;
+            copyLastBrushBoxerEvalCase: (payload?: unknown) => Promise<unknown>;
+            getBrushSelectionRadius: () => unknown;
+            setBrushSelectionRadius: (value: number) => unknown;
             setBoxerEvalTarget: (payload?: unknown) => unknown;
             getBoxerEvalTarget: () => unknown;
             clearBoxerEvalTarget: () => unknown;
@@ -377,6 +382,21 @@ const main = async () => {
         },
         copyBoxerClickTestCase: (payload?: unknown) => {
             return events.invoke('boxer.copyClickTestCase', payload);
+        },
+        getLastBrushBoxerPrompt: () => {
+            return events.invoke('boxer.getLastBrushPrompt');
+        },
+        runLastBrushBoxer: (payload?: unknown) => {
+            return events.invoke('boxer.runLastBrush', payload);
+        },
+        copyLastBrushBoxerEvalCase: (payload?: unknown) => {
+            return events.invoke('boxer.copyLastBrushEvalCase', payload);
+        },
+        getBrushSelectionRadius: () => {
+            return events.invoke('brushSelection.getRadius');
+        },
+        setBrushSelectionRadius: (value: number) => {
+            return events.invoke('brushSelection.setRadius', value);
         },
         setBoxerEvalTarget: (payload?: unknown) => {
             return events.invoke('boxer.setStickyEvalTarget', payload);

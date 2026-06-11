@@ -37,6 +37,7 @@ const ANNOTATION_AUTHORING_CAPTURE = 'supersplat:annotation-authoring-capture';
 const ANNOTATION_ANCHOR_CAPTURED = 'supersplat:annotation-anchor-captured';
 const POINTER_LOOK = 'supersplat:pointer-look';
 const WALK_INPUT = 'supersplat:walk-input';
+const WALK_SAVE_HEIGHT = 'supersplat:walk-save-height';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
 const SCREEN_SURFACE = 'supersplat:screen-surface';
@@ -46,6 +47,8 @@ const RAYCAST = 'supersplat:raycast';
 const RAYCAST_RESULT = 'supersplat:raycast-result';
 const RENDER_WARMUP = 'supersplat:render-warmup';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
+const COLLISION_DEBUG_BUNDLE_GET = 'supersplat:collision-debug-bundle-get';
+const COLLISION_DEBUG_BUNDLE = 'supersplat:collision-debug-bundle';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -230,7 +233,14 @@ interface WalkInputMessage {
         sprint?: boolean;
         slide?: boolean;
         jump?: boolean;
+        up?: boolean;
+        down?: boolean;
     };
+}
+
+interface WalkSaveHeightMessage {
+    type: typeof WALK_SAVE_HEIGHT;
+    requestId?: RequestId;
 }
 
 interface CrosshairClickMessage {
@@ -246,6 +256,11 @@ interface RenderWarmupMessage {
 
 interface ViewerPerfResetMessage {
     type: typeof VIEWER_PERF_RESET;
+}
+
+interface CollisionDebugBundleGetMessage {
+    type: typeof COLLISION_DEBUG_BUNDLE_GET;
+    requestId?: RequestId;
 }
 
 interface MultiplayerPlayersMessage {
@@ -463,6 +478,10 @@ const isWalkInputMessage = (data: any): data is WalkInputMessage => {
     return data && typeof data === 'object' && data.type === WALK_INPUT && data.keys && typeof data.keys === 'object';
 };
 
+const isWalkSaveHeightMessage = (data: any): data is WalkSaveHeightMessage => {
+    return data && typeof data === 'object' && data.type === WALK_SAVE_HEIGHT;
+};
+
 const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
     return data && typeof data === 'object' && data.type === CROSSHAIR_CLICK && hasOptionalRequestId(data) && hasOptionalScreenPoint(data);
 };
@@ -473,6 +492,10 @@ const isRenderWarmupMessage = (data: any): data is RenderWarmupMessage => {
 
 const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => {
     return data && typeof data === 'object' && data.type === VIEWER_PERF_RESET;
+};
+
+const isCollisionDebugBundleGetMessage = (data: any): data is CollisionDebugBundleGetMessage => {
+    return data && typeof data === 'object' && data.type === COLLISION_DEBUG_BUNDLE_GET && hasOptionalRequestId(data);
 };
 
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
@@ -919,7 +942,9 @@ const registerIframeApi = (events: Events) => {
         input?.right ||
         input?.sprint ||
         input?.slide ||
-        input?.jump
+        input?.jump ||
+        input?.up ||
+        input?.down
     );
 
     const stopActiveRender = () => {
@@ -1401,13 +1426,23 @@ const registerIframeApi = (events: Events) => {
                     crosshairClick: true,
                     pointerLook: true,
                     walkInput: true,
+                    walkSaveHeight: true,
                     thumbnailError: true,
                     multiplayerPlayers: true,
                     screenSurface: true,
                     screenFrameBytes: true,
                     raycast: true,
+                    collisionDebugBundle: true,
                     version: 7
                 },
+                ...requestIdPayload(event.data.requestId)
+            }, event.origin);
+        }
+
+        if (isCollisionDebugBundleGetMessage(event.data)) {
+            source.postMessage({
+                type: COLLISION_DEBUG_BUNDLE,
+                result: events.invoke('walk.collisionDebugBundle') ?? null,
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
         }
@@ -1524,6 +1559,15 @@ const registerIframeApi = (events: Events) => {
             activeRenderWalkHeld = hasWalkInput(event.data.keys);
             events.fire('walk.input', event.data.keys);
             scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);
+            return;
+        }
+
+        if (isWalkSaveHeightMessage(event.data)) {
+            const result = events.invoke('walk.saveFloorHeight', 'message') ?? null;
+            postDiagnostic(source, event.origin, 'walk-save-height', {
+                result
+            }, event.data.requestId);
+            scheduleActiveRender(GAME_MODE_ACTIVE_RENDER_IDLE_MS);
             return;
         }
 
