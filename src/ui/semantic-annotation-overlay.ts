@@ -344,6 +344,9 @@ class SemanticAnnotationOverlay {
     private multiplayerAvatarAsset: Asset | null = null;
     private multiplayerAvatarLoading = false;
     private multiplayerAvatarFailed = false;
+    // VRM avatars face the opposite way and are authored at ~human metres, unlike
+    // the bundled Kenney avatar, so orientation and scale are corrected per source.
+    private multiplayerAvatarIsVrm = false;
     private multiplayerAvatarLoadStartedAt: number | null = null;
     private interactionMode: 'edit' | 'game' = 'edit';
     private activeGameTargetIds = new Set<string>();
@@ -668,6 +671,7 @@ class SemanticAnnotationOverlay {
 
             this.multiplayerAvatarLoading = false;
             this.multiplayerAvatarAsset = asset;
+            this.multiplayerAvatarIsVrm = url === MULTIPLAYER_VRM_URL;
             const resource = asset.resource as MultiplayerAvatarContainer | undefined;
             this.emitDiagnostic('multiplayer-avatar-preload-ready', {
                 url,
@@ -945,11 +949,15 @@ class SemanticAnnotationOverlay {
             forwardZ = player.target[2] - player.position[2];
         }
         if (forwardX * forwardX + forwardZ * forwardZ > 1e-6) {
-            const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES;
+            const vrmFlip = this.multiplayerAvatarIsVrm ? 180 : 0;
+            const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES + vrmFlip;
             instance.entity.setEulerAngles(0, yaw, 0);
         }
 
-        const scale = avatarWorldHeight / MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
+        // VRM models are authored at roughly human metres (~1.6 tall) rather than
+        // the Kenney source height, so they sink/shrink without a per-source value.
+        const sourceHeight = this.multiplayerAvatarIsVrm ? 1.6 : MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
+        const scale = avatarWorldHeight / sourceHeight;
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
         instance.entity.setPosition(feetX, feetY, feetZ);
