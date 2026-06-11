@@ -123,7 +123,11 @@ const MULTIPLAYER_MIN_HEIGHT = 0.95;
 const MULTIPLAYER_MAX_HEIGHT = 2.35;
 const MULTIPLAYER_RAYCAST_MAX_SAMPLES = 260_000;
 const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
+// Prefer a VRM avatar from the meeting library (loaded as a glTF container);
+// fall back to the bundled Kenney avatar if the remote model fails to load.
+const MULTIPLAYER_VRM_URL = 'https://arweave.net/gfVzs1oH_aPaHVxpQK86HT_rqzyrFPOUKUrDJ30yprs';
 const MULTIPLAYER_AVATAR_URL = '/static/dev-assets/kenney/kenney-avatar-animated.glb';
+const MULTIPLAYER_AVATAR_URLS = [MULTIPLAYER_VRM_URL, MULTIPLAYER_AVATAR_URL];
 const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
@@ -631,33 +635,42 @@ class SemanticAnnotationOverlay {
 
         this.multiplayerAvatarLoading = true;
         this.multiplayerAvatarLoadStartedAt = performance.now();
-        this.emitDiagnostic('multiplayer-avatar-preload-start', {
-            url: MULTIPLAYER_AVATAR_URL,
-            reason,
-            ...details
-        });
-        this.scene.app.assets.loadFromUrl(MULTIPLAYER_AVATAR_URL, 'container', (error: unknown, asset?: Asset) => {
+        this.tryLoadMultiplayerAvatarUrl(0, reason, details);
+    }
+
+    // Try the candidate avatar URLs in order (VRM first, Kenney fallback) so a
+    // remote VRM failing to load never leaves participants without an avatar.
+    private tryLoadMultiplayerAvatarUrl(index: number, reason: string, details: Record<string, unknown>) {
+        const url = MULTIPLAYER_AVATAR_URLS[index];
+        if (!url) {
             this.multiplayerAvatarLoading = false;
+            this.multiplayerAvatarFailed = true;
+            this.emitDiagnostic('multiplayer-avatar-load-failed', { reason, ...details });
+            for (const marker of this.multiplayerMarkers.values()) {
+                this.updateMultiplayerMarkerAvatarState(marker);
+            }
+            this.update();
+            this.scene.forceRender = true;
+            return;
+        }
+
+        this.emitDiagnostic('multiplayer-avatar-preload-start', { url, reason, ...details });
+        this.scene.app.assets.loadFromUrl(url, 'container', (error: unknown, asset?: Asset) => {
             const loadMs = this.multiplayerAvatarLoadStartedAt === null ? null : performance.now() - this.multiplayerAvatarLoadStartedAt;
             if (error || !asset) {
-                this.multiplayerAvatarFailed = true;
-                this.emitDiagnostic('multiplayer-avatar-load-failed', {
-                    url: MULTIPLAYER_AVATAR_URL,
-                    loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
+                this.emitDiagnostic('multiplayer-avatar-url-failed', {
+                    url,
                     error: error instanceof Error ? error.message : String(error ?? 'unknown')
                 });
-                for (const marker of this.multiplayerMarkers.values()) {
-                    this.updateMultiplayerMarkerAvatarState(marker);
-                }
-                this.update();
-                this.scene.forceRender = true;
+                this.tryLoadMultiplayerAvatarUrl(index + 1, reason, details);
                 return;
             }
 
+            this.multiplayerAvatarLoading = false;
             this.multiplayerAvatarAsset = asset;
             const resource = asset.resource as MultiplayerAvatarContainer | undefined;
             this.emitDiagnostic('multiplayer-avatar-preload-ready', {
-                url: MULTIPLAYER_AVATAR_URL,
+                url,
                 loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
                 animations: resource?.animations?.map(animation => animation.name) ?? [],
                 waitingPlayers: this.multiplayerPlayers.length
