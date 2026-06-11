@@ -1,0 +1,1211 @@
+// ─────────────────────────────────────────────────────────────────────────
+// Braintrance editor — "Simplification" redesign overlay
+// Source of truth: Paper file "Braintrance" › page "Simplification",
+// frames marked "best" (Explore / Selected / W - Move). Built as a custom
+// overlay over SuperSplat's live PlayCanvas viewport; the stock SuperSplat
+// chrome is hidden while `body.bt-mode` is set.
+// ─────────────────────────────────────────────────────────────────────────
+
+:root {
+    // Surfaces (light chrome over a dark 3D viewport)
+    --bt-surface:      #ffffff; // rail, header, panels
+    --bt-menubar:      #e9e9e9; // top file/select/view/help strip
+    --bt-active:       #ebebeb; // active rail item / pressed
+    --bt-hover:        #f2f2f2;
+    --bt-border:       #d9d9d9; // dividers
+    --bt-panel:        #ffffff; // floating panels (snapshot / contextual bars)
+
+    // Ink
+    --bt-ink:          #000000; // primary text + icons
+    --bt-ink-2:        #4a4a4a; // secondary
+    --bt-ink-3:        #8a8a8a; // muted / hints
+
+    // Accent language (kept consistent everywhere)
+    --bt-selection:    #ffe600; // selection outline/fill (yellow)
+    --bt-playhead:     #2f7bff; // camera / playhead (blue)
+    --bt-capture:      #9aa0a6; // capture diamonds (gray)
+    --bt-effect:       #f5a623; // effects (amber)
+    --bt-interaction:  #5b5bd6; // interactions (indigo)
+    --bt-audio:        #21a366; // audio (green)
+
+    --bt-radius:       12.7px;  // rail item radius (from frame)
+    --bt-shadow:       0 6px 24px rgba(0, 0, 0, 0.18);
+    --bt-font:         'Inter', system-ui, -apple-system, sans-serif;
+}
+
+// While the braintrance overlay is active, hide SuperSplat's own chrome but
+// keep the live canvas + view cube. Stock panels use the `.panel` class (not
+// `.pcui-panel`); toolbars/menus live in #top-container or carry -toolbar classes.
+body.bt-mode {
+    #top-container,            // stock menu / toolbars / popups
+    #bottom-toolbar,
+    #right-toolbar,
+    #menu-bar,                 // stock top-left menu (leaks under our header)
+    #timeline-panel,           // stock 4D timeline (the redundant bar under our scrubber)
+    #app-label,                // "SuperSplat" watermark
+    #cursor-label,
+    #annotation-overlay,
+    .panel,                    // left-dock panels (scene / view / transform / effect / render-sub)
+    .select-toolbar,
+    .mode-toggle,
+    .status-bar,
+    .pcui-panel {
+        display: none !important;
+    }
+
+    // keep SuperSplat's orientation view-cube (a designed element, top-right of the
+    // viewport) but nudge it clear of our header and scale it to the cleaner mock size.
+    #view-cube-container {
+        top: 94px !important;
+        right: 16px !important;
+        left: auto !important;
+        transform: scale(0.8);
+        transform-origin: top right;
+    }
+}
+
+#bt-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none; // pass through to canvas by default; children opt-in
+    font-family: var(--bt-font);
+    color: var(--bt-ink);
+    font-feature-settings: 'cv01', 'ss01';
+
+    * { box-sizing: border-box; }
+
+    button { font-family: inherit; }
+
+    // anything interactive re-enables pointer events
+    .bt-interactive,
+    .bt-menubar,
+    .bt-header,
+    .bt-rail,
+    .bt-snapshot,
+    .bt-scrubber,
+    .bt-contextbar,
+    .bt-int-overview,
+    .bt-isolate-bar,
+    .bt-effects-panel,
+    .bt-strength-pop,
+    .bt-frameall,
+    .bt-objects-panel,
+    .bt-audio-bar,
+    .bt-record-bar,
+    .bt-assets-panel,
+    .bt-topbar { pointer-events: auto; }
+}
+
+// ── Top menu strip: file · select · view · help ─────────────────────────────
+.bt-menubar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 40px;
+    background: var(--bt-menubar);
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    padding: 0 22px;
+
+    .bt-menubar-item {
+        font-family: 'Rajdhani', sans-serif;
+        font-weight: 500;
+        font-size: 17px;
+        line-height: 1;
+        color: var(--bt-ink);
+        cursor: pointer;
+        opacity: 0.85;
+        &:hover { opacity: 1; }
+    }
+}
+
+// ── Project sub-header (row under the menubar) ──────────────────────────────
+.bt-header {
+    position: absolute;
+    top: 40px; left: 0; right: 0;
+    height: 50px;
+    background: var(--bt-surface);
+    display: flex;
+    align-items: center;
+    padding: 0 20px;
+
+    .bt-back {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 28px; height: 28px;
+        margin-right: 14px;
+        cursor: pointer;
+        color: var(--bt-ink);
+        border-radius: 6px;
+        &:hover { background: var(--bt-hover); }
+    }
+
+    .bt-project-title {
+        font-weight: 600;
+        font-size: 15px;
+        color: var(--bt-ink);
+        white-space: nowrap;
+    }
+
+    // center cluster: camera hints (Explore) OR transform tools (Selected)
+    .bt-header-center {
+        position: absolute;
+        left: 50%;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 22px;
+        white-space: nowrap;
+    }
+}
+
+// camera hints (Explore - best): WASD pill · Rotate · Pan · Zoom
+.bt-hint {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 14px;
+    color: var(--bt-ink-2);
+
+    .bt-hint-keys { height: 31px; }
+    svg { width: 22px; height: 22px; color: var(--bt-ink-2); }
+
+    .bt-hint-sub { color: var(--bt-ink-3); font-size: 13px; }
+}
+
+// keycaps shared by the WASD cluster and the Q/E pair
+.bt-kc {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--bt-ink-2);
+    background: var(--bt-hover);
+    border: 1px solid var(--bt-border);
+    border-radius: 4px;
+    box-shadow: 0 1px 0 var(--bt-border);
+}
+
+// little WASD keycap cluster (W centered on top, A S D below)
+.bt-wasd {
+    display: inline-grid;
+    grid-template-columns: repeat(3, 17px);
+    grid-template-rows: 16px 16px;
+    gap: 2px;
+    margin-right: 4px;
+
+    .bt-kc-w { grid-area: 1 / 2 / 2 / 3; }
+    .bt-kc-a { grid-area: 2 / 1 / 3 / 2; }
+    .bt-kc-s { grid-area: 2 / 2 / 3 / 3; }
+    .bt-kc-d { grid-area: 2 / 3 / 3 / 4; }
+}
+
+// Q/E fly up-down pair
+.bt-qe {
+    display: inline-flex;
+    gap: 2px;
+    margin-right: 2px;
+    .bt-kc { width: 17px; height: 16px; }
+}
+
+// transform tools (Selected / Move - best): Q Move · E Scale · R Rotate · F Frame · ⌘K Crop to · ⌫ Delete
+.bt-topbar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+
+    .bt-tool {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 14px;
+        color: var(--bt-ink);
+        cursor: pointer;
+        user-select: none;
+
+        .bt-key {
+            font-weight: 700;
+            font-size: 13px;
+        }
+        &.is-active .bt-key { color: var(--bt-playhead); }
+        &.is-danger { color: #c23b3b; }
+        &:hover { opacity: 0.7; }
+    }
+}
+
+// ── Left rail ───────────────────────────────────────────────────────────────
+.bt-rail {
+    position: absolute;
+    top: 90px;           // below menubar(40) + header(50)
+    left: 0;
+    bottom: 0;
+    width: 78px;
+    background: var(--bt-surface);
+    border-right: 1px solid var(--bt-border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 6px;
+    gap: 0;
+
+    .bt-rail-item {
+        position: relative;
+        width: 66px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 10px 6px;
+        border-radius: var(--bt-radius);
+        cursor: pointer;
+        color: var(--bt-ink);
+
+        svg { width: 24px; height: 24px; }
+        .bt-rail-label { font-size: 11px; line-height: 16px; }
+
+        &:hover { background: var(--bt-hover); }
+        &.is-active { background: var(--bt-active); }
+
+        // SAM dropdown corner triangle
+        .bt-rail-caret {
+            position: absolute;
+            right: 8px; bottom: 8px;
+            width: 0; height: 0;
+            border-left: 7px solid transparent;
+            border-bottom: 7px solid var(--bt-ink);
+        }
+    }
+
+    .bt-rail-spacer { flex: 1; }
+}
+
+// ── Snapshot panel (floating, bottom center, above scrubber) ─────────────────
+.bt-snapshot {
+    position: absolute;
+    left: 50%;
+    bottom: 78px;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 16px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+
+    .bt-btn {
+        height: 36px;
+        padding: 0 18px;
+        border: none;
+        border-radius: 8px;
+        background: #f1f1f1;
+        color: var(--bt-ink);
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+        &:hover { background: #e6e6e6; }
+    }
+    .bt-icon-btn {
+        width: 36px; height: 36px;
+        display: inline-flex; align-items: center; justify-content: center;
+        border: 1px solid var(--bt-border);
+        border-radius: 8px;
+        background: #fff;
+        color: var(--bt-ink);
+        cursor: pointer;
+        &:hover { background: var(--bt-hover); }
+        svg { width: 18px; height: 18px; }
+    }
+}
+
+// ── Scrubber (bottom) ───────────────────────────────────────────────────────
+.bt-scrubber {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 54px;
+    background: var(--bt-surface);
+    border-top: 1px solid var(--bt-border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 18px;
+
+    .bt-play {
+        flex-shrink: 0;
+        width: 36px; height: 36px;
+        border-radius: 50%;
+        border: none;
+        background: var(--bt-ink);
+        color: #fff;
+        display: inline-flex; align-items: center; justify-content: center;
+        cursor: pointer;
+        svg { width: 14px; height: 14px; }
+    }
+    .bt-time {
+        flex-shrink: 0;
+        font-size: 13px;
+        color: var(--bt-ink-2);
+        min-width: 34px;
+        font-variant-numeric: tabular-nums;
+    }
+    // the seek bar + the audio strips stacked beneath it
+    .bt-track-col {
+        flex: 1; min-width: 0;
+        display: flex; flex-direction: column; justify-content: center; gap: 6px;
+    }
+    // audio strips: super-thin lines per placed sound; hover thickens, click opens timeline
+    .bt-audio-strips {
+        position: relative; height: 10px; width: 100%;
+        .bt-audio-strip {
+            position: absolute; top: 4px; height: 2px;
+            background: var(--bt-audio); border-radius: 2px; cursor: pointer;
+            transition: height 0.1s ease, top 0.1s ease;
+            .bt-audio-strip-label {
+                position: absolute; left: 6px; top: -16px;
+                font-size: 10px; font-weight: 600; color: var(--bt-audio);
+                white-space: nowrap; opacity: 0; transition: opacity 0.1s ease;
+                pointer-events: none;
+            }
+            &:hover {
+                top: 0; height: 10px;
+                .bt-audio-strip-label { opacity: 1; }
+            }
+        }
+    }
+    .bt-track {
+        position: relative;
+        flex: none;
+        width: 100%;
+        height: 4px;
+        border-radius: 2px;
+        background: #e3e3e3;
+
+        .bt-track-fill {
+            position: absolute;
+            left: 0; top: 0; bottom: 0;
+            border-radius: 2px;
+            background: var(--bt-ink);
+        }
+        // diamond markers
+        .bt-marker {
+            position: absolute;
+            top: 50%;
+            width: 11px; height: 11px;
+            transform: translate(-50%, -50%) rotate(45deg);
+            background: var(--bt-capture);
+            border-radius: 2px;
+        }
+        // current-time playhead: a vertical line + round handle, NOT a diamond, so it
+        // can't be mistaken for a capture keyframe
+        .bt-marker.is-playhead {
+            top: -8px; bottom: -8px; height: auto; width: 2px;
+            transform: translateX(-50%);
+            background: var(--bt-playhead);
+            border-radius: 1px;
+            box-shadow: none;
+
+            &::before {
+                content: '';
+                position: absolute;
+                top: -3px; left: 50%;
+                transform: translateX(-50%);
+                width: 11px; height: 11px;
+                border-radius: 50%;
+                background: var(--bt-playhead);
+                border: 2px solid var(--bt-surface);
+                box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+            }
+        }
+    }
+    .bt-preview-all {
+        flex-shrink: 0;
+        display: inline-flex; align-items: center; gap: 6px;
+        height: 30px; padding: 0 12px;
+        border: 1px solid var(--bt-border); border-radius: 8px;
+        background: transparent; color: var(--bt-interaction);
+        font-size: 13px; font-weight: 600; cursor: pointer;
+        svg { width: 12px; height: 12px; }
+        &:hover { background: rgba(91, 91, 214, 0.1); border-color: var(--bt-interaction); }
+    }
+    .bt-expand {
+        flex-shrink: 0;
+        width: 24px; height: 24px;
+        display: inline-flex; align-items: center; justify-content: center;
+        color: var(--bt-ink-3);
+        cursor: pointer;
+    }
+}
+
+// ── Isolate & clean mode ────────────────────────────────────────────────────
+.bt-isolate-bar {
+    position: absolute;
+    left: 50%; bottom: 78px; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px;
+    background: var(--bt-panel); border-radius: 14px; box-shadow: var(--bt-shadow);
+
+    .bt-iso-title { display: inline-flex; align-items: center; gap: 8px;
+        font-size: 14px; color: var(--bt-ink-2); padding: 0 6px;
+        strong { color: var(--bt-ink); }
+        svg { width: 16px; height: 16px; color: var(--bt-ink-2); } }
+    .bt-iso-spacer { width: 6px; }
+    .bt-iso-tool {
+        display: inline-flex; align-items: center; gap: 6px;
+        height: 34px; padding: 0 12px; border: 1px solid var(--bt-border);
+        border-radius: 9px; background: transparent; color: var(--bt-ink);
+        font-size: 13px; font-weight: 600; cursor: pointer;
+        svg { width: 14px; height: 14px; color: var(--bt-ink-2); }
+        &:hover { background: var(--bt-hover); }
+        &.is-active { border-color: var(--bt-ink); background: var(--bt-active);
+            svg { color: var(--bt-ink); } }
+        &.is-danger { color: #c0392b; svg { color: #c0392b; }
+            &:hover { background: rgba(192, 57, 43, 0.08); } }
+        &.is-disabled { opacity: 0.4; pointer-events: none; }
+    }
+    .bt-iso-select .bt-iso-caret { display: inline-flex; margin-left: 2px;
+        svg { width: 12px; height: 12px; color: var(--bt-ink-3); } }
+    .bt-iso-done {
+        height: 34px; padding: 0 16px; border: none; border-radius: 9px;
+        background: var(--bt-ink); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer;
+        &:hover { background: #222; }
+    }
+}
+// persistent cleaning selections — the highlighted parts you've selected to crop/delete.
+// A drawn lasso/crop region becomes solid-highlighted; SAM drops a small segment dot.
+#bt-overlay .bt-lasso-svg.bt-clean-sel {
+    .bt-lasso-path { fill: rgba(245, 217, 10, 0.22); stroke-dasharray: none; }
+    .bt-lasso-back, .bt-lasso-edge { opacity: 0.55; }
+}
+#bt-overlay .bt-crop-box.bt-clean-sel {
+    background: rgba(245, 230, 0, 0.20); stroke-dasharray: none;
+    .bt-crop-h { display: none; } // it's a selection now, not resizable
+}
+#bt-overlay .bt-clean-sam {
+    position: fixed; z-index: 89; pointer-events: none;
+    width: 30px; height: 30px; margin: -15px 0 0 -15px; border-radius: 50%;
+    background: rgba(245, 217, 10, 0.28); border: 2px solid var(--bt-selection);
+}
+
+// ── Selection contextual bar (Selected / Move - best) ───────────────────────
+// `🌐 Cuboid [⏸ Pause] · Add Effect (2) · Add interaction (1) · ↺`
+// interaction overview (click an interaction → see what it drives, preview, save)
+.bt-int-overview {
+    position: absolute;
+    left: 50%;
+    bottom: 78px;
+    transform: translateX(-50%);
+    width: 760px;
+    max-width: calc(100vw - 80px);
+    padding: 16px 18px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+
+    .bt-io-head {
+        display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+        .bt-cb-back { cursor: pointer; color: var(--bt-ink-2); display: inline-flex;
+            svg { width: 18px; height: 18px; } &:hover { color: var(--bt-ink); } }
+        .bt-io-name { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600;
+            svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
+        .bt-io-spacer { flex: 1; }
+        .bt-io-preview { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+            border: none; border-radius: 8px; background: transparent; color: var(--bt-interaction);
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            svg { width: 13px; height: 13px; }
+            &:hover { background: rgba(91, 91, 214, 0.1); } }
+        .bt-io-edit { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
+            border: 1px solid var(--bt-border); border-radius: 8px; background: transparent; color: var(--bt-ink);
+            font-size: 13px; font-weight: 600; cursor: pointer;
+            svg { width: 13px; height: 13px; }
+            &:hover { background: var(--bt-hover); } }
+    }
+    .bt-io-when {
+        font-size: 14px; color: var(--bt-ink-2); margin-bottom: 12px;
+        .bt-io-trigger { margin-left: 6px; font-family: inherit; font-size: 13px; font-weight: 600;
+            color: var(--bt-ink); border: 1px solid var(--bt-border); border-radius: 7px;
+            padding: 4px 8px; background: var(--bt-hover); cursor: pointer; } }
+    .bt-io-cards {
+        display: flex; gap: 10px;
+        .bt-io-card {
+            flex: 1; min-width: 0; padding: 10px 12px;
+            border: 1px solid var(--bt-border); border-radius: 10px; background: #fafafa;
+            &.is-this { border-color: var(--bt-interaction); background: rgba(91, 91, 214, 0.06); }
+            .bt-io-card-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px;
+                .bt-io-card-name { font-size: 13px; font-weight: 700; color: var(--bt-ink);
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .bt-io-card-tag { font-size: 9px; font-weight: 700; letter-spacing: 0.05em; color: var(--bt-interaction); flex-shrink: 0; }
+                .bt-io-card-timing { font-size: 11px; color: var(--bt-ink-3); flex-shrink: 0; } }
+            .bt-io-card-changes { font-size: 12px; color: var(--bt-ink-2);
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
+    }
+    .bt-io-note { margin-top: 12px; text-align: center; font-size: 12px; color: var(--bt-ink-3); }
+}
+
+.bt-contextbar {
+    position: absolute;
+    left: 50%;
+    bottom: 78px;
+    transform: translateX(-50%);
+    min-width: 440px;
+    padding: 14px 18px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+
+    .bt-cb-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+
+        .bt-cb-name {
+            display: inline-flex; align-items: center; gap: 8px;
+            font-size: 15px; font-weight: 600;
+            svg { width: 18px; height: 18px; color: var(--bt-ink-2); }
+        }
+        .bt-pause {
+            display: inline-flex; align-items: center; gap: 6px;
+            height: 24px; padding: 0 10px;
+            border-radius: 12px;
+            background: var(--bt-ink);
+            color: #fff;
+            font-size: 12px; font-weight: 600;
+            cursor: pointer;
+        }
+    }
+
+    .bt-cb-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+
+        .bt-cb-btn {
+            flex: 1;
+            display: flex; align-items: center; justify-content: space-between;
+            height: 38px; padding: 0 14px;
+            border: none; border-radius: 8px;
+            background: #f1f1f1;
+            font-size: 14px; font-weight: 600; color: var(--bt-ink);
+            cursor: pointer;
+            &:hover { background: #e6e6e6; }
+
+            .bt-cb-badge {
+                display: inline-flex; align-items: center; gap: 5px;
+                color: var(--bt-ink-2); font-weight: 600;
+            }
+            &.bt-effect .bt-cb-badge svg { color: var(--bt-effect); }
+            &.bt-interaction .bt-cb-badge svg { color: var(--bt-interaction); }
+        }
+        .bt-icon-btn {
+            width: 38px; height: 38px;
+            display: inline-flex; align-items: center; justify-content: center;
+            border: 1px solid var(--bt-border); border-radius: 8px;
+            background: #fff; color: var(--bt-ink); cursor: pointer;
+            &:hover { background: var(--bt-hover); }
+            svg { width: 18px; height: 18px; }
+        }
+    }
+
+    .bt-cb-hint {
+        margin-top: 8px;
+        text-align: center;
+        font-size: 12px;
+        color: var(--bt-ink-3);
+    }
+
+    // chip mode (effects applied): ‹ Cuboid · [Vivid •] [Bloom •] …
+    .bt-cb-chips {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+
+        .bt-cb-back {
+            display: inline-flex; align-items: center; justify-content: center;
+            width: 28px; height: 28px; border-radius: 6px;
+            color: var(--bt-ink-2); cursor: pointer;
+            &:hover { background: var(--bt-hover); }
+            svg { width: 16px; height: 16px; }
+        }
+        .bt-cb-name { font-size: 15px; font-weight: 600; margin-right: 4px; }
+
+        .bt-chip {
+            display: inline-flex; align-items: center; gap: 8px;
+            height: 34px; padding: 0 12px;
+            background: #f1f1f1; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; color: var(--bt-ink);
+            cursor: pointer;
+            &:hover { background: #e6e6e6; }
+            &.is-open { box-shadow: 0 0 0 2px var(--bt-ink); }
+            .bt-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--bt-effect); }
+            .bt-chip-caret { color: var(--bt-ink-3); display: inline-flex; svg { width: 14px; height: 14px; } }
+        }
+        .bt-chip.bt-chip-int .bt-chip-dot { background: var(--bt-interaction); }
+        .bt-chip.bt-chip-add {
+            background: transparent; border: 1px dashed var(--bt-border); color: var(--bt-ink-2);
+            svg { width: 16px; height: 16px; }
+            &:hover { background: var(--bt-hover); }
+        }
+    }
+}
+
+// ── Effects library ("Enhance with effects") — docked left ──────────────────
+.bt-effects-panel {
+    position: absolute;
+    top: 98px; left: 86px; bottom: 62px;   // just right of the 78px rail
+    width: 318px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    display: flex; flex-direction: column;
+    padding: 16px 16px 8px;
+
+    // store mode: a wide floating browser (Unity-Asset-Store-like) — no backdrop, so the
+    // scene stays visible. Sits left of the scene by default; drag the header to move it.
+    &.is-store {
+        top: 98px; left: 86px; bottom: auto;
+        width: min(640px, calc(100vw - 160px));
+        height: min(560px, calc(100vh - 200px));
+        padding: 18px 20px 12px;
+        z-index: 140;
+
+        .bt-ep-head { cursor: grab; user-select: none; &:active { cursor: grabbing; } }
+        .bt-ep-body { flex: 1; overflow-y: auto; padding-right: 6px; }
+        .bt-ep-grid {
+            grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+            gap: 16px 12px;
+            overflow: visible;
+            .bt-tile .bt-tile-sw { width: 100%; aspect-ratio: 1 / 1; height: auto; }
+        }
+        .bt-ep-row .bt-tile .bt-tile-sw { width: 56px; height: 56px; }
+    }
+
+    .bt-ep-head {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 12px;
+        .bt-ep-title { font-size: 16px; font-weight: 600; }
+        .bt-ep-close { cursor: pointer; color: var(--bt-ink-3); display: inline-flex;
+            svg { width: 18px; height: 18px; } &:hover { color: var(--bt-ink); } }
+    }
+    .bt-ep-search {
+        height: 36px; border: 1px solid var(--bt-border); border-radius: 8px;
+        display: flex; align-items: center; padding: 0 12px;
+        color: var(--bt-ink-3); font-size: 14px; margin-bottom: 4px;
+    }
+    .bt-ep-section {
+        display: flex; align-items: center; justify-content: space-between;
+        font-size: 11px; letter-spacing: 0.07em; font-weight: 600;
+        color: var(--bt-ink-3); margin: 16px 0 10px;
+
+        .bt-ep-count {
+            letter-spacing: 0; color: var(--bt-effect);
+            background: rgba(245, 166, 35, 0.14);
+            border-radius: 999px; padding: 2px 9px; font-size: 11px;
+        }
+    }
+    .bt-ep-row { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 4px; }
+    .bt-ep-grid {
+        display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px 8px;
+        overflow-y: auto; padding-right: 4px;
+    }
+    .bt-tile {
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+        cursor: pointer; flex-shrink: 0;
+        .bt-tile-sw {
+            width: 48px; height: 48px; border-radius: 12px;
+            background: var(--bt-effect);
+            border: 1px solid rgba(0,0,0,0.06);
+        }
+        .bt-tile-sw.is-none { background: #eee; }
+        .bt-tile-sw.is-cool { background: linear-gradient(150deg, #6db8ff, #2f7bff); }
+        .bt-tile-sw.is-audio { background: var(--bt-audio); display: flex; align-items: center; justify-content: center; color: #fff;
+            svg { width: 22px; height: 22px; } }
+        .bt-tile-label { font-size: 11px; color: var(--bt-ink-2); white-space: nowrap; }
+        &.is-selected .bt-tile-sw { box-shadow: 0 0 0 2px var(--bt-effect); }
+        &.is-selected .bt-tile-label { color: var(--bt-ink); font-weight: 600; }
+    }
+    .bt-ep-strength {
+        display: flex; align-items: center; gap: 10px;
+        font-size: 13px; color: var(--bt-ink-3); margin: 4px 0 2px;
+        input[type='range'] { flex: 1; accent-color: var(--bt-ink); }
+    }
+}
+
+// ── Asset browser (revealable, docked left) ─────────────────────────────────
+.bt-assets-panel {
+    position: absolute;
+    top: 98px; left: 86px; bottom: 62px;
+    width: 300px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    display: flex; flex-direction: column;
+    padding: 16px 16px 8px;
+
+    .bt-as-head {
+        display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;
+        .bt-as-title { font-size: 16px; font-weight: 600; }
+        .bt-as-close { cursor: pointer; color: var(--bt-ink-3); display: inline-flex;
+            svg { width: 18px; height: 18px; } &:hover { color: var(--bt-ink); } }
+    }
+    .bt-as-tabs {
+        display: flex; gap: 6px; margin-bottom: 14px;
+        background: #f3f3f3; border-radius: 9px; padding: 3px;
+        .bt-as-tab {
+            flex: 1; text-align: center; padding: 7px 0;
+            font-size: 13px; font-weight: 600; color: var(--bt-ink-3);
+            border-radius: 7px; cursor: pointer;
+            &.is-active { background: #fff; color: var(--bt-ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+        }
+    }
+    .bt-as-grid {
+        display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;
+        overflow-y: auto; padding-right: 4px;
+    }
+    .bt-as-tile {
+        cursor: pointer; display: flex; flex-direction: column; gap: 6px;
+        .bt-as-thumb { width: 100%; aspect-ratio: 1 / 1; border-radius: 10px; border: 1px solid rgba(0,0,0,0.05); }
+        .bt-as-thumb.is-upload {
+            display: flex; align-items: center; justify-content: center;
+            background: var(--bt-hover); border: 1px dashed var(--bt-border); color: var(--bt-ink-3);
+            svg { width: 26px; height: 26px; }
+        }
+        .bt-as-label { font-size: 12px; color: var(--bt-ink-2); }
+        &.is-armed .bt-as-thumb { box-shadow: 0 0 0 2px var(--bt-ink); }
+        &:hover .bt-as-thumb { filter: brightness(1.04); }
+        &.bt-as-upload:hover .bt-as-thumb { filter: none; border-color: var(--bt-ink-3); color: var(--bt-ink); }
+    }
+    .bt-as-foot {
+        padding: 12px 0 6px; margin-top: 8px;
+        border-top: 1px solid var(--bt-border);
+        font-size: 12px; color: var(--bt-ink-3); text-align: center;
+    }
+}
+
+// ── Interaction recording: cyan viewport border + record bar ────────────────
+.bt-recording {
+    position: absolute;
+    top: 90px; left: 0; right: 0; bottom: 108px;
+    border: 3px solid #16c2d4;          // cyan = recording
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 90;
+}
+.bt-record-bar {
+    position: absolute;
+    left: 0; right: 0; bottom: 54px;
+    height: 54px;
+    background: var(--bt-surface);
+    border-top: 1px solid var(--bt-border);
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 22px;
+
+    .bt-rb-when {
+        font-size: 15px; display: inline-flex; align-items: center; gap: 8px; color: var(--bt-ink);
+        strong { font-weight: 600; }
+        select {
+            font-family: inherit; font-size: 14px; font-weight: 600;
+            padding: 5px 8px; border: 1px solid var(--bt-border); border-radius: 6px; background: #fff;
+            color: var(--bt-ink); cursor: pointer;
+        }
+    }
+    .bt-rb-rec {
+        display: inline-flex; align-items: center; gap: 7px;
+        font-size: 14px; font-weight: 600; color: #119aa8;
+        &::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: #16c2d4; }
+    }
+    .bt-rb-spacer { flex: 1; }
+    .bt-rb-reset {
+        cursor: pointer; color: var(--bt-ink-2);
+        width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
+        border-radius: 6px; &:hover { background: var(--bt-hover); }
+        svg { width: 16px; height: 16px; }
+    }
+    .bt-rb-finish {
+        height: 36px; padding: 0 18px;
+        border: none; border-radius: 8px;
+        background: var(--bt-ink); color: #fff;
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        &:hover { background: #222; }
+    }
+}
+
+// ── Audio mode: Objects panel (left) + audio contextual bar ─────────────────
+.bt-objects-panel {
+    position: absolute;
+    top: 98px; left: 86px;        // right of the rail
+    width: 260px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    padding: 14px;
+
+    .bt-op-head {
+        display: flex; align-items: center; justify-content: space-between;
+        margin-bottom: 12px;
+        .bt-op-title { font-size: 16px; font-weight: 600; }
+        .bt-op-add { cursor: pointer; color: var(--bt-ink-2); display: inline-flex;
+            width: 26px; height: 26px; align-items: center; justify-content: center;
+            border-radius: 6px; &:hover { background: var(--bt-hover); } }
+    }
+    .bt-op-row {
+        display: flex; align-items: center; gap: 10px;
+        height: 42px; padding: 0 12px; margin-bottom: 8px;
+        border: 1px solid var(--bt-border); border-radius: 8px;
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        svg { width: 18px; height: 18px; color: var(--bt-ink-2); flex-shrink: 0; }
+        .bt-op-name { flex: 1; }
+        .bt-op-badge { font-size: 11px; font-weight: 500; color: var(--bt-ink-3); }
+        &:hover { background: var(--bt-hover); }
+        &.is-active { box-shadow: 0 0 0 2px var(--bt-ink); border-color: transparent; }
+    }
+}
+
+.bt-audio-bar {
+    position: absolute;
+    left: 50%; bottom: 78px; transform: translateX(-50%);
+    width: 480px;
+    background: var(--bt-panel);
+    border-radius: 14px;
+    box-shadow: var(--bt-shadow);
+    padding: 16px;
+
+    .bt-ab-head {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 14px;
+        .bt-ab-name { display: inline-flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600;
+            svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
+        .bt-ab-badge { font-size: 11px; font-weight: 600; color: var(--bt-ink-2);
+            background: #eee; border-radius: 6px; padding: 2px 8px;
+            &.is-toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer;
+                .bt-ab-swap { opacity: 0.5; font-size: 10px; }
+                &:hover { background: #e0e0e0; color: var(--bt-ink); } } }
+        .bt-ab-spacer { flex: 1; }
+        .bt-ab-replace { font-size: 13px; color: var(--bt-ink-2); cursor: pointer;
+            padding: 4px 10px; border-radius: 6px; &:hover { background: var(--bt-hover); } }
+    }
+
+    // placing state: just the instruction + cancel
+    &.is-placing {
+        display: flex; align-items: center; gap: 12px;
+        .bt-ab-placing {
+            flex: 1; display: inline-flex; align-items: center; gap: 10px;
+            font-size: 14px; color: var(--bt-ink-2);
+            strong { color: var(--bt-ink); }
+            svg { width: 18px; height: 18px; color: var(--bt-audio); }
+        }
+        .bt-ab-cancel {
+            border: none; background: transparent; cursor: pointer;
+            font-size: 13px; color: var(--bt-ink-2); padding: 6px 12px; border-radius: 7px;
+            &:hover { background: var(--bt-hover); color: var(--bt-ink); }
+        }
+    }
+    .bt-ab-controls {
+        display: flex; align-items: center; gap: 18px; margin-bottom: 14px;
+        font-size: 13px; color: var(--bt-ink-3);
+        .bt-ab-vol { flex: 1; display: flex; align-items: center; gap: 8px;
+            input[type='range'] { flex: 1; accent-color: var(--bt-audio); }
+            .bt-ab-val { color: var(--bt-ink); font-weight: 600; min-width: 22px; text-align: right; } }
+        .bt-ab-range { display: inline-flex; align-items: center; gap: 8px;
+            border: 1px solid var(--bt-border); border-radius: 8px; padding: 6px 10px;
+            strong { color: var(--bt-ink); font-weight: 600; } }
+        .bt-ab-loop { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+            input { accent-color: var(--bt-audio); } }
+    }
+    .bt-ab-place {
+        width: 100%; height: 40px;
+        border: none; border-radius: 8px;
+        background: #f1f1f1; color: var(--bt-ink);
+        font-size: 14px; font-weight: 600; cursor: pointer;
+        &:hover { background: #e6e6e6; }
+    }
+}
+
+// ── Effect strength popover (over a chip) ───────────────────────────────────
+.bt-strength-pop {
+    position: absolute;
+    left: 50%; bottom: 150px; transform: translateX(-50%);
+    width: 240px;
+    background: var(--bt-panel);
+    border-radius: 12px;
+    box-shadow: var(--bt-shadow);
+    padding: 16px;
+
+    .bt-sp-title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+    .bt-sp-trigger { font-size: 13px; color: var(--bt-ink-2); margin-bottom: 8px;
+        strong { color: var(--bt-ink); font-weight: 600; } }
+    .bt-sp-row { display: flex; align-items: center; justify-content: space-between;
+        font-size: 13px; color: var(--bt-ink-3); margin-bottom: 6px;
+        .bt-sp-val { color: var(--bt-ink); font-weight: 600; } }
+    input[type='range'] { width: 100%; accent-color: var(--bt-ink); }
+    .bt-sp-note { font-size: 12px; color: var(--bt-ink-3); padding: 12px 0;
+        border-bottom: 1px solid var(--bt-border); margin-bottom: 10px; }
+    .bt-sp-action { display: flex; align-items: center; gap: 8px;
+        font-size: 13px; color: var(--bt-ink-2); cursor: pointer; padding: 6px 0;
+        svg { width: 15px; height: 15px; } &:hover { color: var(--bt-ink); }
+        &.is-danger { color: #c23b3b; } }
+}
+
+// ── Top-of-header Explore / Select toggle (moved up from the rail) ───────────
+.bt-header .bt-tooltabs {
+    display: inline-flex; align-items: center; gap: 2px;
+    margin-left: 18px;
+    background: #f0f0f0; border-radius: 9px; padding: 3px;
+    .bt-tooltab {
+        display: inline-flex; align-items: center; gap: 6px;
+        height: 30px; padding: 0 12px; border-radius: 7px;
+        font-size: 13px; font-weight: 600; color: var(--bt-ink-3);
+        cursor: pointer; user-select: none;
+        svg { width: 17px; height: 17px; }
+        &:hover { color: var(--bt-ink-2); }
+        &.is-active { background: #fff; color: var(--bt-ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
+    }
+}
+
+// ── Expandable timeline / Sequencer ─────────────────────────────────────────
+body.bt-seq-open .bt-scrubber { display: none; } // the sequencer carries its own transport
+
+#bt-overlay .bt-sequencer {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    height: 332px;
+    background: var(--bt-surface);
+    border-top: 1px solid var(--bt-border);
+    box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.12);
+    display: flex; flex-direction: column;
+    pointer-events: auto;
+    z-index: 95;
+
+    .bt-seq-head {
+        display: flex; align-items: center; gap: 12px;
+        height: 48px; padding: 0 16px;
+        border-bottom: 1px solid var(--bt-border);
+        .bt-seq-collapse, .bt-seq-play {
+            width: 32px; height: 32px; border: none; border-radius: 7px; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: transparent; color: var(--bt-ink);
+            &:hover { background: var(--bt-hover); }
+            svg { width: 16px; height: 16px; }
+        }
+        .bt-seq-play { background: var(--bt-ink); color: #fff; svg { width: 13px; height: 13px; } &:hover { background: #222; } }
+        .bt-seq-time { font-size: 13px; color: var(--bt-ink-2); font-variant-numeric: tabular-nums; }
+        .bt-seq-spacer { flex: 1; }
+        .bt-seq-snap {
+            display: inline-flex; align-items: center; gap: 7px;
+            height: 32px; padding: 0 14px; border: none; border-radius: 8px;
+            background: #f1f1f1; color: var(--bt-ink); font-size: 13px; font-weight: 600; cursor: pointer;
+            svg { width: 15px; height: 15px; color: var(--bt-capture); }
+            &:hover { background: #e6e6e6; }
+        }
+    }
+
+    // scroll the label + lane columns together so they stay row-aligned when there
+    // are more tracks than fit (the ruler scrolls with them; the time is also in the head).
+    .bt-seq-body { flex: 1; display: flex; overflow-y: auto; overflow-x: hidden; }
+
+    .bt-seq-labels {
+        width: 184px; flex-shrink: 0;
+        border-right: 1px solid var(--bt-border);
+        .bt-seq-label {
+            display: flex; align-items: center; gap: 8px;
+            height: 36px; padding: 0 14px;
+            font-size: 13px; font-weight: 600; color: var(--bt-ink);
+            border-bottom: 1px solid #f1f1f1;
+            svg { width: 16px; height: 16px; color: var(--bt-ink-3); flex-shrink: 0; }
+            .bt-seq-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+            .bt-seq-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        }
+        .bt-seq-rulerlabel {
+            height: 28px; font-size: 10px; font-weight: 600; color: var(--bt-ink-3);
+            letter-spacing: 0.07em; text-transform: uppercase;
+        }
+        .bt-seq-add { color: var(--bt-ink-3); cursor: pointer; &:hover { background: var(--bt-hover); color: var(--bt-ink); } }
+    }
+
+    .bt-seq-lanes {
+        flex: 1; position: relative; overflow: hidden;
+        background: repeating-linear-gradient(to right, transparent, transparent calc(10% - 1px), #f2f2f2 10%, #f2f2f2 calc(10% + 1px));
+
+        .bt-seq-ruler {
+            position: relative; height: 28px; border-bottom: 1px solid var(--bt-border);
+            .bt-seq-tick {
+                position: absolute; top: 9px; font-size: 10px; color: var(--bt-ink-3);
+                transform: translateX(4px); font-variant-numeric: tabular-nums;
+            }
+        }
+        .bt-seq-lane {
+            position: relative; height: 36px; border-bottom: 1px solid #f1f1f1;
+            .bt-seq-kf {
+                position: absolute; top: 50%; width: 11px; height: 11px;
+                transform: translate(-50%, -50%) rotate(45deg); border-radius: 2px;
+                box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18); cursor: pointer;
+            }
+            .bt-seq-clip { position: absolute; top: 50%; height: 18px; transform: translateY(-50%); border-radius: 5px; opacity: 0.85; }
+            .bt-seq-clip-audio { cursor: grab; &:hover { opacity: 1; }
+                &.is-focus { opacity: 1; box-shadow: 0 0 0 2px var(--bt-surface), 0 0 0 4px var(--bt-audio); } }
+        }
+        .bt-seq-lane-add {
+            background: repeating-linear-gradient(45deg, transparent, transparent 6px, rgba(0, 0, 0, 0.025) 6px, rgba(0, 0, 0, 0.025) 12px);
+        }
+        .bt-seq-playhead {
+            position: absolute; top: 0; bottom: 0; width: 2px;
+            background: var(--bt-playhead); z-index: 5; pointer-events: none;
+            &::before {
+                content: ''; position: absolute; top: -1px; left: -5px;
+                border-left: 6px solid transparent; border-right: 6px solid transparent;
+                border-top: 8px solid var(--bt-playhead);
+            }
+        }
+    }
+}
+
+// reset the expand control now that it's a <button>
+#bt-overlay .bt-expand { background: none; border: none; padding: 0; }
+
+// ── Polish: consistent press feedback (UX skill: scale-feedback / press-feedback)
+#bt-overlay button,
+#bt-overlay .bt-tooltab,
+#bt-overlay .bt-rail-item,
+#bt-overlay .bt-tile,
+#bt-overlay .bt-as-tile,
+#bt-overlay .bt-menubar-item {
+    transition: transform 0.08s ease, background-color 0.12s ease, box-shadow 0.12s ease;
+}
+#bt-overlay button:active,
+#bt-overlay .bt-tooltab:active,
+#bt-overlay .bt-rail-item:active,
+#bt-overlay .bt-tile:active,
+#bt-overlay .bt-as-tile:active {
+    transform: scale(0.97);
+}
+
+// normalize the play/pause glyph inside the context-bar pill
+#bt-overlay .bt-pause svg { width: 12px; height: 12px; }
+
+// ── Select dropdown tab + menu, lasso, depth prompt, frame-all ──────────────
+.bt-header .bt-tooltab.bt-tooltab-dd {
+    .bt-tt-caret { display: inline-flex; margin-left: -2px; color: var(--bt-ink-3); svg { width: 14px; height: 14px; } }
+}
+
+#bt-overlay .bt-select-menu {
+    position: fixed;
+    z-index: 200;
+    min-width: 220px;
+    background: var(--bt-panel);
+    border: 1px solid var(--bt-border);
+    border-radius: 10px;
+    box-shadow: var(--bt-shadow);
+    padding: 6px;
+    .bt-select-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 10px; border-radius: 8px; cursor: pointer;
+        svg { width: 20px; height: 20px; color: var(--bt-ink-2); flex-shrink: 0; }
+        .bt-si-name { font-size: 14px; font-weight: 600; color: var(--bt-ink); }
+        .bt-si-sub { font-size: 12px; color: var(--bt-ink-3); }
+        &:hover { background: var(--bt-hover); }
+        &.is-active { background: var(--bt-active); }
+    }
+}
+
+#bt-overlay .bt-lasso-svg {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    pointer-events: none; z-index: 88;
+    .bt-lasso-path {
+        fill: rgba(245, 217, 10, 0.10);
+        stroke: var(--bt-selection); stroke-width: 2;
+        stroke-dasharray: 5 4; stroke-linejoin: round;
+    }
+    // extruded selection volume: receding back face + connector walls
+    .bt-lasso-back {
+        fill: rgba(245, 217, 10, 0.04);
+        stroke: var(--bt-selection); stroke-width: 1.5;
+        stroke-dasharray: 4 4; stroke-linejoin: round; opacity: 0.45;
+    }
+    .bt-lasso-edge { stroke: var(--bt-selection); stroke-width: 1; opacity: 0.35; }
+}
+
+#bt-overlay .bt-depth-pop {
+    position: fixed; z-index: 200;
+    width: 244px;
+    background: var(--bt-panel);
+    border-radius: 12px;
+    box-shadow: var(--bt-shadow);
+    padding: 16px;
+    .bt-dp-title { font-size: 15px; font-weight: 600; }
+    .bt-dp-sub { font-size: 12px; color: var(--bt-ink-3); margin: 4px 0 12px; }
+    .bt-dp-row { display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+        input[type='range'] { flex: 1; accent-color: var(--bt-ink); }
+        .bt-dp-val { font-size: 13px; font-weight: 600; color: var(--bt-ink); min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; } }
+    .bt-dp-actions { display: flex; gap: 8px;
+        button { flex: 1; height: 36px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: none; }
+        .bt-dp-cancel { background: #f1f1f1; color: var(--bt-ink); &:hover { background: #e6e6e6; } }
+        .bt-dp-create { background: var(--bt-ink); color: #fff; &:hover { background: #222; } } }
+}
+
+#bt-overlay .bt-frameall {
+    position: absolute;
+    top: 252px; right: 18px;
+    display: inline-flex; align-items: center; gap: 7px;
+    height: 34px; padding: 0 14px;
+    background: var(--bt-panel); color: var(--bt-ink);
+    border: 1px solid var(--bt-border); border-radius: 9px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    svg { width: 17px; height: 17px; }
+    &:hover { background: var(--bt-hover); }
+}
+
+// ── Crop / volume (bounding-box) selection ──────────────────────────────────
+#bt-overlay .bt-crop-box {
+    position: fixed; z-index: 89; pointer-events: none;
+    border: 2px solid var(--bt-selection);
+    background: rgba(245, 230, 0, 0.07);
+    .bt-crop-h {
+        position: absolute; width: 9px; height: 9px;
+        background: #fff; border: 2px solid var(--bt-selection); border-radius: 2px;
+    }
+    .bt-crop-nw { left: -5px; top: -5px; }   .bt-crop-n { left: calc(50% - 4px); top: -5px; }
+    .bt-crop-ne { right: -5px; top: -5px; }  .bt-crop-e { right: -5px; top: calc(50% - 4px); }
+    .bt-crop-se { right: -5px; bottom: -5px; } .bt-crop-s { left: calc(50% - 4px); bottom: -5px; }
+    .bt-crop-sw { left: -5px; bottom: -5px; } .bt-crop-w { left: -5px; top: calc(50% - 4px); }
+}
+
+#bt-overlay .bt-crop-confirm {
+    position: fixed; z-index: 200; width: 304px;
+    background: var(--bt-panel); border-radius: 12px; box-shadow: var(--bt-shadow); padding: 14px 16px;
+    .bt-crop-title { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 600; margin-bottom: 12px;
+        svg { width: 18px; height: 18px; color: var(--bt-ink-2); } }
+    .bt-crop-depth { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--bt-ink-3); margin-bottom: 14px;
+        input[type='range'] { flex: 1; accent-color: var(--bt-ink); }
+        .bt-crop-val { color: var(--bt-ink); font-weight: 600; min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; } }
+    .bt-crop-acts { display: flex; gap: 8px;
+        button { flex: 1; height: 36px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+        .bt-crop-cancel { background: #f1f1f1; color: var(--bt-ink); &:hover { background: #e6e6e6; } }
+        .bt-crop-apply { background: var(--bt-ink); color: #fff; &:hover { background: #222; } } }
+}
+
+// ── Top-menu dropdowns (file / select / view / help) ────────────────────────
+.bt-menubar .bt-menubar-item.is-open { opacity: 1; background: rgba(0,0,0,0.06); border-radius: 6px; }
+
+#bt-overlay .bt-menu-dd {
+    position: fixed; z-index: 210;
+    min-width: 210px;
+    background: var(--bt-panel);
+    border: 1px solid var(--bt-border);
+    border-radius: 10px;
+    box-shadow: var(--bt-shadow);
+    padding: 6px;
+    .bt-menu-row {
+        display: flex; align-items: center; justify-content: space-between;
+        height: 32px; padding: 0 10px; border-radius: 7px;
+        font-size: 13px; color: var(--bt-ink); cursor: pointer;
+        .bt-menu-sc { font-size: 12px; color: var(--bt-ink-3); }
+        &:hover { background: var(--bt-active); }
+    }
+    .bt-menu-sep { height: 1px; background: var(--bt-border); margin: 5px 8px; }
+}

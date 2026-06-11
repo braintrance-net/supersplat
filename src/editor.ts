@@ -75,8 +75,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     [
         'camera.mode', 'camera.overlay', 'camera.splatSize', 'view.outlineSelection',
-        'view.centersUseGaussianColor', 'view.bands', 'camera.bound', 'selection.changed',
-        'tool.coordSpace'
+        'view.centersUseGaussianColor', 'view.bands', 'camera.bound', 'camera.showPoses',
+        'selection.changed', 'tool.coordSpace'
     ].forEach((eventName) => {
         events.on(eventName, () => {
             scene.forceRender = true;
@@ -154,6 +154,29 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('camera.toggleBound', () => {
         setBoundVisible(!events.invoke('camera.bound'));
+    });
+
+    // camera.showPoses
+
+    let showPoses = scene.config.show.cameraPoses;
+
+    const setShowPoses = (visible: boolean) => {
+        if (visible !== showPoses) {
+            showPoses = visible;
+            events.fire('camera.showPoses', showPoses);
+        }
+    };
+
+    events.function('camera.showPoses', () => {
+        return showPoses;
+    });
+
+    events.on('camera.setShowPoses', (value: boolean) => {
+        setShowPoses(value);
+    });
+
+    events.on('camera.toggleShowPoses', () => {
+        setShowPoses(!events.invoke('camera.showPoses'));
     });
 
     // camera.focus
@@ -273,12 +296,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                     rect.end.y - rect.start.y
                 );
 
-                const selected = new Set<number>(pick);
-                const filter = (i: number) => {
-                    return selected.has(i);
-                };
-
-                events.fire('edit.add', new SelectOp(splat, op, filter));
+                const sortedIds = new Uint32Array(new Set(pick)).sort();
+                events.fire('edit.add', new SelectOp(splat, op, sortedIds));
             }
         }
     });
@@ -334,8 +353,12 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
                 // Calculate actual pixel dimensions for iteration
                 const { width, height } = scene.targetSize;
-                const pw = Math.max(1, Math.floor(nw * width));
-                const ph = Math.max(1, Math.floor(nh * height));
+
+                // Convert normalized coordinates to render target pixels
+                const px = Math.floor(nx0 * width);
+                const py = Math.floor(ny0 * height);
+                const pw = Math.max(1, Math.ceil((nx0 + nw) * width) - px);
+                const ph = Math.max(1, Math.ceil((ny0 + nh) * height) - py);
 
                 const selected = new Set<number>();
                 for (let y = 0; y < ph; ++y) {
@@ -343,16 +366,13 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                         const mx = Math.floor((nx0 + x / width) * mask.width);
                         const my = Math.floor((ny0 + y / height) * mask.height);
                         if (mask.data[(my * mask.width + mx) * 4] === 255) {
-                            selected.add(pick[(ph - y) * pw + x]);
+                            selected.add(pick[(ph - 1 - y) * pw + x]);
                         }
                     }
                 }
 
-                const filter = (i: number) => {
-                    return selected.has(i);
-                };
-
-                events.fire('edit.add', new SelectOp(splat, op, filter));
+                const sortedIds = new Uint32Array(selected).sort();
+                events.fire('edit.add', new SelectOp(splat, op, sortedIds));
             }
         }
     });
@@ -380,9 +400,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 const filter = (i: number) => {
                     vec4.set(x[i], y[i], z[i], 1.0);
                     mat.transformVec4(vec4, vec4);
-                    const px = (vec4.x / vec4.w * 0.5 + 0.5) * width;
-                    const py = (-vec4.y / vec4.w * 0.5 + 0.5) * height;
-                    return Math.abs(px - sx) < splatSize && Math.abs(py - sy) < splatSize;
+                    const px = ((vec4.x / vec4.w) * 0.5 + 0.5) * width;
+                    const py = ((-vec4.y / vec4.w) * 0.5 + 0.5) * height;
+                    return (
+                        Math.abs(px - sx) < splatSize && Math.abs(py - sy) < splatSize
+                    );
                 };
 
                 events.fire('edit.add', new SelectOp(splat, op, filter));
@@ -397,12 +419,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                     1 / height
                 );
                 const pickId = pickResult[0];
-
-                const filter = (i: number) => {
-                    return i === pickId;
-                };
-
-                events.fire('edit.add', new SelectOp(splat, op, filter));
+                events.fire('edit.add', new SelectOp(splat, op, new Uint32Array([pickId])));
             }
         }
     });
@@ -687,18 +704,37 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('view.centersUseGaussianColor', value);
     });
 
+    // reveal effect
+    let revealEffect = 'spread';
+
+    events.function('revealEffect', () => {
+        return revealEffect;
+    });
+
+    events.on('revealEffect.set', (value: string) => {
+        if (value !== revealEffect) {
+            revealEffect = value;
+            events.fire('revealEffect.changed', revealEffect);
+        }
+    });
+
     events.function('camera.getPose', () => {
         const camera = scene.camera;
         const position = camera.position;
         const focalPoint = camera.focalPoint;
         return {
             position: { x: position.x, y: position.y, z: position.z },
-            target: { x: focalPoint.x, y: focalPoint.y, z: focalPoint.z }
+            target: { x: focalPoint.x, y: focalPoint.y, z: focalPoint.z },
+            fov: camera.fov
         };
     });
 
-    events.on('camera.setPose', (pose: { position: Vec3, target: Vec3 }, speed = 1) => {
+    events.on('camera.setPose', (pose: { position: Vec3, target: Vec3, fov?: number }, speed = 1) => {
         scene.camera.setPose(pose.position, pose.target, speed);
+        if (pose.fov !== undefined) {
+            scene.camera.fov = pose.fov;
+            events.fire('camera.fov', pose.fov);
+        }
     });
 
     // hack: fire events to initialize UI
@@ -719,7 +755,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             outlineSelection: events.invoke('view.outlineSelection'),
             showGrid: events.invoke('grid.visible'),
             showBound: events.invoke('camera.bound'),
-            flySpeed: events.invoke('camera.flySpeed')
+            showCameraPoses: events.invoke('camera.showPoses'),
+            flySpeed: events.invoke('camera.flySpeed'),
+            revealEffect: events.invoke('revealEffect')
         };
     });
 
@@ -733,7 +771,11 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('view.setOutlineSelection', docView.outlineSelection);
         events.fire('grid.setVisible', docView.showGrid);
         events.fire('camera.setBound', docView.showBound);
+        events.fire('camera.setShowPoses', docView.showCameraPoses ?? false);
         events.fire('camera.setFlySpeed', docView.flySpeed);
+        if (docView.revealEffect) {
+            events.fire('revealEffect.set', docView.revealEffect);
+        }
     });
 };
 

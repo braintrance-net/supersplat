@@ -6,7 +6,6 @@ const fromWorldPoint = new Vec3();
 const toWorldPoint = new Vec3();
 const worldDiff = new Vec3();
 const moveVec = new Vec3();
-const forwardVec = new Vec3();
 
 // calculate the distance between two 2d points
 const dist = (x0: number, y0: number, x1: number, y1: number) => Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2);
@@ -24,29 +23,8 @@ class PointerController {
             camera.setAzimElev(azim, elev);
         };
 
-        // Fly mode: rotate camera around itself (keep camera position fixed)
         const look = (dx: number, dy: number) => {
-            // Use TARGET values to calculate target camera position (not current interpolated)
-            const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
-
-            // Calculate target camera position from target focal point and angles
-            Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-            const targetCameraPos = camera.focalPoint.add(forwardVec.clone().mulScalar(distance));
-
-            // Calculate new azim/elev
-            const azim = camera.azim - dx * camera.scene.config.controls.orbitSensitivity;
-            const elev = camera.elevation - dy * camera.scene.config.controls.orbitSensitivity;
-
-            // Calculate the new forward vector based on new angles
-            Camera.calcForwardVec(forwardVec, azim, elev);
-
-            // Calculate new focal point to keep camera at target position
-            // Camera position = focalPoint + forwardVec * distance
-            // So: focalPoint = cameraPosition - forwardVec * distance
-            const newFocalPoint = targetCameraPos.clone().sub(forwardVec.clone().mulScalar(distance));
-
-            camera.setAzimElev(azim, elev);
-            camera.setFocalPoint(newFocalPoint);
+            camera.look(dx, dy);
         };
 
         const pan = (x: number, y: number, dx: number, dy: number) => {
@@ -77,6 +55,7 @@ class PointerController {
         let midx: number, midy: number, midlen: number;
 
         const pointerdown = (event: PointerEvent) => {
+            if (camera.inputDisabled) return; // gizmo drag etc. owns the pointer
             if (event.pointerType === 'mouse') {
                 // If a button is already pressed, ignore this press
                 if (pressedButton !== -1) {
@@ -120,6 +99,7 @@ class PointerController {
         };
 
         const pointermove = (event: PointerEvent) => {
+            if (camera.inputDisabled) return; // suppressed while a gizmo is dragging
             if (event.pointerType === 'mouse') {
                 // Only process if we're tracking a button
                 if (pressedButton === -1) {
@@ -354,10 +334,10 @@ class PointerController {
 
                 moveVec.set(0, 0, 0);
 
-                // Forward/backward along horizontal forward direction (fixed Y)
+                // Forward/backward along the FULL camera facing (including pitch), so
+                // travel follows where you're looking — look down + W goes down-forward.
                 if (forward) {
                     const zAxis = worldTransform.getZ();
-                    zAxis.y = 0;
                     zAxis.normalize();
                     moveVec.add(zAxis.mulScalar(-forward * factor));
                 }

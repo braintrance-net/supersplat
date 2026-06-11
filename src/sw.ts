@@ -3,7 +3,9 @@ import { version as appVersion } from '../package.json';
 // export default null
 declare let self: ServiceWorkerGlobalScope;
 
-const cacheName = `superSplat-v${appVersion}`;
+// BUILD_HASH is injected at build time by rollup-plugin-replace to bust the SW cache on every build
+const buildHash = '__BUILD_HASH__';
+const cacheName = `superSplat-v${appVersion}-${buildHash}`;
 
 const cacheUrls = [
     './',
@@ -31,6 +33,9 @@ const cacheUrls = [
 self.addEventListener('install', (event) => {
     console.log(`installing v${appVersion}`);
 
+    // Skip waiting to activate immediately
+    self.skipWaiting();
+
     // create cache for current version
     event.waitUntil(
         caches.open(cacheName)
@@ -40,8 +45,11 @@ self.addEventListener('install', (event) => {
     );
 });
 
-self.addEventListener('activate', () => {
+self.addEventListener('activate', (event) => {
     console.log(`activating v${appVersion}`);
+
+    // Take control of all pages immediately
+    event.waitUntil(self.clients.claim());
 
     // delete the old caches once this one is activated
     caches.keys().then((names) => {

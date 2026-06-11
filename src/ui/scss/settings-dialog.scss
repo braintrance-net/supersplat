@@ -22,7 +22,7 @@
         border-radius: 8px;
         background-color: $bcg-primary;
 
-        filter: drop-shadow(5px 5px 10px rgba(0, 0, 0, 0.8));
+        filter: drop-shadow(5px 5px 10px rgba(0, 0, 0, 0.15));
 
         // the following is needed to get drop-shadow working on safari
         will-change: transform;
@@ -38,6 +38,8 @@
                 vertical-align: middle;
                 color: $clr-icon-hilight;
             }
+
+            text-transform: uppercase;
 
             #text {
                 margin: 0;
@@ -74,7 +76,7 @@
                 }
 
                 .boolean {
-                    margin: 5px 0 0 0;
+                    margin: 5px 0 0 auto;
                     flex-grow: 0;
                 }
 

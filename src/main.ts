@@ -1,6 +1,7 @@
 import { WebPCodec } from '@playcanvas/splat-transform';
 import { Color, createGraphicsDevice } from 'playcanvas';
 
+import { AnnotationManager } from './annotation-manager';
 import { registerCameraPosesEvents } from './camera-poses';
 import { registerDocEvents } from './doc';
 import { EditHistory } from './edit-history';
@@ -8,6 +9,7 @@ import { registerEditorEvents } from './editor';
 import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
+import { initIframeIntegration } from './iframe-integration';
 import { registerPlySequenceEvents } from './ply-sequence';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
@@ -29,9 +31,13 @@ import { RotateTool } from './tools/rotate-tool';
 import { ScaleTool } from './tools/scale-tool';
 import { SphereSelection } from './tools/sphere-selection';
 import { ToolManager } from './tools/tool-manager';
+import { registerTrackManagerEvents } from './track-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
+import { AnnotationOverlay } from './ui/annotation-overlay';
+import { BraintranceUI } from './ui/braintrance/braintrance-ui';
 import { EditorUI } from './ui/editor';
 import { localizeInit } from './ui/localization';
+import { ViewManager } from './view-manager';
 
 declare global {
     interface LaunchParams {
@@ -91,6 +97,7 @@ const main = async () => {
     // register events that only need the events object (before UI is created)
     registerTimelineEvents(events);
     registerCameraPosesEvents(events);
+    registerTrackManagerEvents(events);
     registerTransformHandlerEvents(events);
     registerPlySequenceEvents(events);
     registerPublishEvents(events);
@@ -102,6 +109,10 @@ const main = async () => {
 
     // editor ui
     const editorUI = new EditorUI(events);
+
+    // braintrance "Simplification" redesign overlay (hides stock chrome via body.bt-mode)
+    const braintranceUI = new BraintranceUI();
+    events.function('braintranceUI', () => braintranceUI);
 
     // create the graphics device
     const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
@@ -127,6 +138,10 @@ const main = async () => {
         editorUI.canvas,
         graphicsDevice
     );
+
+    // braintrance prototype: drop a placeholder object into the live scene and
+    // wire faked-SAM click selection so the redesign is testable end to end.
+    braintranceUI.attachScene(scene, editorUI.canvas, events);
 
     // colors
     const bgClr = new Color();
@@ -233,6 +248,15 @@ const main = async () => {
 
     window.scene = scene;
 
+    // view manager for saving/restoring camera views
+    new ViewManager(events);
+
+    // annotation manager for 3D annotations
+    new AnnotationManager(events);
+
+    // annotation overlay for rendering annotation markers on canvas
+    new AnnotationOverlay(events, scene, editorUI.canvasContainer.dom);
+
     // register events that need scene or other dependencies
     registerEditorEvents(events, editHistory, scene);
     registerSelectionEvents(events, scene);
@@ -242,6 +266,15 @@ const main = async () => {
 
     // load async models
     scene.start();
+
+    // initialize iframe integration if running in iframe
+    initIframeIntegration(events, scene);
+
+    // handle revealEffect query param
+    const revealEffectParam = url.searchParams.get('revealEffect');
+    if (revealEffectParam) {
+        events.fire('revealEffect.set', revealEffectParam);
+    }
 
     // handle load params
     const loadList = url.searchParams.getAll('load');
