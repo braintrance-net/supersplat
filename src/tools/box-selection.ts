@@ -121,7 +121,14 @@ class BoxSelection {
         const resizeHandles: ResizeHandle[] = [];
         const screenMath = createScreenMath(scene);
         let syncingFromGizmo = false;
-        let activeDrag: { handle: ResizeHandle; pointerId: number } | null = null;
+        let activeDrag: {
+            handle: ResizeHandle;
+            pointerId: number;
+            startClient: [number, number];
+            // edge handles lock to ONE of their two axes once the drag
+            // direction is clear — never two dimensions at once
+            lockedFace: { axis: 0 | 1 | 2; sign: 1 | -1 } | null;
+        } | null = null;
 
         const lenForAxis = (axis: 0 | 1 | 2) => (axis === 0 ? box.lenX : axis === 1 ? box.lenY : box.lenZ);
         const setLenForAxis = (axis: 0 | 1 | 2, value: number) => {
@@ -181,6 +188,52 @@ class BoxSelection {
             }
         };
 
+        // resolve a single-face drag: closest point between the mouse ray and
+        // the world axis line through the box center
+        const dragFaceAlongAxis = (
+            face: { axis: 0 | 1 | 2; sign: 1 | -1 },
+            o: [number, number, number],
+            d: [number, number, number]
+        ) => {
+            const center = box.pivot.getPosition();
+            const p0: [number, number, number] = [center.x, center.y, center.z];
+            const u: [number, number, number] = [0, 0, 0];
+            u[face.axis] = 1;
+            const w0 = [p0[0] - o[0], p0[1] - o[1], p0[2] - o[2]];
+            const b = u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
+            const dd = -(u[0] * w0[0] + u[1] * w0[1] + u[2] * w0[2]);
+            const e = -(d[0] * w0[0] + d[1] * w0[1] + d[2] * w0[2]);
+            const denom = 1 - b * b;
+            if (Math.abs(denom) < 1e-6) return;
+            const t = (b * e - dd) / denom;
+            applyFaceCoord(face.axis, face.sign, p0[face.axis] + t);
+        };
+
+        // pick which of an edge's two axes the user is dragging along by
+        // comparing the mouse delta against each axis's screen direction
+        const resolveEdgeLock = (handle: ResizeHandle, model: NonNullable<ReturnType<typeof screenMath.pinhole>>, clientX: number, clientY: number) => {
+            if (!activeDrag) return null;
+            const deltaX = clientX - activeDrag.startClient[0];
+            const deltaY = clientY - activeDrag.startClient[1];
+            if (Math.hypot(deltaX, deltaY) < 8) return null;
+            const anchor = handleAnchorWorld(handle);
+            const anchorScreen = screenMath.projectToClient(model, anchor);
+            if (!anchorScreen) return null;
+            let best: { face: { axis: 0 | 1 | 2; sign: 1 | -1 }; score: number } | null = null;
+            for (const face of handle.faces) {
+                const offset: [number, number, number] = [...anchor];
+                offset[face.axis] += Math.max(0.2, lenForAxis(face.axis) * 0.25);
+                const offsetScreen = screenMath.projectToClient(model, offset);
+                if (!offsetScreen) continue;
+                const axisDeltaX = offsetScreen[0] - anchorScreen[0];
+                const axisDeltaY = offsetScreen[1] - anchorScreen[1];
+                const axisLength = Math.hypot(axisDeltaX, axisDeltaY) || 1;
+                const score = Math.abs((deltaX * axisDeltaX + deltaY * axisDeltaY) / axisLength);
+                if (!best || score > best.score) best = { face, score };
+            }
+            return best?.face ?? null;
+        };
+
         const dragHandleTo = (handle: ResizeHandle, clientX: number, clientY: number) => {
             const model = screenMath.pinhole();
             if (!model) return;
@@ -190,34 +243,16 @@ class BoxSelection {
             const o: [number, number, number] = [model.position.x, model.position.y, model.position.z];
 
             if (handle.faces.length === 1) {
-                // face: closest point between the mouse ray and the axis line
-                const face = handle.faces[0];
-                const center = box.pivot.getPosition();
-                const p0: [number, number, number] = [center.x, center.y, center.z];
-                const u: [number, number, number] = [0, 0, 0];
-                u[face.axis] = 1;
-                const w0 = [p0[0] - o[0], p0[1] - o[1], p0[2] - o[2]];
-                const b = u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
-                const dd = -(u[0] * w0[0] + u[1] * w0[1] + u[2] * w0[2]);
-                const e = -(d[0] * w0[0] + d[1] * w0[1] + d[2] * w0[2]);
-                const denom = 1 - b * b;
-                if (Math.abs(denom) < 1e-6) return;
-                const t = (b * e - dd) / denom;
-                applyFaceCoord(face.axis, face.sign, p0[face.axis] + t);
+                dragFaceAlongAxis(handle.faces[0], o, d);
             } else {
-                // edge: intersect the mouse ray with the plane through the edge
-                // anchor whose normal is the edge (free) axis, then move both
-                // adjacent faces to the intersection point
-                const anchor = handleAnchorWorld(handle);
-                const freeAxis = handle.freeAxis;
-                const denom = d[freeAxis];
-                if (Math.abs(denom) < 1e-5) return;
-                const t = (anchor[freeAxis] - o[freeAxis]) / denom;
-                if (!(t > 0)) return;
-                const hit: [number, number, number] = [o[0] + d[0] * t, o[1] + d[1] * t, o[2] + d[2] * t];
-                for (const face of handle.faces) {
-                    applyFaceCoord(face.axis, face.sign, hit[face.axis]);
+                // edge: one dimension at a time — lock to the axis the user is
+                // pulling along, then behave exactly like that face's handle
+                if (activeDrag && !activeDrag.lockedFace) {
+                    activeDrag.lockedFace = resolveEdgeLock(handle, model, clientX, clientY);
                 }
+                const locked = activeDrag?.lockedFace;
+                if (!locked) return;
+                dragFaceAlongAxis(locked, o, d);
             }
             box.moved();
             scene.forceRender = true;
@@ -247,7 +282,12 @@ class BoxSelection {
             dom.addEventListener('pointerdown', (event) => {
                 event.stopPropagation();
                 event.preventDefault();
-                activeDrag = { handle, pointerId: event.pointerId };
+                activeDrag = {
+                    handle,
+                    pointerId: event.pointerId,
+                    startClient: [event.clientX, event.clientY],
+                    lockedFace: null
+                };
                 dom.setPointerCapture(event.pointerId);
                 dom.style.cursor = 'grabbing';
             });

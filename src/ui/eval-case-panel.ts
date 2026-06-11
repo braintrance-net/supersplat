@@ -262,6 +262,23 @@ class EvalCasePanel {
                 'box tool is not available';
         }
 
+        // fixtures reuse the same physical object across cases with slightly
+        // different hand-drawn boxes; treat targets as "the same" when their
+        // centers and dims are close, so one correction fans out to all of them
+        function targetsMatch(a: EvalTarget, b: EvalTarget) {
+            const centerDistance = Math.hypot(
+                a.center[0] - b.center[0],
+                a.center[1] - b.center[1],
+                a.center[2] - b.center[2]
+            );
+            const dimsDelta = Math.max(
+                Math.abs(a.dimensions[0] - b.dimensions[0]),
+                Math.abs(a.dimensions[1] - b.dimensions[1]),
+                Math.abs(a.dimensions[2] - b.dimensions[2])
+            );
+            return centerDistance <= 0.4 && dimsDelta <= 0.3;
+        }
+
         function applyBoxFromScene() {
             const target = cases[selectedIndex]?.target;
             if (!target) return;
@@ -271,14 +288,24 @@ class EvalCasePanel {
                 metricsInfo.textContent = 'box tool has no current box';
                 return;
             }
+            const original: EvalTarget = JSON.parse(JSON.stringify(target));
             target.center = [...current.center];
             target.dimensions = [...current.dimensions];
+            // propagate to every other case whose target matches the one we
+            // just replaced (same object, slightly different rough box)
+            let propagated = 0;
+            cases.forEach((other, index) => {
+                if (index === selectedIndex || !other.target) return;
+                if (targetsMatch(other.target, original)) {
+                    other.target.center = [...current.center];
+                    other.target.dimensions = [...current.dimensions];
+                    propagated += 1;
+                }
+            });
             dirty = true;
             updateFileInfo();
             fillTargetInputs();
-            // no auto-preview here: keep the viewport clean for further edits;
-            // Preview/Run redraw the overlays on demand
-            metricsInfo.textContent = 'target updated from the scene box — Save to persist';
+            metricsInfo.textContent = `target updated${propagated ? ` (+${propagated} matching case${propagated > 1 ? 's' : ''} propagated)` : ''} — Save to persist`;
         }
 
         function parseFixture(text: string, name: string): { cases: EvalCase[]; format: FixtureFormat } {
@@ -330,6 +357,24 @@ class EvalCasePanel {
                 const text = format === 'jsonl' ?
                     `${cases.map(entry => JSON.stringify(entry)).join('\n')}\n` :
                     JSON.stringify(cases, null, 2);
+                // primary path: local eval-save-server (node scripts/eval-save-server.mjs)
+                try {
+                    const response = await fetch('http://127.0.0.1:48013/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: fileName, content: text })
+                    });
+                    const body = await response.json();
+                    if (response.ok && body.ok) {
+                        dirty = false;
+                        updateFileInfo();
+                        metricsInfo.textContent = `saved to ${body.path}`;
+                        return;
+                    }
+                    metricsInfo.textContent = `save server rejected: ${body.error ?? response.status} — falling back to file picker`;
+                } catch {
+                    metricsInfo.textContent = 'save server not running (node scripts/eval-save-server.mjs) — falling back to file picker';
+                }
                 // auto-loaded fixtures have no disk handle yet; ask for one so
                 // the user can overwrite the real scripts/boxer-evals file
                 if (!fileHandle) {
