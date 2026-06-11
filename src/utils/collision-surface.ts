@@ -1,4 +1,4 @@
-import { Mat4, Quat, Ray, Vec3 } from 'playcanvas';
+import { Mat4, Quat, Vec3 } from 'playcanvas';
 
 import { Element, ElementType } from '../element';
 import { Events } from '../events';
@@ -481,33 +481,75 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     // Probe the collision surface at a normalized (0-1) screen coordinate.
     // Returns the world hit plus the world-height the viewport spans at that
     // depth, so callers can convert between pixel and world brush radii.
-    const probeRay = new Ray();
-    // the engine's screenToWorld/worldToScreen run in CSS pixels
-    // (device.clientRect) — NOT the DPR-scaled render target size; mixing the
-    // two offsets every probe by the display scaling factor
-    const screenDims = () => {
-        const rect = (scene.app.graphicsDevice as unknown as { clientRect?: { width: number; height: number } }).clientRect;
-        return rect && rect.width > 0 ? rect : { width: 1, height: 1 };
-    };
-    const probeAt = (x: number, y: number) => {
-        if (!activeSurface) return null;
-        const { width, height } = screenDims();
-        scene.camera.getRay(x * width, y * height, probeRay);
-        const hit = activeSurface.raycastWorld(
-            [probeRay.origin.x, probeRay.origin.y, probeRay.origin.z],
-            [probeRay.direction.x, probeRay.direction.y, probeRay.direction.z]
-        );
-        if (!hit) return null;
+    // All probe coordinates are raw viewport (client) pixels from pointer
+    // events. Rays and projections use an explicit pinhole model built from
+    // the camera pose + fov — the same convention as the Boxer eval pipeline.
+    // (The engine's screenToWorld/worldToScreen are NOT inverse-consistent in
+    // this app: SuperSplat customizes the projection, so a screenToWorld ray
+    // re-projected with worldToScreen lands ~3% off. Do not use them here.)
+    const camRight = new Vec3();
+    const camUp = new Vec3();
+    const camBack = new Vec3();
+    const pinhole = () => {
+        const rect = scene.canvas.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) return null;
         const camera = scene.camera.camera;
         const fovRad = camera.fov * Math.PI / 180;
-        const fovY = camera.horizontalFov ?
-            2 * Math.atan(Math.tan(fovRad / 2) * (height / Math.max(1, width))) :
-            fovRad;
+        const focal = camera.horizontalFov ?
+            rect.width / (2 * Math.tan(fovRad / 2)) :
+            rect.height / (2 * Math.tan(fovRad / 2));
+        const transform = scene.camera.mainCamera.getWorldTransform();
+        transform.getX(camRight);
+        transform.getY(camUp);
+        transform.getZ(camBack);
+        const position = scene.camera.mainCamera.getPosition();
+        return { rect, focal, position };
+    };
+
+    const rayThrough = (model: NonNullable<ReturnType<typeof pinhole>>, clientX: number, clientY: number): [number, number, number] => {
+        const { rect, focal } = model;
+        const sx = (clientX - rect.left - rect.width / 2) / focal;
+        const sy = (clientY - rect.top - rect.height / 2) / focal;
+        // camera space (GL): +x right, +y up, -z forward; screen y grows down
+        return [
+            camRight.x * sx - camUp.x * sy - camBack.x,
+            camRight.y * sx - camUp.y * sy - camBack.y,
+            camRight.z * sx - camUp.z * sy - camBack.z
+        ];
+    };
+
+    const projectToClient = (model: NonNullable<ReturnType<typeof pinhole>>, point: [number, number, number]): [number, number] | null => {
+        const { rect, focal, position } = model;
+        const dx = point[0] - position.x;
+        const dy = point[1] - position.y;
+        const dz = point[2] - position.z;
+        const xc = dx * camRight.x + dy * camRight.y + dz * camRight.z;
+        const yc = dx * camUp.x + dy * camUp.y + dz * camUp.z;
+        const depth = -(dx * camBack.x + dy * camBack.y + dz * camBack.z);
+        if (!(depth > 0.0001)) return null;
+        return [
+            rect.left + rect.width / 2 + focal * (xc / depth),
+            rect.top + rect.height / 2 - focal * (yc / depth)
+        ];
+    };
+
+    const probeAt = (clientX: number, clientY: number) => {
+        if (!activeSurface) return null;
+        const model = pinhole();
+        if (!model) return null;
+        const hit = activeSurface.raycastWorld(
+            [model.position.x, model.position.y, model.position.z],
+            rayThrough(model, clientX, clientY)
+        );
+        if (!hit) return null;
+        // px per world unit at the hit depth straight from the pinhole focal
+        const pxPerWorld = model.focal / hit.distance;
         return {
             point: hit.point,
             distance: hit.distance,
             normal: hit.normal,
-            world_per_screen_height: 2 * Math.tan(fovY / 2) * hit.distance
+            world_per_screen_height: model.rect.height / Math.max(0.000001, pxPerWorld),
+            px_per_world: pxPerWorld
         };
     };
     events.function('collisionSurface.screenProbe', probeAt);
@@ -519,21 +561,21 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     // outline therefore folds across corners like a sticker on the mesh —
     // climbing a laptop screen at the hinge — and stops at silhouette edges
     // instead of spiking onto far background.
-    const ringScreen = new Vec3();
     const WALK_STEPS = 4;
-    events.function('collisionSurface.ringProbe', (x: number, y: number, radiusWorld: number, sampleCount = 20) => {
-        const center = probeAt(x, y);
+    events.function('collisionSurface.ringProbe', (clientX: number, clientY: number, radiusWorld: number, sampleCount = 20) => {
+        const center = probeAt(clientX, clientY);
         if (!center || !activeSurface || !(radiusWorld > 0)) return null;
-        const { width, height } = screenDims();
-        const cam = scene.camera.mainCamera.getPosition();
-        const origin: [number, number, number] = [cam.x, cam.y, cam.z];
+        const model = pinhole();
+        if (!model) return null;
+        const rect = model.rect;
+        const origin: [number, number, number] = [model.position.x, model.position.y, model.position.z];
 
         // the voxel mesh has staircase normals; average a small probe cross
         // around the cursor so the ring plane reflects the macro surface
         const n0: [number, number, number] = [...center.normal];
-        const probeStep = 0.012;
+        const probeStep = Math.max(6, rect.height * 0.012);
         for (const [ox, oy] of [[probeStep, 0], [-probeStep, 0], [0, probeStep], [0, -probeStep]]) {
-            const neighbor = probeAt(x + ox, y + oy);
+            const neighbor = probeAt(clientX + ox, clientY + oy);
             if (neighbor && Math.abs(neighbor.distance - center.distance) < radiusWorld * 2) {
                 n0[0] += neighbor.normal[0];
                 n0[1] += neighbor.normal[1];
@@ -594,9 +636,8 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
                     dx = tx; dy = ty; dz = tz;
                 }
             }
-            ringScreen.set(px, py, pz);
-            scene.camera.camera.worldToScreen(ringScreen, ringScreen);
-            rawRing.push([ringScreen.x / Math.max(1, width), ringScreen.y / Math.max(1, height)]);
+            const projected = projectToClient(model, [px, py, pz]);
+            if (projected) rawRing.push(projected);
         }
 
         // one smoothing pass to soften voxel staircase jitter

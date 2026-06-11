@@ -45,18 +45,20 @@ class BrushSelection {
         let surfaceMissStreak = 0;
         const SURFACE_MISS_TOLERANCE = 14;
 
-        type SurfaceProbeHit = { point: [number, number, number]; distance: number; world_per_screen_height: number };
-
-        const probeSurface = (x: number, y: number) => {
-            const width = parent.clientWidth || 1;
-            const height = parent.clientHeight || 1;
-            return events.invoke('collisionSurface.screenProbe', x / width, y / height) as SurfaceProbeHit | null | undefined;
+        type SurfaceProbeHit = {
+            point: [number, number, number];
+            distance: number;
+            world_per_screen_height: number;
+            px_per_world: number;
         };
 
-        const probeSurfaceRing = (x: number, y: number, rWorld: number) => {
-            const width = parent.clientWidth || 1;
-            const height = parent.clientHeight || 1;
-            return events.invoke('collisionSurface.ringProbe', x / width, y / height, rWorld, 20) as
+        // probes speak raw viewport (client) pixels — no frame conversions here
+        const probeSurface = (clientX: number, clientY: number) => {
+            return events.invoke('collisionSurface.screenProbe', clientX, clientY) as SurfaceProbeHit | null | undefined;
+        };
+
+        const probeSurfaceRing = (clientX: number, clientY: number, rWorld: number) => {
+            return events.invoke('collisionSurface.ringProbe', clientX, clientY, rWorld, 20) as
                 { center: SurfaceProbeHit; ring: [number, number][] } | null | undefined;
         };
 
@@ -131,10 +133,10 @@ class BrushSelection {
             controlLabel.textContent = 'Brush Size';
         };
 
-        const applySurfaceRadius = (x: number, y: number) => {
-            const ringResult = radiusWorld !== null ? probeSurfaceRing(x, y, radiusWorld) : null;
-            const hit = ringResult?.center ?? probeSurface(x, y);
-            if (!hit || !(hit.world_per_screen_height > 0)) {
+        const applySurfaceRadius = (clientX: number, clientY: number) => {
+            const ringResult = radiusWorld !== null ? probeSurfaceRing(clientX, clientY, radiusWorld) : null;
+            const hit = ringResult?.center ?? probeSurface(clientX, clientY);
+            if (!hit || !(hit.px_per_world > 0)) {
                 surfaceMissStreak += 1;
                 if (surfaceMissStreak > SURFACE_MISS_TOLERANCE) {
                     exitSurfaceMode();
@@ -142,8 +144,7 @@ class BrushSelection {
                 return;
             }
             surfaceMissStreak = 0;
-            const pxPerWorld = (parent.clientHeight || 1) / hit.world_per_screen_height;
-            if (!(pxPerWorld > 0)) return;
+            const pxPerWorld = hit.px_per_world;
             if (radiusWorld === null) {
                 radiusWorld = radius / pxPerWorld;
             }
@@ -156,11 +157,10 @@ class BrushSelection {
             setRadius(radius + (targetRadius - radius) * 0.45);
 
             if (ringResult?.ring?.length) {
-                const width = parent.clientWidth || 1;
-                const height = parent.clientHeight || 1;
+                const parentRect = parent.getBoundingClientRect();
                 surfaceOutline.setAttribute(
                     'points',
-                    ringResult.ring.map(point => `${(point[0] * width).toFixed(1)},${(point[1] * height).toFixed(1)}`).join(' ')
+                    ringResult.ring.map(point => `${(point[0] - parentRect.left).toFixed(1)},${(point[1] - parentRect.top).toFixed(1)}`).join(' ')
                 );
                 surfaceOutline.style.display = '';
                 circle.style.display = 'none';
@@ -228,7 +228,7 @@ class BrushSelection {
             const x = e.offsetX;
             const y = e.offsetY;
 
-            applySurfaceRadius(x, y);
+            applySurfaceRadius(e.clientX, e.clientY);
             circle.setAttribute('cx', x.toString());
             circle.setAttribute('cy', y.toString());
 
