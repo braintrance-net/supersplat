@@ -74,6 +74,7 @@ type MultiplayerPlayer = {
     color?: string;
     position: Vec3Tuple;
     target?: Vec3Tuple;
+    speaking?: boolean;
 };
 
 interface IsSceneDirtyQuery {

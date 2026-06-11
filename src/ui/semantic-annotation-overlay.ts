@@ -39,6 +39,7 @@ type MultiplayerOverlayPlayer = {
     color?: string;
     position: [number, number, number];
     target?: [number, number, number];
+    speaking?: boolean;
 };
 
 type MultiplayerHeightCalibration = {
@@ -493,6 +494,9 @@ class SemanticAnnotationOverlay {
 
             marker.style.setProperty('--multiplayer-avatar-color', player.color || '#53d6ff');
             marker.querySelector('.multiplayer-avatar-label')!.textContent = player.label;
+            // Talking cue: glow the avatar body while the participant is speaking.
+            const body = marker.querySelector('.multiplayer-avatar-body') as HTMLElement | null;
+            if (body) body.style.filter = player.speaking ? 'drop-shadow(0 0 9px #91d9ce) drop-shadow(0 0 4px #91d9ce)' : '';
             this.updateMultiplayerMarkerAvatarState(marker);
         }
 
