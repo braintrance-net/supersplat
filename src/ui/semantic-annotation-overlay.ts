@@ -141,6 +141,9 @@ const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 72;
 // Morph-target index that opens the mouth on the library VRM avatars.
 const MULTIPLAYER_VRM_MOUTH_MORPH_INDEX = 2;
+// Render VRM avatars at a consistent adult height regardless of the scene's
+// (often short) eye-to-floor calibration.
+const MULTIPLAYER_VRM_TARGET_HEIGHT = 1.7;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -988,9 +991,12 @@ class SemanticAnnotationOverlay {
         }
 
         // VRM models are authored at roughly human metres (~1.6 tall) rather than
-        // the Kenney source height, so they sink/shrink without a per-source value.
+        // the Kenney source height. Size VRMs to a consistent adult height so they
+        // never render child-sized when a scene's eye-to-floor height is short;
+        // feet still sit on the detected ground (feetY above).
         const sourceHeight = this.multiplayerAvatarIsVrm ? 1.6 : MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
-        const scale = avatarWorldHeight / sourceHeight;
+        const targetHeight = this.multiplayerAvatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+        const scale = targetHeight / sourceHeight;
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
         instance.entity.setPosition(feetX, feetY, feetZ);
