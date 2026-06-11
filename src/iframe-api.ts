@@ -42,6 +42,8 @@ const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
 const SCREEN_SURFACE = 'supersplat:screen-surface';
 const SCREEN_FRAME = 'supersplat:screen-frame';
 const SCREEN_CLEAR = 'supersplat:screen-clear';
+const RAYCAST = 'supersplat:raycast';
+const RAYCAST_RESULT = 'supersplat:raycast-result';
 const RENDER_WARMUP = 'supersplat:render-warmup';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 
@@ -264,6 +266,13 @@ interface ScreenFrameMessage {
 
 interface ScreenClearMessage {
     type: typeof SCREEN_CLEAR;
+}
+
+interface RaycastMessage {
+    type: typeof RAYCAST;
+    x: number;
+    y: number;
+    requestId?: string | number;
 }
 
 const hasOptionalRequestId = (data: any) => (
@@ -515,6 +524,33 @@ const isScreenFrameMessage = (data: any): data is ScreenFrameMessage => (
 const isScreenClearMessage = (data: any): data is ScreenClearMessage => (
     data && typeof data === 'object' && data.type === SCREEN_CLEAR
 );
+
+const isRaycastMessage = (data: any): data is RaycastMessage => (
+    data && typeof data === 'object' && data.type === RAYCAST && typeof data.x === 'number' && typeof data.y === 'number'
+);
+
+// Raycast normalized screen coords against the splat, returning the world hit
+// point. Tries a small ring of nearby pixels since splats are sparse and an
+// exact click can fall between gaussians.
+const raycastWorldPoint = async (nx: number, ny: number) => {
+    const scene = window.scene as any;
+    const camera = scene?.camera;
+    const canvas = scene?.canvas as HTMLCanvasElement | undefined;
+    if (!camera || !canvas) return null;
+
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    const offsets = [[0, 0], [6, 0], [-6, 0], [0, 6], [0, -6], [10, 10], [-10, 10], [10, -10], [-10, -10]];
+    for (const [ox, oy] of offsets) {
+        const x = Math.min(1, Math.max(0, nx + ox / width));
+        const y = Math.min(1, Math.max(0, ny + oy / height));
+        const hit = await camera.intersect(x, y);
+        if (hit?.position) {
+            return { x: hit.position.x, y: hit.position.y, z: hit.position.z };
+        }
+    }
+    return null;
+};
 
 const normalizeOrigin = (value: string, base: string) => new URL(value, base).origin;
 const normalizeUrl = (value: string, base: string) => new URL(value, base).href.replace(/\/$/, '');
@@ -1363,7 +1399,8 @@ const registerIframeApi = (events: Events) => {
                     thumbnailError: true,
                     multiplayerPlayers: true,
                     screenSurface: true,
-                    version: 5
+                    raycast: true,
+                    version: 6
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1386,6 +1423,13 @@ const registerIframeApi = (events: Events) => {
 
         if (isScreenClearMessage(event.data)) {
             events.fire('screen.clear');
+            return;
+        }
+
+        if (isRaycastMessage(event.data)) {
+            const requestId = event.data.requestId;
+            const position = await raycastWorldPoint(event.data.x, event.data.y);
+            source.postMessage({ type: RAYCAST_RESULT, requestId, position }, event.origin);
             return;
         }
 
