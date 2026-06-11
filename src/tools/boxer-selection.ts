@@ -508,6 +508,7 @@ type BoxerEvalPrompt =
     { type: 'client_click'; click_xy: [number, number] } |
     { type: 'client_brush'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
     { type: 'brush_sam'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'brush_boxer'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; preprocess_mode?: 'full_frame' | 'square_crop'; object_crop?: ObjectCropOptions } |
     { type: 'detect_all_click'; click_xy: [number, number] } |
     { type: 'direct_lift_click'; click_xy: [number, number]; use_sam?: boolean; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
     { type: 'lift_box'; bb2d: NormalizedBb2d; click_xy?: [number, number]; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
@@ -5708,7 +5709,7 @@ class BoxerSelection {
         let busy = false;
         let currentCorners: Vec3[] | null = null;
         let lastEvalPrompt: BoxerEvalPrompt | null = null;
-        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' }> | null = null;
+        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' | 'brush_boxer' }> | null = null;
         let lastBrushReplay: unknown | null = null;
         let brushPanelStatus: 'idle' | 'running' | 'done' | 'failed' = 'idle';
         let lastEvalFrame: ReturnType<typeof summarizeFrameForEval> | null = null;
@@ -6634,28 +6635,37 @@ class BoxerSelection {
                 .join(', ');
                 throw new Error(`SAM brush failed: ${reason}${attempts ? ` (${attempts})` : ''}`);
             }
-            const geometryRefinement = sam3Region ?
-                refineObbFromBoxedPoints(
-                    obb,
-                    frame,
-                    splat,
-                    scene,
-                    local.bb2d,
-                    click ? { click_xy: click, depthBuffer } : undefined,
-                    sam3Region
-                ) :
-                (brush?.mode === 'raw' ?
-                { applied: false as const, reason: 'raw-brush-extents' } :
-                local.debug.selected_candidate_source === 'brush_ray' || local.debug.selected_candidate_source === 'brush_surface' || (local.debug as { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry ?
-                { applied: false as const, reason: 'client-brush-ray-prior' } :
-                refineObbFromBoxedPoints(
+            const buildGeometryRefinement = (): GeometryRefinement => {
+                if (sam3Region) {
+                    return refineObbFromBoxedPoints(
+                        obb,
+                        frame,
+                        splat,
+                        scene,
+                        local.bb2d,
+                        click ? { click_xy: click, depthBuffer } : undefined,
+                        sam3Region
+                    );
+                }
+                if (brush?.mode === 'raw') {
+                    return { applied: false, reason: 'raw-brush-extents' };
+                }
+                const preserveLocalGeometry = local.debug.selected_candidate_source === 'brush_ray' ||
+                    local.debug.selected_candidate_source === 'brush_surface' ||
+                    (local.debug as { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry;
+                if (preserveLocalGeometry) {
+                    return { applied: false, reason: 'client-brush-ray-prior' };
+                }
+                return refineObbFromBoxedPoints(
                     obb,
                     frame,
                     splat,
                     scene,
                     local.bb2d,
                     click ? { click_xy: click, depthBuffer } : undefined
-                ));
+                );
+            };
+            const geometryRefinement = buildGeometryRefinement();
             const tRefine = performance.now();
 
             publishBoxerResultDebug(
@@ -6750,13 +6760,75 @@ class BoxerSelection {
             };
         };
 
-        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' }>) => {
+        // GUARANTEED real Boxer: the stroke's 2D box goes to the Boxer backend
+        // (/api/boxer-lift-bb2d) and the model lifts it to a 3D box. Raw model
+        // output, no local geometry refinement, and an honest error when the
+        // backend is unreachable or returns nothing.
+        const executeBrushBoxer = (
+            brush: BoxerBrushPrompt | undefined,
+            click: [number, number] | undefined,
+            target?: BoxerEvalTarget | null,
+            options?: Omit<Extract<BoxerEvalPrompt, { type: 'brush_boxer' }>, 'type' | 'click_xy' | 'brush'>
+        ) => {
+            const strokeBounds = brush?.bb2d ?? (brush?.points?.length ? (() => {
+                const radius = brush.radius ?? 8;
+                const bounds = brush.points.reduce((acc, point) => {
+                    acc[0] = Math.min(acc[0], point[0]);
+                    acc[1] = Math.min(acc[1], point[1]);
+                    acc[2] = Math.max(acc[2], point[0]);
+                    acc[3] = Math.max(acc[3], point[1]);
+                    return acc;
+                }, [Infinity, Infinity, -Infinity, -Infinity] as NormalizedBb2d);
+                return [bounds[0] - radius, bounds[1] - radius, bounds[2] + radius, bounds[3] + radius] as NormalizedBb2d;
+            })() : undefined);
+            if (!strokeBounds) {
+                throw new Error('Brush Boxer needs a stroke region');
+            }
+            const bb2d = sanitizeBb2d(strokeBounds, canvas.clientWidth, canvas.clientHeight);
+            if (!bb2d) {
+                throw new Error('Brush Boxer stroke region is invalid');
+            }
+            const focusPoint = click ?? brush?.center_xy;
+            // BoxNet expects roughly metric world units; this scene family is
+            // several times that, so default to a single corrective scale.
+            // (A multi-scale ensemble scores better but the EC2 backend hangs
+            // under the parallel requests — keep live use to one request.)
+            const worldScales = options?.boxernet_world_scales ??
+                (options?.boxernet_world_scale === undefined ? [0.2] : undefined);
+            return executeDirectLift(
+                [{
+                    id: 'brush-stroke',
+                    bb2d,
+                    score2d: 1,
+                    source: 'manual'
+                }],
+                {
+                    type: 'brush_boxer',
+                    ...(click ? { click_xy: click } : {}),
+                    brush,
+                    ...options,
+                    ...(worldScales ? { boxernet_world_scales: worldScales } : {})
+                },
+                target ?? null,
+                focusPoint ? { x: focusPoint[0], y: focusPoint[1] } : undefined,
+                options?.preprocess_mode ?? 'full_frame',
+                undefined,
+                'dense',
+                'global',
+                options?.boxernet_world_scale,
+                options?.refinement_mode ?? 'raw',
+                undefined,
+                options?.object_crop
+            );
+        };
+
+        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' | 'brush_boxer' }>) => {
             lastBrushPrompt = prompt;
             lastBrushReplay = null;
             brushPanelStatus = 'running';
             renderBrushPanel();
             console.log('[Boxer] captured brush prompt', prompt);
-            events.fire('toast', prompt.type === 'brush_sam' ? 'Running SAM brush selection' : 'Running Boxer brush selection', 'info');
+            events.fire('toast', prompt.type === 'brush_sam' ? 'Running SAM brush selection' : prompt.type === 'brush_boxer' ? 'Running Boxer model brush lift' : 'Running local brush selection', 'info');
             void new Promise<void>(resolve => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }).then(() => runLastBrushBoxer()).then(() => {
@@ -6788,12 +6860,18 @@ class BoxerSelection {
             renderBrushPanel();
             parent.style.cursor = 'wait';
             try {
-                const replay = await executeClientBrush(
-                    lastBrushPrompt.brush,
-                    lastBrushPrompt.click_xy,
-                    target ? cloneEvalTarget(target) : null,
-                    { useSam: lastBrushPrompt.type === 'brush_sam' }
-                );
+                const replay = lastBrushPrompt.type === 'brush_boxer' ?
+                    await executeBrushBoxer(
+                        lastBrushPrompt.brush,
+                        lastBrushPrompt.click_xy,
+                        target ? cloneEvalTarget(target) : null
+                    ) :
+                    await executeClientBrush(
+                        lastBrushPrompt.brush,
+                        lastBrushPrompt.click_xy,
+                        target ? cloneEvalTarget(target) : null,
+                        { useSam: lastBrushPrompt.type === 'brush_sam' }
+                    );
                 lastBrushReplay = replay;
                 brushPanelStatus = 'done';
                 renderBrushPanel();
@@ -7557,6 +7635,7 @@ class BoxerSelection {
                     evalCase.prompt?.type !== 'client_click' &&
                     evalCase.prompt?.type !== 'client_brush' &&
                     evalCase.prompt?.type !== 'brush_sam' &&
+                    evalCase.prompt?.type !== 'brush_boxer' &&
                     evalCase.prompt?.type !== 'detect_all_click' &&
                     evalCase.prompt?.type !== 'direct_lift_click' &&
                     evalCase.prompt?.type !== 'lift_target_box' &&
@@ -7627,6 +7706,20 @@ class BoxerSelection {
                             click ? [click.x, click.y] : undefined,
                             evalCase.target ?? null,
                             { useSam: true }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_boxer') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_boxer' }>;
+                        replay = await executeBrushBoxer(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            {
+                                boxernet_world_scale: brushPrompt.boxernet_world_scale,
+                                boxernet_world_scales: brushPrompt.boxernet_world_scales,
+                                refinement_mode: brushPrompt.refinement_mode,
+                                preprocess_mode: brushPrompt.preprocess_mode,
+                                object_crop: brushPrompt.object_crop
+                            }
                         );
                     } else if (evalCase.prompt.type === 'detect_all_click' && click) {
                         const detectAll = await executeDetectAll({ x: click.x, y: click.y, target: evalCase.target ?? null });

@@ -263,9 +263,9 @@ class BottomToolbar extends Container {
         tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
-        tooltips.register(brushBoxerSelect, 'Brush Boxer');
-        tooltips.register(brushSamSelect, 'Brush SAM');
-        tooltips.register(brushRawSelect, 'Brush Raw (no model, pure extents)');
+        tooltips.register(brushBoxerSelect, 'Brush Boxer (real Boxer model lift)');
+        tooltips.register(brushSamSelect, 'Brush SAM (real SAM model)');
+        tooltips.register(brushRawSelect, 'Brush Raw (no model — local geometry)');
         tooltips.register(boxerAll, 'Boxer Detect All');
         tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(semanticScan, 'Scan Semantic Labels');

@@ -206,8 +206,12 @@ class BrushSelection {
                 Math.min(canvas.height, bounds[3] + paddingRadius)
             ];
 
+            // honest variant contract:
+            //   raw   -> client_brush  (no model, local geometry pipeline)
+            //   boxer -> brush_boxer   (real Boxer model lift, no fallback)
+            //   sam   -> brush_sam     (real SAM mask, no fallback)
             return {
-                type: variant === 'sam' ? 'brush_sam' : 'client_brush',
+                type: variant === 'sam' ? 'brush_sam' : variant === 'boxer' ? 'brush_boxer' : 'client_brush',
                 click_xy: center,
                 brush: {
                     shape: 'stroke',
@@ -215,8 +219,7 @@ class BrushSelection {
                     radius: promptRadius,
                     bb2d,
                     points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
-                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {}),
-                    ...(variant === 'raw' ? { mode: 'raw' } : {})
+                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {})
                 }
             };
         };

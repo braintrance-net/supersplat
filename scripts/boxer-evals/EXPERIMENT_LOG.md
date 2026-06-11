@@ -484,6 +484,35 @@ main things we tried, what happened, and which paths still look worth pursuing.
   (`collisionSurface.ringProbe`, 20 ring raycasts re-projected to screen) so
   the cursor folds over corners and edges.
 
+## 2026-06-10 Honest Brush Variants + Real Boxer Brush (brush_boxer)
+
+- Naming truth: the old "Brush Boxer" toolbar button NEVER called the Boxer
+  model — `client_brush` is pure local geometry (`backend_bypassed: true`).
+  The toolbar contract is now honest:
+  - `Brush Raw (R)` -> `client_brush`: no model, local geometry pipeline.
+    This is the strongest measured path (live gate 0.8745, human 0.700).
+  - `Brush Boxer (B)` -> `brush_boxer`: GUARANTEED real model. Stroke bb2d
+    goes to `/api/boxer-lift-bb2d`, raw BoxNet output is drawn with
+    `refinement_mode: raw` (no local cleanup), and backend failure throws.
+  - `Brush SAM (S)` -> `brush_sam`: real SAM mask, honest failure.
+  - The pure-extents diagnostic stays available as `brush.mode='raw'` in
+    eval prompts (case0: 0.533) but is no longer a toolbar button.
+- First honest `brush_boxer` numbers (desk-can-brush-human-v1):
+  - Without world scaling the model is lost: case0 IoU 0 (dims near-perfect
+    0.96x1.7x0.9 vs 1x2x1 but center off ~1.1), case1 center error 5.56.
+  - BoxNet expects ~metric units; the scene is several times that. With
+    `--boxernet-world-scales 0.1,0.2,0.35`: case0 0.367, case1 0.226
+    (case1 center error 5.56 -> 0.54, dims 0.92x1.92x0.94 vs 1x2x1).
+  - Live default is a single scale `[0.2]` (case0 0.209 in 37s): the
+    3-scale parallel ensemble repeatedly hung the EC2 backend (10-minute
+    timeouts after the first case) — same instability family as the SAM
+    timeouts. Backend ops issue, not a client issue.
+- Read: the model understands object DIMENSIONS well but places the box
+  poorly, and local geometry places well — the obvious next experiment after
+  fixture cleanup is fusion: model dims + local placement, or the model
+  lift as one more candidate in the client_brush pool under the existing
+  arbitration.
+
 ## 2026-06-09 SAM3 Stateless Endpoint Proof
 
 - SAM backend update:
