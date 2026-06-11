@@ -23,6 +23,7 @@ import { Outline } from './outline';
 import { PCApp } from './pc-app';
 import { SceneConfig } from './scene-config';
 import { SceneState } from './scene-state';
+import { ScreenSurface } from './screen-surface';
 import { Splat } from './splat';
 import { SplatOverlay } from './splat-overlay';
 import { Underlay } from './underlay';
@@ -93,6 +94,7 @@ class Scene {
     assetLoader: AssetLoader;
     camera: Camera;
     splatOverlay: SplatOverlay;
+    screenSurface: ScreenSurface;
     grid: Grid;
     outline: Outline;
     underlay: Underlay;
@@ -215,6 +217,9 @@ class Scene {
 
         this.splatOverlay = new SplatOverlay();
         this.add(this.splatOverlay);
+
+        this.screenSurface = new ScreenSurface();
+        this.add(this.screenSurface);
 
         this.grid = new Grid();
         this.add(this.grid);

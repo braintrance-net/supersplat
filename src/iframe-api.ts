@@ -39,6 +39,9 @@ const POINTER_LOOK = 'supersplat:pointer-look';
 const WALK_INPUT = 'supersplat:walk-input';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
+const SCREEN_SURFACE = 'supersplat:screen-surface';
+const SCREEN_FRAME = 'supersplat:screen-frame';
+const SCREEN_CLEAR = 'supersplat:screen-clear';
 const RENDER_WARMUP = 'supersplat:render-warmup';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 
@@ -245,6 +248,22 @@ interface ViewerPerfResetMessage {
 interface MultiplayerPlayersMessage {
     type: typeof MULTIPLAYER_PLAYERS;
     players: MultiplayerPlayer[];
+}
+
+type ScreenCornerPoint = { x: number; y: number; z: number };
+
+interface ScreenSurfaceMessage {
+    type: typeof SCREEN_SURFACE;
+    corners: { topLeft: ScreenCornerPoint; topRight: ScreenCornerPoint; bottomLeft: ScreenCornerPoint } | null;
+}
+
+interface ScreenFrameMessage {
+    type: typeof SCREEN_FRAME;
+    bitmap: ImageBitmap;
+}
+
+interface ScreenClearMessage {
+    type: typeof SCREEN_CLEAR;
 }
 
 const hasOptionalRequestId = (data: any) => (
@@ -461,6 +480,41 @@ const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessa
         ))
     );
 };
+
+const isScreenCornerPoint = (value: any): value is ScreenCornerPoint => (
+    value &&
+    typeof value === 'object' &&
+    typeof value.x === 'number' &&
+    typeof value.y === 'number' &&
+    typeof value.z === 'number'
+);
+
+const isScreenSurfaceMessage = (data: any): data is ScreenSurfaceMessage => (
+    data &&
+    typeof data === 'object' &&
+    data.type === SCREEN_SURFACE &&
+    (
+        data.corners === null ||
+        (
+            data.corners &&
+            isScreenCornerPoint(data.corners.topLeft) &&
+            isScreenCornerPoint(data.corners.topRight) &&
+            isScreenCornerPoint(data.corners.bottomLeft)
+        )
+    )
+);
+
+const isScreenFrameMessage = (data: any): data is ScreenFrameMessage => (
+    data &&
+    typeof data === 'object' &&
+    data.type === SCREEN_FRAME &&
+    typeof ImageBitmap !== 'undefined' &&
+    data.bitmap instanceof ImageBitmap
+);
+
+const isScreenClearMessage = (data: any): data is ScreenClearMessage => (
+    data && typeof data === 'object' && data.type === SCREEN_CLEAR
+);
 
 const normalizeOrigin = (value: string, base: string) => new URL(value, base).origin;
 const normalizeUrl = (value: string, base: string) => new URL(value, base).href.replace(/\/$/, '');
@@ -1308,7 +1362,8 @@ const registerIframeApi = (events: Events) => {
                     walkInput: true,
                     thumbnailError: true,
                     multiplayerPlayers: true,
-                    version: 4
+                    screenSurface: true,
+                    version: 5
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1316,6 +1371,21 @@ const registerIframeApi = (events: Events) => {
 
         if (isMultiplayerPlayersMessage(event.data)) {
             events.fire('multiplayer.players', event.data.players);
+            return;
+        }
+
+        if (isScreenSurfaceMessage(event.data)) {
+            events.fire('screen.surface', event.data.corners);
+            return;
+        }
+
+        if (isScreenFrameMessage(event.data)) {
+            events.fire('screen.frame', event.data.bitmap);
+            return;
+        }
+
+        if (isScreenClearMessage(event.data)) {
+            events.fire('screen.clear');
             return;
         }
 
