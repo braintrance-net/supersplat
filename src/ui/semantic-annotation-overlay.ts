@@ -49,6 +49,8 @@ type MultiplayerHeightCalibration = {
 
 type MultiplayerAvatarAnimation = 'idle' | 'run';
 
+type MultiplayerMorph = { setWeight(index: number, weight: number): void };
+
 type MultiplayerAvatarInstance = {
     entity: Entity;
     rig: MultiplayerAvatarRig | null;
@@ -58,6 +60,8 @@ type MultiplayerAvatarInstance = {
     phase: number;
     lastPosition: Vec3;
     lastUpdateMs: number;
+    morphInstances: MultiplayerMorph[];
+    speaking: boolean;
 };
 
 type MultiplayerAvatarRigBone = {
@@ -135,6 +139,8 @@ const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 72;
+// Morph-target index that opens the mouth on the library VRM avatars.
+const MULTIPLAYER_VRM_MOUTH_MORPH_INDEX = 2;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -620,9 +626,19 @@ class SemanticAnnotationOverlay {
         }
 
         const rigDeltaTime = Math.min(Math.max(deltaTime, 1 / 120), 1 / 15);
+        const nowMs = performance.now();
         for (const avatar of this.multiplayerAvatarInstances.values()) {
-            if (avatar.entity.enabled && avatar.usesProceduralRig) {
+            if (!avatar.entity.enabled) {
+                continue;
+            }
+            if (avatar.usesProceduralRig) {
                 this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
+            }
+            if (avatar.morphInstances.length) {
+                const mouth = avatar.speaking ? 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(nowMs * 0.025 + avatar.phase)) : 0;
+                for (const morph of avatar.morphInstances) {
+                    morph.setWeight(MULTIPLAYER_VRM_MOUTH_MORPH_INDEX, mouth);
+                }
             }
         }
         this.scene.forceRender = true;
@@ -893,6 +909,14 @@ class SemanticAnnotationOverlay {
         this.scene.contentRoot.addChild(entity);
 
         const rig = this.createMultiplayerAvatarRig(entity);
+        const morphInstances: MultiplayerMorph[] = [];
+        entity.findComponents('render').forEach((component) => {
+            ((component as { meshInstances?: { morphInstance?: MultiplayerMorph }[] }).meshInstances ?? []).forEach((meshInstance) => {
+                if (meshInstance.morphInstance) {
+                    morphInstances.push(meshInstance.morphInstance);
+                }
+            });
+        });
         const instance = {
             entity,
             rig,
@@ -901,7 +925,9 @@ class SemanticAnnotationOverlay {
             smoothedPlanarSpeed: 0,
             phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
-            lastUpdateMs: performance.now()
+            lastUpdateMs: performance.now(),
+            morphInstances,
+            speaking: false
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
         this.emitDiagnostic('multiplayer-avatar-rig-ready', {
@@ -968,6 +994,7 @@ class SemanticAnnotationOverlay {
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
         instance.entity.setPosition(feetX, feetY, feetZ);
+        instance.speaking = Boolean(player.speaking);
         instance.lastPosition.set(feetX, feetY, feetZ);
         instance.lastUpdateMs = nowMs;
     }
