@@ -144,7 +144,11 @@ class EvalCasePanel {
             applyBoxFromScene();
         });
         applyBoxButton.title = 'Copy the manual box tool’s current box back into this case’s target';
-        actions.append(previewButton, runButton, editInSceneButton, applyBoxButton);
+        const addLastRunButton = button('Add last run', () => {
+            addLastBrushRun();
+        });
+        addLastRunButton.title = 'Append the most recent brush run (current camera + stroke + sticky target) as a new case';
+        actions.append(previewButton, runButton, editInSceneButton, applyBoxButton, addLastRunButton);
 
         const metricsInfo = document.createElement('div');
         metricsInfo.style.cssText = 'color:#ffb26d;white-space:pre-wrap';
@@ -306,6 +310,27 @@ class EvalCasePanel {
             updateFileInfo();
             fillTargetInputs();
             metricsInfo.textContent = `target updated${propagated ? ` (+${propagated} matching case${propagated > 1 ? 's' : ''} propagated)` : ''} — Save to persist`;
+        }
+
+        async function addLastBrushRun() {
+            metricsInfo.textContent = 'capturing last brush run…';
+            try {
+                const evalCase = await events.invoke('boxer.copyLastBrushEvalCase', { copy_clipboard: false }) as EvalCase | null;
+                if (!evalCase) {
+                    metricsInfo.textContent = 'no brush run to capture — draw a stroke first';
+                    return;
+                }
+                cases.push(evalCase);
+                selectedIndex = cases.length - 1;
+                dirty = true;
+                updateFileInfo();
+                renderList();
+                detail.style.display = 'block';
+                fillTargetInputs();
+                metricsInfo.textContent = `case #${selectedIndex} added${evalCase.target ? ' (with target)' : ' — NO TARGET: set one via Save Target in the box tool first'} — Save to persist`;
+            } catch (err) {
+                metricsInfo.textContent = `capture failed: ${err instanceof Error ? err.message : err}`;
+            }
         }
 
         function parseFixture(text: string, name: string): { cases: EvalCase[]; format: FixtureFormat } {
