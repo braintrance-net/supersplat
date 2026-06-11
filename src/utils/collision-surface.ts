@@ -465,9 +465,16 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     // Returns the world hit plus the world-height the viewport spans at that
     // depth, so callers can convert between pixel and world brush radii.
     const probeRay = new Ray();
+    // the engine's screenToWorld/worldToScreen run in CSS pixels
+    // (device.clientRect) — NOT the DPR-scaled render target size; mixing the
+    // two offsets every probe by the display scaling factor
+    const screenDims = () => {
+        const rect = (scene.app.graphicsDevice as unknown as { clientRect?: { width: number; height: number } }).clientRect;
+        return rect && rect.width > 0 ? rect : { width: 1, height: 1 };
+    };
     const probeAt = (x: number, y: number) => {
         if (!activeSurface) return null;
-        const { width, height } = scene.camera.targetSize;
+        const { width, height } = screenDims();
         scene.camera.getRay(x * width, y * height, probeRay);
         const hit = activeSurface.raycastWorld(
             [probeRay.origin.x, probeRay.origin.y, probeRay.origin.z],
@@ -498,7 +505,7 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     events.function('collisionSurface.ringProbe', (x: number, y: number, radiusWorld: number, sampleCount = 20) => {
         const center = probeAt(x, y);
         if (!center || !activeSurface || !(radiusWorld > 0)) return null;
-        const { width, height } = scene.camera.targetSize;
+        const { width, height } = screenDims();
         const origin = scene.camera.mainCamera.getPosition();
         const forward = scene.camera.mainCamera.forward;
 

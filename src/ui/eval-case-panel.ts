@@ -129,14 +129,22 @@ class EvalCasePanel {
         }
 
         const actions = document.createElement('div');
-        actions.style.cssText = 'display:flex;gap:6px;margin-bottom:8px';
+        actions.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px';
         const previewButton = button('Preview', () => {
             previewSelected();
         });
         const runButton = button('Run case', () => {
             runSelected();
         });
-        actions.append(previewButton, runButton);
+        const editInSceneButton = button('Edit in scene', () => {
+            editTargetInScene();
+        });
+        editInSceneButton.title = 'Open the manual box tool seeded with this target — drag the gizmo, adjust dims';
+        const applyBoxButton = button('Apply box', () => {
+            applyBoxFromScene();
+        });
+        applyBoxButton.title = 'Copy the manual box tool’s current box back into this case’s target';
+        actions.append(previewButton, runButton, editInSceneButton, applyBoxButton);
 
         const metricsInfo = document.createElement('div');
         metricsInfo.style.cssText = 'color:#ffb26d;white-space:pre-wrap';
@@ -235,6 +243,37 @@ class EvalCasePanel {
             } catch (err) {
                 metricsInfo.textContent = `run failed: ${err instanceof Error ? err.message : err}`;
             }
+        }
+
+        function editTargetInScene() {
+            const target = cases[selectedIndex]?.target;
+            if (!target) {
+                metricsInfo.textContent = 'this case has no target to edit';
+                return;
+            }
+            events.fire('tool.boxSelection');
+            const seeded = events.invoke('boxSelection.setBox', target);
+            metricsInfo.textContent = seeded ?
+                'box tool seeded with the target — drag the gizmo, then hit Apply box' :
+                'box tool is not available';
+        }
+
+        function applyBoxFromScene() {
+            const target = cases[selectedIndex]?.target;
+            if (!target) return;
+            const current = events.invoke('boxSelection.currentBox') as
+                { center: [number, number, number]; dimensions: [number, number, number] } | undefined;
+            if (!current) {
+                metricsInfo.textContent = 'box tool has no current box';
+                return;
+            }
+            target.center = [...current.center];
+            target.dimensions = [...current.dimensions];
+            dirty = true;
+            updateFileInfo();
+            fillTargetInputs();
+            metricsInfo.textContent = 'target updated from the scene box — Save to persist';
+            previewSelected();
         }
 
         function parseFixture(text: string, name: string): { cases: EvalCase[]; format: FixtureFormat } {

@@ -155,6 +155,27 @@ class BoxSelection {
             console.warn('[BoxSelection] boxSelection.currentBox was already registered', err);
         }
 
+        try {
+            // seed the manual box from an external source (eval case editor)
+            events.function('boxSelection.setBox', (next: { center: [number, number, number]; dimensions: [number, number, number] }) => {
+                box.pivot.setPosition(new Vec3(next.center[0], next.center[1], next.center[2]));
+                box.lenX = Math.max(0.01, next.dimensions[0]);
+                box.lenY = Math.max(0.01, next.dimensions[1]);
+                box.lenZ = Math.max(0.01, next.dimensions[2]);
+                lenX.value = box.lenX;
+                lenY.value = box.lenY;
+                lenZ.value = box.lenZ;
+                box.moved();
+                if (this.active) {
+                    gizmo.attach([box.pivot]);
+                }
+                scene.forceRender = true;
+                return currentBox();
+            });
+        } catch (err) {
+            console.warn('[BoxSelection] boxSelection.setBox was already registered', err);
+        }
+
         const updateGizmoSize = () => {
             const { camera, canvas } = scene;
             if (camera.ortho) {
