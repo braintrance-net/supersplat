@@ -9,7 +9,7 @@
 //   -> writes scripts/boxer-evals/<basename(name)> (basename only; no paths)
 // GET  /health -> { ok: true }
 
-import { appendFile, writeFile, rename } from 'node:fs/promises';
+import { appendFile, readFile, writeFile, rename } from 'node:fs/promises';
 import http from 'node:http';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +34,21 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && req.url === '/health') {
         respond(res, 200, { ok: true, evals_dir: evalsDir });
+        return;
+    }
+    if (req.method === 'GET' && req.url?.startsWith('/file?')) {
+        try {
+            const name = new URL(req.url, 'http://localhost').searchParams.get('name') ?? '';
+            const safeName = basename(name);
+            if (!/\.(json|jsonl)$/.test(safeName)) {
+                respond(res, 400, { error: 'name must be a .json or .jsonl basename' });
+                return;
+            }
+            const content = await readFile(join(evalsDir, safeName), 'utf8');
+            respond(res, 200, { ok: true, name: safeName, content });
+        } catch (err) {
+            respond(res, 404, { error: err instanceof Error ? err.message : String(err) });
+        }
         return;
     }
     if (req.method === 'POST' && req.url === '/append') {

@@ -94,12 +94,17 @@ class EvalCasePanel {
         const saveButton = button('Save', () => {
             saveFile();
         });
+        const switchButton = button('⇄', () => {
+            const next = fileName === 'live-brush-evals.jsonl' ? 'desk-can-brush-human-v1.json' : 'live-brush-evals.jsonl';
+            loadFixtureByName(next);
+        });
+        switchButton.title = 'Switch between live-brush-evals.jsonl and desk-can-brush-human-v1.json (always fresh from disk)';
         const addLastRunButton = button('+ Add last run', () => {
             addLastBrushRun();
         });
         addLastRunButton.title = 'Append the most recent brush run (current camera + stroke + sticky target) as a new case';
         addLastRunButton.style.background = '#2f6feb';
-        header.append(title, openButton, saveButton, addLastRunButton);
+        header.append(title, openButton, switchButton, saveButton, addLastRunButton);
 
         // drag the panel by its header to get it out of the way of the other
         // debug panels that stack in the same corner
@@ -454,31 +459,52 @@ class EvalCasePanel {
             }
         }
 
-        // auto-load the primary brush fixture served alongside the dev build;
-        // saving will prompt for the real file location on disk
+        // auto-load the primary brush fixture. The save server reads the REAL
+        // scripts/boxer-evals files; the bundled /static/evals copies are
+        // frozen at build time and only serve as a fallback.
+        async function fetchFixtureText(name: string): Promise<string | null> {
+            try {
+                const response = await fetch(`http://127.0.0.1:48013/file?name=${encodeURIComponent(name)}`);
+                if (response.ok) {
+                    const body = await response.json();
+                    if (body.ok && typeof body.content === 'string') return body.content;
+                }
+            } catch {
+                // save server down — fall through to the bundled copy
+            }
+            try {
+                const response = await fetch(`./static/evals/${name}`);
+                if (response.ok) return await response.text();
+            } catch {
+                // no bundled copy either
+            }
+            return null;
+        }
+
+        async function loadFixtureByName(name: string) {
+            const text = await fetchFixtureText(name);
+            if (text === null) return false;
+            const parsed = parseFixture(text, name);
+            fileHandle = null;
+            fileName = name;
+            cases = parsed.cases;
+            format = parsed.format;
+            selectedIndex = -1;
+            dirty = false;
+            detail.style.display = 'none';
+            updateFileInfo();
+            renderList();
+            return true;
+        }
+
         async function autoLoad() {
             const candidates = [
-                'desk-can-brush-human-v1.json',
                 'live-brush-evals.jsonl',
+                'desk-can-brush-human-v1.json',
                 'desk-can-latest3.json'
             ];
             for (const name of candidates) {
-                try {
-                    const response = await fetch(`./static/evals/${name}`);
-                    if (!response.ok) continue;
-                    const parsed = parseFixture(await response.text(), name);
-                    fileHandle = null;
-                    fileName = name;
-                    cases = parsed.cases;
-                    format = parsed.format;
-                    selectedIndex = -1;
-                    dirty = false;
-                    updateFileInfo();
-                    renderList();
-                    return;
-                } catch {
-                    // try the next fixture
-                }
+                if (await loadFixtureByName(name)) return;
             }
         }
 
