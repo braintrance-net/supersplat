@@ -199,13 +199,15 @@ class BoxSelection {
             const p0: [number, number, number] = [center.x, center.y, center.z];
             const u: [number, number, number] = [0, 0, 0];
             u[face.axis] = 1;
+            // closest point on the axis line P(t) = p0 + u*t to the mouse ray
+            // R(s) = o + d*s, with w = p0 - o:  t = (b*(d·w) - (u·w)) / (1 - b²)
             const w0 = [p0[0] - o[0], p0[1] - o[1], p0[2] - o[2]];
             const b = u[0] * d[0] + u[1] * d[1] + u[2] * d[2];
-            const dd = -(u[0] * w0[0] + u[1] * w0[1] + u[2] * w0[2]);
-            const e = -(d[0] * w0[0] + d[1] * w0[1] + d[2] * w0[2]);
+            const uw = u[0] * w0[0] + u[1] * w0[1] + u[2] * w0[2];
+            const dw = d[0] * w0[0] + d[1] * w0[1] + d[2] * w0[2];
             const denom = 1 - b * b;
             if (Math.abs(denom) < 1e-6) return;
-            const t = (b * e - dd) / denom;
+            const t = (b * dw - uw) / denom;
             applyFaceCoord(face.axis, face.sign, p0[face.axis] + t);
         };
 
