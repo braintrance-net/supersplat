@@ -134,6 +134,7 @@ const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
 const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
+const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 72;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -783,7 +784,9 @@ class SemanticAnnotationOverlay {
     }
 
     private multiplayerRigBone(entity: Entity, name: string): MultiplayerAvatarRigBone | undefined {
-        const bone = entity.findByName(name) as Entity | null;
+        // Library VRM/GLB avatars use Mixamo bone names (mixamorig:LeftArm, ...);
+        // the Kenney avatar uses bare names. Try both so the rig binds either way.
+        const bone = (entity.findByName(name) ?? entity.findByName(`mixamorig:${name}`)) as Entity | null;
         if (!bone) {
             return undefined;
         }
@@ -843,16 +846,20 @@ class SemanticAnnotationOverlay {
         const counterStride = Math.sin(instance.phase + Math.PI);
         const lift = Math.sin(instance.phase * 2);
 
+        // Mixamo VRM avatars rest in a T-pose; rotate the upper arms down to the
+        // sides so they don't stick straight out (Kenney already rests arms-down).
+        const armDown = this.multiplayerAvatarIsVrm ? MULTIPLAYER_VRM_ARM_DOWN_DEGREES : 0;
+
         if (running) {
-            this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5);
-            this.setMultiplayerRigBone(rig.rightArm, counterStride * 28, 0, -5);
+            this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5 + armDown);
+            this.setMultiplayerRigBone(rig.rightArm, counterStride * 28, 0, -5 - armDown);
             this.setMultiplayerRigBone(rig.leftLeg, counterStride * 30, 0, 2);
             this.setMultiplayerRigBone(rig.rightLeg, stride * 30, 0, -2);
             this.setMultiplayerRigBone(rig.spine, lift * 2, 0, stride * 5);
             this.setMultiplayerRigBone(rig.head, lift * 1.2, stride * 4, 0);
         } else {
-            this.setMultiplayerRigBone(rig.leftArm, 3 + stride * 3, 0, 2);
-            this.setMultiplayerRigBone(rig.rightArm, 3 + counterStride * 3, 0, -2);
+            this.setMultiplayerRigBone(rig.leftArm, 3 + stride * 3, 0, 2 + armDown);
+            this.setMultiplayerRigBone(rig.rightArm, 3 + counterStride * 3, 0, -2 - armDown);
             this.setMultiplayerRigBone(rig.leftLeg);
             this.setMultiplayerRigBone(rig.rightLeg);
             this.setMultiplayerRigBone(rig.spine, lift * 0.7, 0, stride * 1.5);
