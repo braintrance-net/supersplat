@@ -262,7 +262,9 @@ interface ScreenSurfaceMessage {
 
 interface ScreenFrameMessage {
     type: typeof SCREEN_FRAME;
-    bitmap: ImageBitmap;
+    bitmap?: ImageBitmap;
+    data?: ArrayBuffer;
+    mimeType?: string;
 }
 
 interface ScreenClearMessage {
@@ -518,8 +520,10 @@ const isScreenFrameMessage = (data: any): data is ScreenFrameMessage => (
     data &&
     typeof data === 'object' &&
     data.type === SCREEN_FRAME &&
-    typeof ImageBitmap !== 'undefined' &&
-    data.bitmap instanceof ImageBitmap
+    (
+        (typeof ImageBitmap !== 'undefined' && data.bitmap instanceof ImageBitmap) ||
+        data.data instanceof ArrayBuffer
+    )
 );
 
 const isScreenClearMessage = (data: any): data is ScreenClearMessage => (
@@ -1400,8 +1404,9 @@ const registerIframeApi = (events: Events) => {
                     thumbnailError: true,
                     multiplayerPlayers: true,
                     screenSurface: true,
+                    screenFrameBytes: true,
                     raycast: true,
-                    version: 6
+                    version: 7
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1418,7 +1423,19 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isScreenFrameMessage(event.data)) {
-            events.fire('screen.frame', event.data.bitmap);
+            if (event.data.bitmap) {
+                events.fire('screen.frame', event.data.bitmap);
+            } else if (event.data.data) {
+                try {
+                    const blob = new Blob([event.data.data], { type: event.data.mimeType || 'image/jpeg' });
+                    const bitmap = await createImageBitmap(blob);
+                    events.fire('screen.frame', bitmap);
+                } catch (error) {
+                    postDiagnostic(source, event.origin, 'screen-frame-decode-failed', {
+                        error: error instanceof Error ? error.message : 'screen frame decode failed'
+                    });
+                }
+            }
             return;
         }
 

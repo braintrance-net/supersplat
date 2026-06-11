@@ -852,6 +852,9 @@ class WalkTool {
             return;
         }
 
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'supersplat:walk-key-state', code: event.code, pressed }, '*');
+        }
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
