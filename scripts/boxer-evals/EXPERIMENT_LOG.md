@@ -459,6 +459,54 @@ main things we tried, what happened, and which paths still look worth pursuing.
   - Next levers: per-ray depth clustering instead of the global gap walk,
     surface-anchored scoring of OTHER candidates, multi-view strokes.
 
+## 2026-06-11 Goal Campaign: 0.9 IoU on Human-Verified Targets
+
+- Fixtures: 20 brush cases over 3 objects (laptop x8 views, can x8,
+  sunglasses x4), every target hand-drawn/verified by Jonam in the new
+  in-scene editor. These numbers are NOT comparable to the old
+  rough-target scores.
+- Single-view results (per-case avg over all 20):
+  - client_brush (local geometry): 0.56; ORACLE candidate selection only
+    reaches 0.66 — candidate quality is the ceiling, not selection.
+  - brush_boxer (real BoxNet lift, world scale 0.2): ~0.43 alone; dims
+    often good, placement poor. brush_fused (model dims @ local center)
+    and six other single-view fusion rules all plateau 0.45-0.56.
+  - Conclusion: ONE stroke from ONE view under-constrains the occluded
+    axis; no single-view combination breaks ~0.66.
+- Multi-view fusion (scripts/fuse-brush-views.mjs) — the breakthrough:
+  - consensus: voxelized (0.08) brush_surface support clouds intersected
+    across views (keep voxels in >=60% of views, 2/98 quantile box).
+    Removes tube bleed because bleed differs per stroke. Can 0.849.
+  - surf/tight: per axis, tightest per-view surface box among views where
+    the axis is screen-parallel (w=1-|fwd.axis|>=0.45). Wins on large
+    objects whose strokes cover different parts per view. Laptop 0.887.
+  - gate: cross-view overlap ratio >= 0.55 chooses consensus vs tight
+    (laptop 0.44 vs can 0.79 / glasses 0.71 — clean separation).
+  - Result: laptop 0.887, can 0.849, glasses 0.709 — avg 0.815
+    (vs 0.43-0.60 single-view per-object averages).
+- 0.9 verdict: not reached. The remaining error is 0.05-0.15 per axis,
+  i.e. 1-2 voxels, comparable to splat surface fuzz and to the precision
+  of the hand-drawn targets themselves. Glasses are hardest: a +-0.1
+  error on the 0.79 Y axis alone costs ~25% IoU; the support Y histogram
+  is smooth (no separable desk slab to cut). Erosion, slab-cut,
+  density-mode-cut, anchors-based extents, and BoxNet dims were all
+  measured and rejected (each tested offline against recorded clouds).
+- What would plausibly close the gap to 0.9:
+  - more overlapping strokes per view on large objects (raises laptop
+    consensus coverage so the stronger estimator applies everywhere);
+  - smaller brush radius on thin objects (glasses bleed scales with
+    radius);
+  - finer collision mesh (0.05) + sub-voxel support summarization;
+  - target boxes verified at higher precision than +-0.1.
+- Infra learned the hard way: EC2 boxer wedges after one lift request per
+  page session — run model evals one case per invocation (fresh browser)
+  with retry; 19/20 succeeded zero-retry that way.
+- Repro:
+  - replay both fixtures with client_brush (local-only), then
+    `node scripts/fuse-brush-views.mjs --results <out1> <out2> --fixtures
+    scripts/boxer-evals/live-brush-evals.jsonl
+    scripts/boxer-evals/desk-can-brush-human-v1.json`
+
 ## 2026-06-10 Per-Ray Depth Clustering + Raw Brush + Case Editor
 
 - Per-ray depth clustering (replaces the global gap walk):

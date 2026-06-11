@@ -512,6 +512,7 @@ type BoxerEvalPrompt =
     { type: 'client_brush'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
     { type: 'brush_sam'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
     { type: 'brush_boxer'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; preprocess_mode?: 'full_frame' | 'square_crop'; object_crop?: ObjectCropOptions } |
+    { type: 'brush_fused'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; fuse_mode?: 'model_dims' | 'model_depth' } |
     { type: 'detect_all_click'; click_xy: [number, number] } |
     { type: 'direct_lift_click'; click_xy: [number, number]; use_sam?: boolean; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
     { type: 'lift_box'; bb2d: NormalizedBb2d; click_xy?: [number, number]; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
@@ -4407,6 +4408,7 @@ type BrushSurfaceAnchor = {
 type BrushSurfaceEvidence = {
     anchors: BrushSurfaceAnchor[];
     support: ProjectedSplatCandidate[];
+    core_support: ProjectedSplatCandidate[];
     sampled_point_count: number;
     anchor_hit_ratio: number;
     median_radius_world: number;
@@ -4474,6 +4476,7 @@ const collectBrushSurfaceEvidence = (
         return {
             anchors,
             support: [],
+            core_support: [],
             sampled_point_count: sampledPixels.length,
             anchor_hit_ratio: 0,
             median_radius_world: 0,
@@ -4507,7 +4510,7 @@ const collectBrushSurfaceEvidence = (
     );
 
     const strokeCandidates = projectedCandidates.filter(region.contains);
-    const matched: { candidate: ProjectedSplatCandidate; delta: number; anchorIndex: number }[] = [];
+    const matched: { candidate: ProjectedSplatCandidate; delta: number; anchorIndex: number; core: boolean }[] = [];
     for (const candidate of strokeCandidates) {
         const px = candidate.point[0] - origin[0];
         const py = candidate.point[1] - origin[1];
@@ -4516,6 +4519,7 @@ const collectBrushSurfaceEvidence = (
         let bestDelta = Infinity;
         let bestPerp = Infinity;
         let bestAnchorIndex = -1;
+        let bestCoreRadius = 0;
         for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex++) {
             const anchor = anchors[anchorIndex];
             const t = px * anchor.dir[0] + py * anchor.dir[1] + pz * anchor.dir[2];
@@ -4528,16 +4532,25 @@ const collectBrushSurfaceEvidence = (
                 bestPerp = perpSq;
                 bestDelta = delta;
                 bestAnchorIndex = anchorIndex;
+                bestCoreRadius = anchor.radius_world * 0.6;
             }
         }
         if (bestAnchorIndex >= 0) {
-            matched.push({ candidate, delta: bestDelta, anchorIndex: bestAnchorIndex });
+            matched.push({
+                candidate,
+                delta: bestDelta,
+                anchorIndex: bestAnchorIndex,
+                // core = clearly inside the stroke, robust against the tube
+                // swallowing neighbouring surfaces; multi-view fusion prefers it
+                core: bestPerp <= bestCoreRadius * bestCoreRadius
+            });
         }
     }
     if (matched.length === 0) {
         return {
             anchors,
             support: [],
+            core_support: [],
             sampled_point_count: sampledPixels.length,
             anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
             median_radius_world: medianRadiusWorld,
@@ -4572,11 +4585,15 @@ const collectBrushSurfaceEvidence = (
     const support = matched
     .filter(entry => entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
     .map(entry => entry.candidate);
+    const coreSupport = matched
+    .filter(entry => entry.core && entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
+    .map(entry => entry.candidate);
     const thicknessCut = validCuts.length ? validCuts[validCuts.length - 1] : 0;
 
     return {
         anchors,
         support,
+        core_support: coreSupport,
         sampled_point_count: sampledPixels.length,
         anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
         median_radius_world: medianRadiusWorld,
@@ -5144,9 +5161,33 @@ const buildClientBrushObb = (
                 sampled_point_count: surfaceEvidence.sampled_point_count,
                 anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
                 support_count: surfaceEvidence.support.length,
+                core_support_count: surfaceEvidence.core_support.length,
                 median_radius_world: surfaceEvidence.median_radius_world,
                 thickness_cut: surfaceEvidence.thickness_cut,
-                thickness_cap: surfaceEvidence.thickness_cap
+                thickness_cap: surfaceEvidence.thickness_cap,
+                core_aabb: summarizeBrushSurfaceAabb(surfaceEvidence.core_support.map(candidate => candidate.point))?.aabb ?? null,
+                // subsampled support cloud for offline multi-view fusion
+                support_sample: (() => {
+                    const points = surfaceEvidence.support;
+                    const step = Math.max(1, Math.ceil(points.length / 4000));
+                    const sample: number[] = [];
+                    for (let i = 0; i < points.length; i += step) {
+                        sample.push(
+                            Number(points[i].point[0].toFixed(3)),
+                            Number(points[i].point[1].toFixed(3)),
+                            Number(points[i].point[2].toFixed(3))
+                        );
+                    }
+                    return sample;
+                })(),
+                anchors_aabb: (() => {
+                    const points = surfaceEvidence.anchors.map(anchor => anchor.point);
+                    if (points.length < 3) return null;
+                    return {
+                        min: [0, 1, 2].map(axis => Math.min(...points.map(point => point[axis]))),
+                        max: [0, 1, 2].map(axis => Math.max(...points.map(point => point[axis])))
+                    };
+                })()
             } : { available: false as const },
             selected_cluster_bb2d: selectedBb,
             selected_candidate_source: candidates[0].source,
@@ -6834,6 +6875,134 @@ class BoxerSelection {
             );
         };
 
+        // Fusion: the local pipeline places boxes well but guesses dims; the
+        // BoxNet lift gets dims right but places poorly. brush_fused runs both
+        // and combines model dimensions with local placement. Honest failure
+        // when the model is unreachable.
+        const executeBrushFused = async (
+            brush: BoxerBrushPrompt | undefined,
+            click: [number, number] | undefined,
+            target?: BoxerEvalTarget | null,
+            options?: { boxernet_world_scale?: number; fuse_mode?: 'model_dims' | 'model_depth' }
+        ) => {
+            const t0 = performance.now();
+            const splat = (events.invoke('selection') as Splat | null) ??
+                ((events.invoke('scene.splats') as Splat[] | undefined)?.[0] ?? null);
+            if (!splat) {
+                throw new Error('No splat loaded');
+            }
+            await waitForCollisionSurface();
+            const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
+                includeImage: true,
+                includeEncodedDepth: false
+            });
+            const tFrame = performance.now();
+            publishBoxerFrameDebug(frame);
+            lastEvalPrompt = { type: 'brush_fused', ...(click ? { click_xy: click } : {}), brush };
+            lastEvalFrame = summarizeFrameForEval(frame);
+            lastEvalCamera = events.invoke('camera.debugState') as CameraDebugState;
+
+            const local = buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
+
+            const strokeBounds = brush?.bb2d;
+            const proposalBb = strokeBounds ? sanitizeBb2d(strokeBounds, frame.image_width, frame.image_height) : local.bb2d;
+            if (!proposalBb) {
+                throw new Error('Brush fused: stroke region is invalid');
+            }
+            const worldScale = options?.boxernet_world_scale ?? 0.2;
+            const direct = await postBoxerDirectLift(
+                getBoxerBackendUrl(),
+                frame,
+                [{ id: 'brush-stroke', bb2d: proposalBb, score2d: 1, source: 'manual' }],
+                'full_frame',
+                'dense',
+                worldScale
+            );
+            const detection = direct.detections[0];
+            if (!detection) {
+                throw new Error('Brush fused: model returned no detections');
+            }
+            const tBackend = performance.now();
+
+            const modelAabb = aabbFromCorners(detection.corners);
+            const localAabb = aabbFromCorners(local.obb.corners);
+            if (!modelAabb || !localAabb) {
+                throw new Error('Brush fused: could not derive AABBs');
+            }
+            const modelDims: [number, number, number] = [
+                modelAabb.max[0] - modelAabb.min[0],
+                modelAabb.max[1] - modelAabb.min[1],
+                modelAabb.max[2] - modelAabb.min[2]
+            ];
+            const localCenter: [number, number, number] = [
+                (localAabb.min[0] + localAabb.max[0]) / 2,
+                (localAabb.min[1] + localAabb.max[1]) / 2,
+                (localAabb.min[2] + localAabb.max[2]) / 2
+            ];
+            const fusedAabb = aabbFromCenterDimensions(localCenter, modelDims);
+            const obb = buildAxisAlignedObbFromAabb(fusedAabb, 'brush_fused', 'brush_fused', local.bb2d);
+            const rawObb = cloneObb(detection);
+
+            publishBoxerResultDebug(
+                obb,
+                rawObb,
+                local.bb2d,
+                { applied: false, reason: 'brush-fused' },
+                { applied: false, reason: 'fused-model-dims-local-center' }
+            );
+            const debugResult = (window as any).__lastBoxerResult;
+            const targetProjectedBb2d = projectedTargetBb2d(target, scene, frame.intrinsics);
+            debugResult.target_projected_bb2d = targetProjectedBb2d;
+            debugResult.bb2d_target_metrics = buildBb2dTargetMetrics(local.bb2d, targetProjectedBb2d);
+            debugResult.brush_fused = {
+                fuse_mode: options?.fuse_mode ?? 'model_dims',
+                boxernet_world_scale: worldScale,
+                local_aabb: localAabb,
+                local_source: local.debug.selected_candidate_source,
+                model_aabb: modelAabb,
+                model_confidence: detection.confidence,
+                fused_aabb: fusedAabb
+            };
+            debugResult.client_brush = {
+                backend_bypassed: false,
+                target_projected_bb2d: targetProjectedBb2d,
+                ...local.debug
+            };
+
+            currentCorners = buildWireframeCorners(obb);
+            scene.forceRender = true;
+            events.fire('select.byOBB', 'set', obb);
+            const tDone = performance.now();
+            updateDebugPanel({
+                mode: 'brush fused',
+                endpoint: `${getBoxerBackendUrl()}/api/boxer-lift-bb2d`,
+                label: obb.label,
+                confidence: detection.confidence,
+                total_ms: tDone - t0,
+                frame_ms: tFrame - t0,
+                backend_ms: tBackend - tFrame,
+                refine_ms: tDone - tBackend,
+                draw_ms: 0,
+                image_width: frame.image_width,
+                image_height: frame.image_height,
+                depth_source: frame.depth_source,
+                bb2d: local.bb2d,
+                candidate_count: 1,
+                proposal_count: 1
+            });
+
+            return {
+                camera: lastEvalCamera,
+                frame: lastEvalFrame,
+                raw_boxer_result: rawObb,
+                boxer_result: debugResult,
+                target: target ?? null,
+                raw_metrics: buildEvalMetrics(rawObb, target),
+                metrics: buildEvalMetrics(obb, target),
+                brush_fused_probe: debugResult.brush_fused
+            };
+        };
+
         events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'brush_sam' | 'brush_boxer' }>) => {
             lastBrushPrompt = prompt;
             lastBrushReplay = null;
@@ -7647,6 +7816,7 @@ class BoxerSelection {
                     evalCase.prompt?.type !== 'client_brush' &&
                     evalCase.prompt?.type !== 'brush_sam' &&
                     evalCase.prompt?.type !== 'brush_boxer' &&
+                    evalCase.prompt?.type !== 'brush_fused' &&
                     evalCase.prompt?.type !== 'detect_all_click' &&
                     evalCase.prompt?.type !== 'direct_lift_click' &&
                     evalCase.prompt?.type !== 'lift_target_box' &&
@@ -7717,6 +7887,17 @@ class BoxerSelection {
                             click ? [click.x, click.y] : undefined,
                             evalCase.target ?? null,
                             { useSam: true }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_fused') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_fused' }>;
+                        replay = await executeBrushFused(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            {
+                                boxernet_world_scale: brushPrompt.boxernet_world_scale,
+                                fuse_mode: brushPrompt.fuse_mode
+                            }
                         );
                     } else if (evalCase.prompt.type === 'brush_boxer') {
                         const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_boxer' }>;
