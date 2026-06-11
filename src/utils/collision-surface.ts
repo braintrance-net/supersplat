@@ -16,6 +16,8 @@ import { Splat } from '../splat';
 type CollisionSurfaceHit = {
     point: [number, number, number];
     distance: number;
+    // unit surface normal at the hit, oriented toward the ray origin
+    normal: [number, number, number];
 };
 
 type SurfaceGltfAccessor = {
@@ -360,6 +362,7 @@ class CollisionSurface {
         this.currentStamp += 1;
         const stamp = this.currentStamp;
         let bestT = Infinity;
+        let bestTri = -1;
 
         for (let guard = dimX + dimY + dimZ + 3; guard > 0; guard--) {
             const cell = (cellX * dimY + cellY) * dimZ + cellZ;
@@ -372,6 +375,7 @@ class CollisionSurface {
                 const t = this.intersectTriangle(tri, ox, oy, oz, dx, dy, dz);
                 if (t > 0 && t < bestT && t <= tMax) {
                     bestT = t;
+                    bestTri = tri;
                 }
             }
 
@@ -393,10 +397,23 @@ class CollisionSurface {
             }
         }
 
-        if (!Number.isFinite(bestT)) return null;
+        if (!Number.isFinite(bestT) || bestTri < 0) return null;
+        const base = bestTri * 9;
+        const tris = this.triangles;
+        const e1x = tris[base + 3] - tris[base], e1y = tris[base + 4] - tris[base + 1], e1z = tris[base + 5] - tris[base + 2];
+        const e2x = tris[base + 6] - tris[base], e2y = tris[base + 7] - tris[base + 1], e2z = tris[base + 8] - tris[base + 2];
+        let nx = e1y * e2z - e1z * e2y;
+        let ny = e1z * e2x - e1x * e2z;
+        let nz = e1x * e2y - e1y * e2x;
+        const nLength = Math.hypot(nx, ny, nz) || 1;
+        nx /= nLength; ny /= nLength; nz /= nLength;
+        if (nx * dx + ny * dy + nz * dz > 0) {
+            nx = -nx; ny = -ny; nz = -nz;
+        }
         return {
             point: [ox + dx * bestT, oy + dy * bestT, oz + dz * bestT],
-            distance: bestT
+            distance: bestT,
+            normal: [nx, ny, nz]
         };
     }
 
@@ -489,57 +506,95 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
         return {
             point: hit.point,
             distance: hit.distance,
+            normal: hit.normal,
             world_per_screen_height: 2 * Math.tan(fovY / 2) * hit.distance
         };
     };
     events.function('collisionSurface.screenProbe', probeAt);
 
-    // Probe a ring of points around the cursor so the brush outline can
-    // conform to the surface: each ring direction is re-cast from the camera
-    // through a world-space circle around the central hit, and the actual
-    // surface hits are projected back to normalized screen coordinates. Over
-    // corners and edges the outline folds with the geometry.
-    const ringRay = new Ray();
-    const ringWorld = new Vec3();
+    // Walk the brush outline along the actual surface: the ring starts in the
+    // tangent plane at the cursor hit and each direction marches outward in
+    // small steps, re-projecting onto the visible surface (camera ray through
+    // the marched guess) and re-orienting to the local normal each step. The
+    // outline therefore folds across corners like a sticker on the mesh —
+    // climbing a laptop screen at the hinge — and stops at silhouette edges
+    // instead of spiking onto far background.
     const ringScreen = new Vec3();
+    const WALK_STEPS = 4;
     events.function('collisionSurface.ringProbe', (x: number, y: number, radiusWorld: number, sampleCount = 20) => {
         const center = probeAt(x, y);
         if (!center || !activeSurface || !(radiusWorld > 0)) return null;
         const { width, height } = screenDims();
-        const origin = scene.camera.mainCamera.getPosition();
-        const forward = scene.camera.mainCamera.forward;
+        const cam = scene.camera.mainCamera.getPosition();
+        const origin: [number, number, number] = [cam.x, cam.y, cam.z];
 
-        // tangent basis perpendicular to the view direction
-        const upRef = Math.abs(forward.y) > 0.94 ? new Vec3(1, 0, 0) : new Vec3(0, 1, 0);
-        const u = new Vec3().cross(forward, upRef).normalize();
-        const v = new Vec3().cross(u, forward).normalize();
+        // the voxel mesh has staircase normals; average a small probe cross
+        // around the cursor so the ring plane reflects the macro surface
+        const n0: [number, number, number] = [...center.normal];
+        const probeStep = 0.012;
+        for (const [ox, oy] of [[probeStep, 0], [-probeStep, 0], [0, probeStep], [0, -probeStep]]) {
+            const neighbor = probeAt(x + ox, y + oy);
+            if (neighbor && Math.abs(neighbor.distance - center.distance) < radiusWorld * 2) {
+                n0[0] += neighbor.normal[0];
+                n0[1] += neighbor.normal[1];
+                n0[2] += neighbor.normal[2];
+            }
+        }
+        const n0Length = Math.hypot(n0[0], n0[1], n0[2]) || 1;
+        n0[0] /= n0Length; n0[1] /= n0Length; n0[2] /= n0Length;
+        const upRef: [number, number, number] = Math.abs(n0[1]) > 0.94 ? [1, 0, 0] : [0, 1, 0];
+        let ux = n0[1] * upRef[2] - n0[2] * upRef[1];
+        let uy = n0[2] * upRef[0] - n0[0] * upRef[2];
+        let uz = n0[0] * upRef[1] - n0[1] * upRef[0];
+        const uLength = Math.hypot(ux, uy, uz) || 1;
+        ux /= uLength; uy /= uLength; uz /= uLength;
+        const vx = n0[1] * uz - n0[2] * uy;
+        const vy = n0[2] * ux - n0[0] * uz;
+        const vz = n0[0] * uy - n0[1] * ux;
 
-        // a hit only counts as "the surface under the brush" while it stays
-        // near the ideal ring point; rays that slip past an edge land far
-        // behind and would drag long spikes into the outline
-        const maxDeviation = radiusWorld * 1.2;
+        const step = radiusWorld / WALK_STEPS;
+        const stepTolerance = step * 2.2;
         const rawRing: [number, number][] = [];
         for (let i = 0; i < sampleCount; i++) {
             const angle = i / sampleCount * Math.PI * 2;
-            const cos = Math.cos(angle) * radiusWorld;
-            const sin = Math.sin(angle) * radiusWorld;
-            ringWorld.set(
-                center.point[0] + u.x * cos + v.x * sin,
-                center.point[1] + u.y * cos + v.y * sin,
-                center.point[2] + u.z * cos + v.z * sin
-            );
-            ringRay.origin.copy(origin);
-            ringRay.direction.copy(ringWorld).sub(origin).normalize();
-            const hit = activeSurface.raycastWorld(
-                [ringRay.origin.x, ringRay.origin.y, ringRay.origin.z],
-                [ringRay.direction.x, ringRay.direction.y, ringRay.direction.z],
-                center.distance + radiusWorld * 4
-            );
-            const deviation = hit ?
-                Math.hypot(hit.point[0] - ringWorld.x, hit.point[1] - ringWorld.y, hit.point[2] - ringWorld.z) :
-                Infinity;
-            const point = hit && deviation <= maxDeviation ? hit.point : [ringWorld.x, ringWorld.y, ringWorld.z];
-            ringScreen.set(point[0], point[1], point[2]);
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            let px = center.point[0], py = center.point[1], pz = center.point[2];
+            let nx = n0[0], ny = n0[1], nz = n0[2];
+            let dx = ux * cos + vx * sin;
+            let dy = uy * cos + vy * sin;
+            let dz = uz * cos + vz * sin;
+            for (let k = 0; k < WALK_STEPS; k++) {
+                const gx = px + dx * step;
+                const gy = py + dy * step;
+                const gz = pz + dz * step;
+                const rx = gx - origin[0];
+                const ry = gy - origin[1];
+                const rz = gz - origin[2];
+                const guessDistance = Math.hypot(rx, ry, rz);
+                const hit = activeSurface.raycastWorld(origin, [rx, ry, rz], guessDistance + stepTolerance);
+                if (!hit) break;
+                const deviation = Math.hypot(hit.point[0] - gx, hit.point[1] - gy, hit.point[2] - gz);
+                if (deviation > stepTolerance) break;
+                px = hit.point[0]; py = hit.point[1]; pz = hit.point[2];
+                // damp staircase normal noise while still tracking real folds
+                nx = nx * 0.45 + hit.normal[0] * 0.55;
+                ny = ny * 0.45 + hit.normal[1] * 0.55;
+                nz = nz * 0.45 + hit.normal[2] * 0.55;
+                const nLength = Math.hypot(nx, ny, nz) || 1;
+                nx /= nLength; ny /= nLength; nz /= nLength;
+                // keep marching in the surface plane: strip the normal component
+                const dot = dx * nx + dy * ny + dz * nz;
+                let tx = dx - nx * dot;
+                let ty = dy - ny * dot;
+                let tz = dz - nz * dot;
+                const tLength = Math.hypot(tx, ty, tz);
+                if (tLength > 0.001) {
+                    tx /= tLength; ty /= tLength; tz /= tLength;
+                    dx = tx; dy = ty; dz = tz;
+                }
+            }
+            ringScreen.set(px, py, pz);
             scene.camera.camera.worldToScreen(ringScreen, ringScreen);
             rawRing.push([ringScreen.x / Math.max(1, width), ringScreen.y / Math.max(1, height)]);
         }
