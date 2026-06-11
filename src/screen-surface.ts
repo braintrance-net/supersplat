@@ -2,6 +2,7 @@ import {
     ADDRESS_CLAMP_TO_EDGE,
     CULLFACE_NONE,
     FILTER_LINEAR,
+    PIXELFORMAT_RGBA8,
     PRIMITIVE_TRIANGLES,
     Color,
     Entity,
@@ -21,6 +22,10 @@ type ScreenCorners = {
     bottomLeft: Corner;
 };
 
+// Cyan stand-in shown on the plane before any video frame lands, so the surface
+// placement is visible (and debuggable) even if frame upload is unavailable.
+const debugColor = new Color(0.1, 0.85, 0.78);
+
 // Renders the live screen-share video on a quad placed in the splat world.
 // Driven from the meeting page via the iframe API: `screen.surface` sets the
 // plane corners, `screen.frame` uploads a captured video frame, `screen.clear`
@@ -30,11 +35,12 @@ class ScreenSurface extends Element {
     entity: Entity;
     mesh: Mesh;
     material: StandardMaterial;
-    texture: Texture;
+    texture: Texture | null = null;
     meshInstance: MeshInstance;
     canvas: HTMLCanvasElement;
     context: CanvasRenderingContext2D | null;
     visible = false;
+    hasFrame = false;
 
     constructor() {
         super(ElementType.debug);
@@ -43,26 +49,17 @@ class ScreenSurface extends Element {
     add() {
         const device = this.scene.graphicsDevice;
 
-        this.texture = new Texture(device, {
-            name: 'screenShareSurface',
-            addressU: ADDRESS_CLAMP_TO_EDGE,
-            addressV: ADDRESS_CLAMP_TO_EDGE,
-            minFilter: FILTER_LINEAR,
-            magFilter: FILTER_LINEAR,
-            mipmaps: false
-        });
-
         this.canvas = document.createElement('canvas');
         this.canvas.width = 16;
         this.canvas.height = 9;
         this.context = this.canvas.getContext('2d');
 
-        // Unlit textured material so the shared screen reads at full brightness.
+        // Unlit material. Starts as a solid debug color; swaps to the video texture
+        // once frames arrive.
         this.material = new StandardMaterial();
         this.material.useLighting = false;
         this.material.diffuse = new Color(0, 0, 0);
-        this.material.emissive = new Color(1, 1, 1);
-        this.material.emissiveMap = this.texture;
+        this.material.emissive = debugColor;
         this.material.cull = CULLFACE_NONE;
         this.material.update();
 
@@ -118,17 +115,50 @@ class ScreenSurface extends Element {
         this.scene.forceRender = true;
     }
 
+    // (Re)allocate the texture to match the incoming frame size. Reusing a
+    // wrong-sized texture causes a texSubImage size-mismatch and an empty plane.
+    private ensureTexture(width: number, height: number) {
+        if (this.texture && this.texture.width === width && this.texture.height === height) {
+            return;
+        }
+
+        this.texture?.destroy();
+        this.texture = new Texture(this.scene.graphicsDevice, {
+            name: 'screenShareSurface',
+            width,
+            height,
+            format: PIXELFORMAT_RGBA8,
+            mipmaps: false,
+            addressU: ADDRESS_CLAMP_TO_EDGE,
+            addressV: ADDRESS_CLAMP_TO_EDGE,
+            minFilter: FILTER_LINEAR,
+            magFilter: FILTER_LINEAR
+        });
+        this.material.emissive = new Color(1, 1, 1);
+        this.material.emissiveMap = this.texture;
+        this.material.update();
+    }
+
     setFrame(bitmap: ImageBitmap) {
         if (!bitmap || !this.context) return;
 
-        if (this.canvas.width !== bitmap.width || this.canvas.height !== bitmap.height) {
-            this.canvas.width = bitmap.width;
-            this.canvas.height = bitmap.height;
+        const width = bitmap.width;
+        const height = bitmap.height;
+        if (width === 0 || height === 0) {
+            bitmap.close?.();
+            return;
+        }
+
+        if (this.canvas.width !== width || this.canvas.height !== height) {
+            this.canvas.width = width;
+            this.canvas.height = height;
         }
         this.context.drawImage(bitmap, 0, 0);
         bitmap.close?.();
 
-        this.texture.setSource(this.canvas);
+        this.ensureTexture(width, height);
+        this.texture?.setSource(this.canvas);
+        this.hasFrame = true;
 
         if (this.visible) {
             this.scene.forceRender = true;
@@ -137,9 +167,14 @@ class ScreenSurface extends Element {
 
     clear() {
         this.visible = false;
+        this.hasFrame = false;
         if (this.entity) {
             this.entity.enabled = false;
         }
+        // Reset to the debug colour so a re-share is visible before frames resume.
+        this.material.emissive = debugColor;
+        this.material.emissiveMap = null;
+        this.material.update();
         this.scene.forceRender = true;
     }
 
