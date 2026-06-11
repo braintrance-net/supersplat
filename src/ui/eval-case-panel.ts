@@ -94,7 +94,35 @@ class EvalCasePanel {
         const saveButton = button('Save', () => {
             saveFile();
         });
-        header.append(title, openButton, saveButton);
+        const addLastRunButton = button('+ Add last run', () => {
+            addLastBrushRun();
+        });
+        addLastRunButton.title = 'Append the most recent brush run (current camera + stroke + sticky target) as a new case';
+        addLastRunButton.style.background = '#2f6feb';
+        header.append(title, openButton, saveButton, addLastRunButton);
+
+        // drag the panel by its header to get it out of the way of the other
+        // debug panels that stack in the same corner
+        let headerDrag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
+        title.style.cursor = 'grab';
+        title.addEventListener('pointerdown', (event) => {
+            const rect = panel.getBoundingClientRect();
+            headerDrag = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top };
+            title.setPointerCapture(event.pointerId);
+            event.preventDefault();
+        });
+        title.addEventListener('pointermove', (event) => {
+            if (!headerDrag || headerDrag.pointerId !== event.pointerId) return;
+            panel.style.right = 'auto';
+            panel.style.left = `${event.clientX - headerDrag.offsetX}px`;
+            panel.style.top = `${event.clientY - headerDrag.offsetY}px`;
+        });
+        title.addEventListener('pointerup', (event) => {
+            if (headerDrag?.pointerId === event.pointerId) {
+                title.releasePointerCapture(event.pointerId);
+                headerDrag = null;
+            }
+        });
 
         const fileInfo = document.createElement('div');
         fileInfo.style.cssText = 'color:#9aa3ab;margin-bottom:8px;word-break:break-all';
@@ -144,11 +172,7 @@ class EvalCasePanel {
             applyBoxFromScene();
         });
         applyBoxButton.title = 'Copy the manual box tool’s current box back into this case’s target';
-        const addLastRunButton = button('Add last run', () => {
-            addLastBrushRun();
-        });
-        addLastRunButton.title = 'Append the most recent brush run (current camera + stroke + sticky target) as a new case';
-        actions.append(previewButton, runButton, editInSceneButton, applyBoxButton, addLastRunButton);
+        actions.append(previewButton, runButton, editInSceneButton, applyBoxButton);
 
         const metricsInfo = document.createElement('div');
         metricsInfo.style.cssText = 'color:#ffb26d;white-space:pre-wrap';

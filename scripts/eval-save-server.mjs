@@ -9,7 +9,7 @@
 //   -> writes scripts/boxer-evals/<basename(name)> (basename only; no paths)
 // GET  /health -> { ok: true }
 
-import { writeFile, rename } from 'node:fs/promises';
+import { appendFile, writeFile, rename } from 'node:fs/promises';
 import http from 'node:http';
 import { dirname, join, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,6 +34,34 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && req.url === '/health') {
         respond(res, 200, { ok: true, evals_dir: evalsDir });
+        return;
+    }
+    if (req.method === 'POST' && req.url === '/append') {
+        let raw = '';
+        req.on('data', (chunk) => {
+            raw += chunk;
+            if (raw.length > 64 * 1024 * 1024) req.destroy();
+        });
+        req.on('end', async () => {
+            try {
+                const { name, eval_case: evalCase } = JSON.parse(raw);
+                const safeName = basename(String(name ?? 'live-brush-evals.jsonl'));
+                if (!safeName.endsWith('.jsonl')) {
+                    respond(res, 400, { error: 'append target must be a .jsonl basename' });
+                    return;
+                }
+                if (!evalCase || typeof evalCase !== 'object') {
+                    respond(res, 400, { error: 'eval_case must be an object' });
+                    return;
+                }
+                const target = join(evalsDir, safeName);
+                await appendFile(target, `${JSON.stringify(evalCase)}\n`);
+                console.log(`[eval-save] appended case to ${target}`);
+                respond(res, 200, { ok: true, file: target });
+            } catch (err) {
+                respond(res, 400, { error: err instanceof Error ? err.message : String(err) });
+            }
+        });
         return;
     }
     if (req.method === 'POST' && req.url === '/save') {

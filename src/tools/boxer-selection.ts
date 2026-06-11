@@ -7240,10 +7240,9 @@ class BoxerSelection {
         };
 
         const saveEvalCaseLocally = async (evalCase: Record<string, unknown>) => {
-            const url = getLocalEvalSaveUrl();
-            if (!url) {
-                return { ok: false, error: 'Local eval save proxy is not configured' };
-            }
+            // prefer the always-on eval-save-server; the sam3 dev proxy path
+            // only exists when SAM3_BACKEND_URL points at localhost
+            const url = getLocalEvalSaveUrl() ?? 'http://127.0.0.1:48013/append';
 
             const compactEvalCase = compactEvalCaseForLocalSave(evalCase);
             const controller = new AbortController();
