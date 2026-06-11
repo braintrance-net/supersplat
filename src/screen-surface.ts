@@ -83,8 +83,8 @@ class ScreenSurface extends Element {
         events.on('screen.clear', () => this.clear());
     }
 
-    // Quad vertex order: topLeft, topRight, bottomRight, bottomLeft. UVs flip V so
-    // canvas/video rows (top-down) map onto the surface upright.
+    // Quad vertex order: topLeft, topRight, bottomRight, bottomLeft. The top edge
+    // samples the top of the frame (V=0) so the video reads upright.
     writeQuad(corners: ScreenCorners) {
         const bottomRight = {
             x: corners.topRight.x + (corners.bottomLeft.x - corners.topLeft.x),
@@ -98,7 +98,7 @@ class ScreenSurface extends Element {
             bottomRight.x, bottomRight.y, bottomRight.z,
             corners.bottomLeft.x, corners.bottomLeft.y, corners.bottomLeft.z
         ]);
-        this.mesh.setUvs(0, [0, 1, 1, 1, 1, 0, 0, 0]);
+        this.mesh.setUvs(0, [0, 0, 1, 0, 1, 1, 0, 1]);
         this.mesh.setIndices([0, 1, 2, 0, 2, 3]);
         this.mesh.update(PRIMITIVE_TRIANGLES);
     }
