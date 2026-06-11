@@ -251,10 +251,14 @@ class EvalCasePanel {
                 metricsInfo.textContent = 'this case has no target to edit';
                 return;
             }
+            // declutter: drop boxer wireframes/overlays and any selection
+            // highlight so only the editable box is visible
+            events.invoke('boxer.clearOverlays');
+            events.fire('select.none');
             events.fire('tool.boxSelection');
             const seeded = events.invoke('boxSelection.setBox', target);
             metricsInfo.textContent = seeded ?
-                'box tool seeded with the target — drag the gizmo, then hit Apply box' :
+                'box tool seeded with the target — Move/Resize, then hit Apply box' :
                 'box tool is not available';
         }
 
@@ -272,8 +276,9 @@ class EvalCasePanel {
             dirty = true;
             updateFileInfo();
             fillTargetInputs();
+            // no auto-preview here: keep the viewport clean for further edits;
+            // Preview/Run redraw the overlays on demand
             metricsInfo.textContent = 'target updated from the scene box — Save to persist';
-            previewSelected();
         }
 
         function parseFixture(text: string, name: string): { cases: EvalCase[]; format: FixtureFormat } {

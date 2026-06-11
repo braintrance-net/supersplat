@@ -44,6 +44,11 @@ class BrushSelection {
         // conversion instead of flickering back to 2D mode
         let surfaceMissStreak = 0;
         const SURFACE_MISS_TOLERANCE = 14;
+        // per-stroke diagnostic trace: where the user actually pointed (client
+        // px) and where the surface probe landed in 3D — recorded into the
+        // prompt so strokes can be replicated and debugged offline
+        let lastProbeHit: { point: [number, number, number]; distance: number } | null = null;
+        let strokeTrace: { client: [number, number]; world: [number, number, number] | null; distance: number | null }[] = [];
 
         type SurfaceProbeHit = {
             point: [number, number, number];
@@ -137,12 +142,14 @@ class BrushSelection {
             const ringResult = radiusWorld !== null ? probeSurfaceRing(clientX, clientY, radiusWorld) : null;
             const hit = ringResult?.center ?? probeSurface(clientX, clientY);
             if (!hit || !(hit.px_per_world > 0)) {
+                lastProbeHit = null;
                 surfaceMissStreak += 1;
                 if (surfaceMissStreak > SURFACE_MISS_TOLERANCE) {
                     exitSurfaceMode();
                 }
                 return;
             }
+            lastProbeHit = { point: hit.point, distance: hit.distance };
             surfaceMissStreak = 0;
             const pxPerWorld = hit.px_per_world;
             if (radiusWorld === null) {
@@ -170,11 +177,18 @@ class BrushSelection {
             }
         };
 
-        const addPoint = (x: number, y: number) => {
+        const addPoint = (x: number, y: number, clientX?: number, clientY?: number) => {
             const last = points[points.length - 1];
             if (last && Math.hypot(last[0] - x, last[1] - y) < 3) return;
             points.push([x, y]);
             pointRadii.push(radius);
+            if (clientX !== undefined && clientY !== undefined && strokeTrace.length < 256) {
+                strokeTrace.push({
+                    client: [Math.round(clientX), Math.round(clientY)],
+                    world: lastProbeHit ? [...lastProbeHit.point] : null,
+                    distance: lastProbeHit ? Number(lastProbeHit.distance.toFixed(3)) : null
+                });
+            }
         };
 
         const buildBrushPrompt = () => {
@@ -219,7 +233,8 @@ class BrushSelection {
                     radius: promptRadius,
                     bb2d,
                     points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
-                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {})
+                    ...(radiusWorld !== null ? { radius_world: radiusWorld } : {}),
+                    ...(strokeTrace.length ? { probe_trace: strokeTrace } : {})
                 }
             };
         };
@@ -240,7 +255,7 @@ class BrushSelection {
                 context.moveTo(prev.x, prev.y);
                 context.lineTo(x, y);
                 context.stroke();
-                addPoint(x, y);
+                addPoint(x, y, e.clientX, e.clientY);
 
                 prev.x = x;
                 prev.y = y;
@@ -271,7 +286,8 @@ class BrushSelection {
                 prev.y = e.offsetY;
                 points = [];
                 pointRadii = [];
-                addPoint(prev.x, prev.y);
+                strokeTrace = [];
+                addPoint(prev.x, prev.y, e.clientX, e.clientY);
 
                 update(e);
             }

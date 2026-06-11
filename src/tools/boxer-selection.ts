@@ -501,6 +501,9 @@ type BoxerBrushPrompt = {
     // 'raw' = pure extents box from the brushed gaussians, no candidate
     // competition, no calibrated priors, no refinement
     mode?: 'raw';
+    // diagnostic: per-point pointer position (client px) and the collision
+    // surface hit under it, recorded by the brush tool for replication
+    probe_trace?: { client: [number, number]; world: [number, number, number] | null; distance: number | null }[];
 };
 type BoxerEvalPrompt =
     { type: 'click'; click_xy: [number, number] } |
@@ -5806,6 +5809,15 @@ class BoxerSelection {
             hide2DBox();
             scene.forceRender = true;
         };
+        try {
+            // used by the eval case editor to declutter the viewport while
+            // the user adjusts a target box
+            events.function('boxer.clearOverlays', () => {
+                clearBoxerResultOverlay();
+            });
+        } catch (err) {
+            console.warn('[Boxer] boxer.clearOverlays was already registered', err);
+        }
         const debugPanel = document.createElement('div');
         debugPanel.style.position = 'absolute';
         debugPanel.style.right = '12px';

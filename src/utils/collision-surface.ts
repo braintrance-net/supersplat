@@ -424,6 +424,65 @@ class CollisionSurface {
     }
 }
 
+// Explicit pinhole screen math in raw viewport (client) pixels, built from
+// the camera pose + fov — the same convention as the Boxer eval pipeline.
+// (The engine's screenToWorld/worldToScreen are NOT inverse-consistent in
+// this app: SuperSplat customizes the projection, so a screenToWorld ray
+// re-projected with worldToScreen lands ~3% off. Do not use them for
+// cursor-anchored features.)
+type PinholeModel = { rect: DOMRect; focal: number; position: Vec3 };
+
+const createScreenMath = (scene: Scene) => {
+    const camRight = new Vec3();
+    const camUp = new Vec3();
+    const camBack = new Vec3();
+
+    const pinhole = (): PinholeModel | null => {
+        const rect = scene.canvas.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) return null;
+        const camera = scene.camera.camera;
+        const fovRad = camera.fov * Math.PI / 180;
+        const focal = camera.horizontalFov ?
+            rect.width / (2 * Math.tan(fovRad / 2)) :
+            rect.height / (2 * Math.tan(fovRad / 2));
+        const transform = scene.camera.mainCamera.getWorldTransform();
+        transform.getX(camRight);
+        transform.getY(camUp);
+        transform.getZ(camBack);
+        const position = scene.camera.mainCamera.getPosition();
+        return { rect, focal, position };
+    };
+
+    const rayThrough = (model: PinholeModel, clientX: number, clientY: number): [number, number, number] => {
+        const { rect, focal } = model;
+        const sx = (clientX - rect.left - rect.width / 2) / focal;
+        const sy = (clientY - rect.top - rect.height / 2) / focal;
+        // camera space (GL): +x right, +y up, -z forward; screen y grows down
+        return [
+            camRight.x * sx - camUp.x * sy - camBack.x,
+            camRight.y * sx - camUp.y * sy - camBack.y,
+            camRight.z * sx - camUp.z * sy - camBack.z
+        ];
+    };
+
+    const projectToClient = (model: PinholeModel, point: [number, number, number]): [number, number] | null => {
+        const { rect, focal, position } = model;
+        const dx = point[0] - position.x;
+        const dy = point[1] - position.y;
+        const dz = point[2] - position.z;
+        const xc = dx * camRight.x + dy * camRight.y + dz * camRight.z;
+        const yc = dx * camUp.x + dy * camUp.y + dz * camUp.z;
+        const depth = -(dx * camBack.x + dy * camBack.y + dz * camBack.z);
+        if (!(depth > 0.0001)) return null;
+        return [
+            rect.left + rect.width / 2 + focal * (xc / depth),
+            rect.top + rect.height / 2 - focal * (yc / depth)
+        ];
+    };
+
+    return { pinhole, rayThrough, projectToClient };
+};
+
 // Active surface registry. Surfaces load from the same sidecar convention as
 // the walk tool: /static/dev-assets/collision/<basename>.collision.glb
 const surfaceCache = new Map<string, Promise<CollisionSurface | null>>();
@@ -481,57 +540,7 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     // Probe the collision surface at a normalized (0-1) screen coordinate.
     // Returns the world hit plus the world-height the viewport spans at that
     // depth, so callers can convert between pixel and world brush radii.
-    // All probe coordinates are raw viewport (client) pixels from pointer
-    // events. Rays and projections use an explicit pinhole model built from
-    // the camera pose + fov — the same convention as the Boxer eval pipeline.
-    // (The engine's screenToWorld/worldToScreen are NOT inverse-consistent in
-    // this app: SuperSplat customizes the projection, so a screenToWorld ray
-    // re-projected with worldToScreen lands ~3% off. Do not use them here.)
-    const camRight = new Vec3();
-    const camUp = new Vec3();
-    const camBack = new Vec3();
-    const pinhole = () => {
-        const rect = scene.canvas.getBoundingClientRect();
-        if (!(rect.width > 0) || !(rect.height > 0)) return null;
-        const camera = scene.camera.camera;
-        const fovRad = camera.fov * Math.PI / 180;
-        const focal = camera.horizontalFov ?
-            rect.width / (2 * Math.tan(fovRad / 2)) :
-            rect.height / (2 * Math.tan(fovRad / 2));
-        const transform = scene.camera.mainCamera.getWorldTransform();
-        transform.getX(camRight);
-        transform.getY(camUp);
-        transform.getZ(camBack);
-        const position = scene.camera.mainCamera.getPosition();
-        return { rect, focal, position };
-    };
-
-    const rayThrough = (model: NonNullable<ReturnType<typeof pinhole>>, clientX: number, clientY: number): [number, number, number] => {
-        const { rect, focal } = model;
-        const sx = (clientX - rect.left - rect.width / 2) / focal;
-        const sy = (clientY - rect.top - rect.height / 2) / focal;
-        // camera space (GL): +x right, +y up, -z forward; screen y grows down
-        return [
-            camRight.x * sx - camUp.x * sy - camBack.x,
-            camRight.y * sx - camUp.y * sy - camBack.y,
-            camRight.z * sx - camUp.z * sy - camBack.z
-        ];
-    };
-
-    const projectToClient = (model: NonNullable<ReturnType<typeof pinhole>>, point: [number, number, number]): [number, number] | null => {
-        const { rect, focal, position } = model;
-        const dx = point[0] - position.x;
-        const dy = point[1] - position.y;
-        const dz = point[2] - position.z;
-        const xc = dx * camRight.x + dy * camRight.y + dz * camRight.z;
-        const yc = dx * camUp.x + dy * camUp.y + dz * camUp.z;
-        const depth = -(dx * camBack.x + dy * camBack.y + dz * camBack.z);
-        if (!(depth > 0.0001)) return null;
-        return [
-            rect.left + rect.width / 2 + focal * (xc / depth),
-            rect.top + rect.height / 2 - focal * (yc / depth)
-        ];
-    };
+    const { pinhole, rayThrough, projectToClient } = createScreenMath(scene);
 
     const probeAt = (clientX: number, clientY: number) => {
         if (!activeSurface) return null;
@@ -654,4 +663,4 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     });
 };
 
-export { CollisionSurface, CollisionSurfaceHit, getActiveCollisionSurface, waitForCollisionSurface, registerCollisionSurfaceLoader };
+export { CollisionSurface, CollisionSurfaceHit, createScreenMath, getActiveCollisionSurface, waitForCollisionSurface, registerCollisionSurfaceLoader };
