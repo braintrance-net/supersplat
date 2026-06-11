@@ -514,7 +514,11 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
         const u = new Vec3().cross(forward, upRef).normalize();
         const v = new Vec3().cross(u, forward).normalize();
 
-        const ring: [number, number][] = [];
+        // a hit only counts as "the surface under the brush" while it stays
+        // near the ideal ring point; rays that slip past an edge land far
+        // behind and would drag long spikes into the outline
+        const maxDeviation = radiusWorld * 1.2;
+        const rawRing: [number, number][] = [];
         for (let i = 0; i < sampleCount; i++) {
             const angle = i / sampleCount * Math.PI * 2;
             const cos = Math.cos(angle) * radiusWorld;
@@ -529,13 +533,26 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
             const hit = activeSurface.raycastWorld(
                 [ringRay.origin.x, ringRay.origin.y, ringRay.origin.z],
                 [ringRay.direction.x, ringRay.direction.y, ringRay.direction.z],
-                center.distance + radiusWorld * 6
+                center.distance + radiusWorld * 4
             );
-            const point = hit ? hit.point : [ringWorld.x, ringWorld.y, ringWorld.z];
+            const deviation = hit ?
+                Math.hypot(hit.point[0] - ringWorld.x, hit.point[1] - ringWorld.y, hit.point[2] - ringWorld.z) :
+                Infinity;
+            const point = hit && deviation <= maxDeviation ? hit.point : [ringWorld.x, ringWorld.y, ringWorld.z];
             ringScreen.set(point[0], point[1], point[2]);
             scene.camera.camera.worldToScreen(ringScreen, ringScreen);
-            ring.push([ringScreen.x / Math.max(1, width), ringScreen.y / Math.max(1, height)]);
+            rawRing.push([ringScreen.x / Math.max(1, width), ringScreen.y / Math.max(1, height)]);
         }
+
+        // one smoothing pass to soften voxel staircase jitter
+        const ring: [number, number][] = rawRing.map((point, i) => {
+            const prev = rawRing[(i + rawRing.length - 1) % rawRing.length];
+            const next = rawRing[(i + 1) % rawRing.length];
+            return [
+                point[0] * 0.5 + (prev[0] + next[0]) * 0.25,
+                point[1] * 0.5 + (prev[1] + next[1]) * 0.25
+            ];
+        });
 
         return { center, ring };
     });

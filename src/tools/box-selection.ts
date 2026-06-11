@@ -1,5 +1,5 @@
 import { Button, Container, NumericInput } from '@playcanvas/pcui';
-import { TranslateGizmo, Vec3 } from 'playcanvas';
+import { ScaleGizmo, TranslateGizmo, Vec3 } from 'playcanvas';
 
 import { BoxShape } from '../box-shape';
 import { Events } from '../events';
@@ -25,6 +25,26 @@ class BoxSelection {
             box.moved();
         });
 
+        // resize mode: the box pivot's local scale IS the box dimensions
+        // (box.moved() copies lens into setLocalScale), so a scale gizmo
+        // resizes the box natively — just mirror the result back into lens
+        const scaleGizmo = new ScaleGizmo(scene.camera.camera, scene.gizmoLayer);
+        scaleGizmo.on('render:update', () => {
+            scene.forceRender = true;
+        });
+        let syncingFromGizmo = false;
+
+        let gizmoMode: 'move' | 'resize' = 'move';
+        const attachActiveGizmo = () => {
+            gizmo.detach();
+            scaleGizmo.detach();
+            if (gizmoMode === 'move') {
+                gizmo.attach([box.pivot]);
+            } else {
+                scaleGizmo.attach([box.pivot]);
+            }
+        };
+
         // ui
         const selectToolbar = new Container({
             class: 'select-toolbar',
@@ -35,6 +55,8 @@ class BoxSelection {
             e.stopPropagation();
         });
 
+        const moveModeButton = new Button({ text: 'Move', class: 'select-toolbar-button' });
+        const resizeModeButton = new Button({ text: 'Resize', class: 'select-toolbar-button' });
         const setButton = new Button({ text: 'Set', class: 'select-toolbar-button' });
         const addButton = new Button({ text: 'Add', class: 'select-toolbar-button' });
         const removeButton = new Button({ text: 'Remove', class: 'select-toolbar-button' });
@@ -65,6 +87,8 @@ class BoxSelection {
             min: 0.01
         });
 
+        selectToolbar.append(moveModeButton);
+        selectToolbar.append(resizeModeButton);
         selectToolbar.append(setButton);
         selectToolbar.append(addButton);
         selectToolbar.append(removeButton);
@@ -95,6 +119,37 @@ class BoxSelection {
             events.fire('select.byBox', op, [p.x, p.y, p.z, box.lenX, box.lenY, box.lenZ]);
         };
 
+        scaleGizmo.on('transform:move', () => {
+            const localScale = box.pivot.getLocalScale();
+            syncingFromGizmo = true;
+            box.lenX = Math.max(0.01, localScale.x);
+            box.lenY = Math.max(0.01, localScale.y);
+            box.lenZ = Math.max(0.01, localScale.z);
+            lenX.value = box.lenX;
+            lenY.value = box.lenY;
+            lenZ.value = box.lenZ;
+            syncingFromGizmo = false;
+            box.moved();
+            scene.forceRender = true;
+        });
+
+        const syncModeButtons = () => {
+            moveModeButton.dom.style.opacity = gizmoMode === 'move' ? '1' : '0.55';
+            resizeModeButton.dom.style.opacity = gizmoMode === 'resize' ? '1' : '0.55';
+        };
+        syncModeButtons();
+        moveModeButton.dom.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            gizmoMode = 'move';
+            syncModeButtons();
+            if (this.active) attachActiveGizmo();
+        });
+        resizeModeButton.dom.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+            gizmoMode = 'resize';
+            syncModeButtons();
+            if (this.active) attachActiveGizmo();
+        });
         setButton.dom.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
             apply('set');
@@ -133,19 +188,19 @@ class BoxSelection {
         };
 
         lenX.on('change', () => {
-            resizeFromLowSide('x', lenX.value);
+            if (!syncingFromGizmo) resizeFromLowSide('x', lenX.value);
         });
         lenY.on('change', () => {
-            resizeFromLowSide('y', lenY.value);
+            if (!syncingFromGizmo) resizeFromLowSide('y', lenY.value);
         });
         lenZ.on('change', () => {
-            resizeFromLowSide('z', lenZ.value);
+            if (!syncingFromGizmo) resizeFromLowSide('z', lenZ.value);
         });
 
         events.on('camera.focalPointPicked', (details: { splat: Splat, position: Vec3 }) => {
             if (this.active) {
                 box.pivot.setPosition(details.position);
-                gizmo.attach([box.pivot]);
+                attachActiveGizmo();
             }
         });
 
@@ -167,7 +222,7 @@ class BoxSelection {
                 lenZ.value = box.lenZ;
                 box.moved();
                 if (this.active) {
-                    gizmo.attach([box.pivot]);
+                    attachActiveGizmo();
                 }
                 scene.forceRender = true;
                 return currentBox();
@@ -183,6 +238,7 @@ class BoxSelection {
             } else {
                 gizmo.size = 1200 / Math.max(canvas.clientWidth, canvas.clientHeight);
             }
+            scaleGizmo.size = gizmo.size;
         };
         updateGizmoSize();
         events.on('camera.resize', updateGizmoSize);
@@ -191,13 +247,14 @@ class BoxSelection {
         this.activate = () => {
             this.active = true;
             scene.add(box);
-            gizmo.attach([box.pivot]);
+            attachActiveGizmo();
             selectToolbar.hidden = false;
         };
 
         this.deactivate = () => {
             selectToolbar.hidden = true;
             gizmo.detach();
+            scaleGizmo.detach();
             scene.remove(box);
             this.active = false;
         };
