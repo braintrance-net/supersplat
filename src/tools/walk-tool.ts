@@ -1102,7 +1102,9 @@ class WalkTool {
             Math.min(COLLISION_MESH_THIRD_PERSON_DISTANCE, worldDistance)
         );
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        const focalPoint = playerHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
+        const focalPoint = nextDistance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
+            playerHead :
+            playerHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
         camera.setDistance(nextDistance / camera.sceneRadius * camera.fovFactor, 0);
         camera.setFocalPoint(focalPoint, 0);
         if (this.collisionMeshHeadY !== null) {
@@ -2132,6 +2134,9 @@ class WalkTool {
 
     private playerHead(camera = this.camera, focalPoint = camera.focalPoint) {
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
+        if (this.embeddedControls && distance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE) {
+            return focalPoint.clone();
+        }
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
         return focalPoint.clone().add(forwardVec.clone().mulScalar(distance));
     }
@@ -2404,15 +2409,16 @@ class WalkTool {
         const camera = this.camera;
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
 
-        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        const cameraPosition = camera.focalPoint.add(forwardVec.clone().mulScalar(distance));
+        const playerHead = this.playerHead(camera);
 
         const sensitivity = camera.scene.config.controls.orbitSensitivity;
         const azim = camera.azim - dx * sensitivity;
         const elev = camera.elevation - dy * sensitivity;
 
         Camera.calcForwardVec(forwardVec, azim, elev);
-        const focalPoint = cameraPosition.clone().sub(forwardVec.clone().mulScalar(distance));
+        const focalPoint = this.embeddedControls && distance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
+            playerHead :
+            playerHead.clone().sub(forwardVec.clone().mulScalar(distance));
 
         camera.setAzimElev(azim, elev, 0);
         camera.setFocalPoint(focalPoint, 0);
