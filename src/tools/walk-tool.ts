@@ -99,6 +99,8 @@ const COLLISION_MESH_GROUND_PROBE_RADIUS = 0.22;
 const COLLISION_MESH_GROUND_CACHE_DROP = 0.45;
 const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
 const COLLISION_MESH_BLOCKING_ENABLED = false;
+const COLLISION_MESH_FIRST_PERSON_DISTANCE = 0.035;
+const COLLISION_MESH_THIRD_PERSON_DISTANCE = 2.2;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
@@ -700,6 +702,7 @@ class WalkTool {
     private onPointerLockChangeBound: (() => void) | null = null;
     private onEmbeddedKeyDownBound: ((e: KeyboardEvent) => void) | null = null;
     private onEmbeddedKeyUpBound: ((e: KeyboardEvent) => void) | null = null;
+    private onEmbeddedWheelBound: ((e: WheelEvent) => void) | null = null;
     private onEmbeddedFocusLossBound: (() => void) | null = null;
     private onEmbeddedVisibilityChangeBound: (() => void) | null = null;
     private externalWalkInput: WalkInputState = {};
@@ -1008,6 +1011,7 @@ class WalkTool {
         this.clearNativeFlyInput();
         this.onEmbeddedKeyDownBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, true);
         this.onEmbeddedKeyUpBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, false);
+        this.onEmbeddedWheelBound = (e: WheelEvent) => this.onEmbeddedWheel(e);
         const clearEmbeddedInput = () => {
             this.embeddedKeyboardInput = {};
             this.externalJumpWasPressed = false;
@@ -1021,6 +1025,7 @@ class WalkTool {
         };
         window.addEventListener('keydown', this.onEmbeddedKeyDownBound, { capture: true });
         window.addEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
+        this.container.addEventListener('wheel', this.onEmbeddedWheelBound, { passive: false });
         window.addEventListener('blur', this.onEmbeddedFocusLossBound);
         window.addEventListener('pagehide', this.onEmbeddedFocusLossBound);
         document.addEventListener('visibilitychange', this.onEmbeddedVisibilityChangeBound);
@@ -1035,6 +1040,10 @@ class WalkTool {
             window.removeEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
             this.onEmbeddedKeyUpBound = null;
         }
+        if (this.onEmbeddedWheelBound) {
+            this.container.removeEventListener('wheel', this.onEmbeddedWheelBound);
+            this.onEmbeddedWheelBound = null;
+        }
         if (this.onEmbeddedFocusLossBound) {
             window.removeEventListener('blur', this.onEmbeddedFocusLossBound);
             window.removeEventListener('pagehide', this.onEmbeddedFocusLossBound);
@@ -1046,6 +1055,30 @@ class WalkTool {
         }
         this.embeddedKeyboardInput = {};
         this.clearNativeFlyInput();
+    }
+
+    private onEmbeddedWheel(event: WheelEvent) {
+        if (!this.embeddedControls || !this.active) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const thirdPerson = event.deltaY > 0;
+        this.setEmbeddedViewDistance(thirdPerson ? COLLISION_MESH_THIRD_PERSON_DISTANCE : COLLISION_MESH_FIRST_PERSON_DISTANCE);
+    }
+
+    private setEmbeddedViewDistance(worldDistance: number) {
+        const camera = this.camera;
+        const playerHead = this.playerHead(camera);
+        const nextDistance = Math.max(COLLISION_MESH_FIRST_PERSON_DISTANCE, worldDistance);
+        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
+        const focalPoint = playerHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
+        camera.setDistance(nextDistance / camera.sceneRadius * camera.fovFactor, 0);
+        camera.setFocalPoint(focalPoint, 0);
+        if (this.collisionMeshHeadY !== null) {
+            this.collisionMeshHeadY = playerHead.y;
+        }
+        this.scene.forceRender = true;
     }
 
     private clearNativeFlyInput() {

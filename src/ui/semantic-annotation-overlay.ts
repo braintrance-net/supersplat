@@ -37,6 +37,9 @@ type MultiplayerOverlayPlayer = {
     id: string;
     label: string;
     color?: string;
+    avatarId?: string;
+    avatarName?: string;
+    avatarUrl?: string;
     position: [number, number, number];
     target?: [number, number, number];
     speaking?: boolean;
@@ -52,6 +55,8 @@ type MultiplayerAvatarAnimation = 'idle' | 'run';
 type MultiplayerMorph = { setWeight(index: number, weight: number): void };
 
 type MultiplayerAvatarInstance = {
+    avatarUrl: string;
+    avatarIsVrm: boolean;
     entity: Entity;
     rig: MultiplayerAvatarRig | null;
     usesProceduralRig: boolean;
@@ -132,7 +137,6 @@ const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
 // Use the meeting library VRM avatar only; if it fails, show the procedural
 // marker instead of falling back to the bundled Kenney avatar.
 const MULTIPLAYER_VRM_URL = 'https://arweave.net/gfVzs1oH_aPaHVxpQK86HT_rqzyrFPOUKUrDJ30yprs';
-const MULTIPLAYER_AVATAR_URLS = [MULTIPLAYER_VRM_URL];
 const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
@@ -338,6 +342,8 @@ class SemanticAnnotationOverlay {
     private readonly screenPos = new Vec3();
     private readonly markerDistanceDelta = new Vec3();
     private readonly multiplayerWorld = new Vec3();
+    private readonly multiplayerLabelWorld = new Vec3();
+    private readonly multiplayerLabelScreenPos = new Vec3();
     private readonly multiplayerFeetWorld = new Vec3();
     private readonly multiplayerFeetScreenPos = new Vec3();
     private readonly multiplayerDelta = new Vec3();
@@ -350,15 +356,12 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
     private readonly multiplayerAvatarInstances = new Map<string, MultiplayerAvatarInstance>();
+    private readonly multiplayerAvatarAssets = new Map<string, Asset>();
+    private readonly multiplayerAvatarLoadingUrls = new Set<string>();
+    private readonly multiplayerAvatarFailedUrls = new Set<string>();
+    private readonly multiplayerAvatarLoadStartedAt = new Map<string, number>();
     private annotations: SemanticAnnotation[] = [];
     private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
-    private multiplayerAvatarAsset: Asset | null = null;
-    private multiplayerAvatarLoading = false;
-    private multiplayerAvatarFailed = false;
-    // VRM avatars face the opposite way and are authored at ~human metres, unlike
-    // the bundled Kenney avatar, so orientation and scale are corrected per source.
-    private multiplayerAvatarIsVrm = false;
-    private multiplayerAvatarLoadStartedAt: number | null = null;
     private interactionMode: 'edit' | 'game' = 'edit';
     private activeGameTargetIds = new Set<string>();
     private foundAnnotationIds = new Set<string>();
@@ -480,13 +483,26 @@ class SemanticAnnotationOverlay {
         if (mode !== 'game') {
             this.setShowHitboxes(false);
         } else {
-            this.preloadMultiplayerAvatarAsset({ reason: 'game-mode' });
+            this.preloadMultiplayerAvatarAsset(undefined, { reason: 'game-mode' });
         }
         this.syncMarkerClasses();
     }
 
-    private updateMultiplayerMarkerAvatarState(marker: HTMLDivElement, avatar: MultiplayerAvatarInstance | null = null) {
-        const expects3dAvatar = !this.multiplayerAvatarFailed;
+    private multiplayerAvatarUrl(player?: MultiplayerOverlayPlayer) {
+        const url = player?.avatarUrl?.trim();
+        return url || MULTIPLAYER_VRM_URL;
+    }
+
+    private multiplayerAvatarIsVrmUrl(_url: string) {
+        return true;
+    }
+
+    private updateMultiplayerMarkerAvatarState(
+        marker: HTMLDivElement,
+        player?: MultiplayerOverlayPlayer,
+        avatar: MultiplayerAvatarInstance | null = null
+    ) {
+        const expects3dAvatar = !this.multiplayerAvatarFailedUrls.has(this.multiplayerAvatarUrl(player));
         marker.classList.toggle('has-3d-avatar', Boolean(avatar));
         marker.classList.toggle('awaiting-3d-avatar', expects3dAvatar && !avatar);
     }
@@ -504,11 +520,8 @@ class SemanticAnnotationOverlay {
             }
         }
 
-        if (this.multiplayerPlayers.length > 0) {
-            this.preloadMultiplayerAvatarAsset({ reason: 'players', count: this.multiplayerPlayers.length });
-        }
-
         for (const player of this.multiplayerPlayers) {
+            this.preloadMultiplayerAvatarAsset(player, { reason: 'players', count: this.multiplayerPlayers.length });
             let marker = this.multiplayerMarkers.get(player.id);
             if (!marker) {
                 marker = document.createElement('div');
@@ -533,7 +546,7 @@ class SemanticAnnotationOverlay {
             // Talking cue: glow the avatar body while the participant is speaking.
             const body = marker.querySelector('.multiplayer-avatar-body') as HTMLElement | null;
             if (body) body.style.filter = player.speaking ? 'drop-shadow(0 0 9px #91d9ce) drop-shadow(0 0 4px #91d9ce)' : '';
-            this.updateMultiplayerMarkerAvatarState(marker);
+            this.updateMultiplayerMarkerAvatarState(marker, player);
         }
 
         this.update();
@@ -666,60 +679,53 @@ class SemanticAnnotationOverlay {
         this.scene.forceRender = true;
     }
 
-    private preloadMultiplayerAvatarAsset(details: { reason?: string; count?: number } = {}) {
-        this.loadMultiplayerAvatarAsset(details.reason ?? 'preload', details);
+    private preloadMultiplayerAvatarAsset(player?: MultiplayerOverlayPlayer, details: { reason?: string; count?: number } = {}) {
+        this.loadMultiplayerAvatarAsset(this.multiplayerAvatarUrl(player), details.reason ?? 'preload', details);
     }
 
-    private loadMultiplayerAvatarAsset(reason = 'update', details: Record<string, unknown> = {}) {
-        if (this.multiplayerAvatarAsset || this.multiplayerAvatarLoading || this.multiplayerAvatarFailed) {
+    private loadMultiplayerAvatarAsset(url = MULTIPLAYER_VRM_URL, reason = 'update', details: Record<string, unknown> = {}) {
+        if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url) || this.multiplayerAvatarFailedUrls.has(url)) {
             return;
         }
 
-        this.multiplayerAvatarLoading = true;
-        this.multiplayerAvatarLoadStartedAt = performance.now();
-        this.tryLoadMultiplayerAvatarUrl(0, reason, details);
-    }
-
-    // Try the candidate avatar URLs in order. Keep this VRM-only for meetings so
-    // mouth animation never silently falls back to the bundled Kenney asset.
-    private tryLoadMultiplayerAvatarUrl(index: number, reason: string, details: Record<string, unknown>) {
-        const url = MULTIPLAYER_AVATAR_URLS[index];
-        if (!url) {
-            this.multiplayerAvatarLoading = false;
-            this.multiplayerAvatarFailed = true;
-            this.emitDiagnostic('multiplayer-avatar-load-failed', { reason, ...details });
-            for (const marker of this.multiplayerMarkers.values()) {
-                this.updateMultiplayerMarkerAvatarState(marker);
-            }
-            this.update();
-            this.scene.forceRender = true;
-            return;
-        }
-
+        this.multiplayerAvatarLoadingUrls.add(url);
+        this.multiplayerAvatarLoadStartedAt.set(url, performance.now());
         this.emitDiagnostic('multiplayer-avatar-preload-start', { url, reason, ...details });
         this.scene.app.assets.loadFromUrl(url, 'container', (error: unknown, asset?: Asset) => {
-            const loadMs = this.multiplayerAvatarLoadStartedAt === null ? null : performance.now() - this.multiplayerAvatarLoadStartedAt;
+            const startedAt = this.multiplayerAvatarLoadStartedAt.get(url);
+            const loadMs = startedAt === undefined ? null : performance.now() - startedAt;
+            this.multiplayerAvatarLoadingUrls.delete(url);
+            this.multiplayerAvatarLoadStartedAt.delete(url);
             if (error || !asset) {
+                this.multiplayerAvatarFailedUrls.add(url);
                 this.emitDiagnostic('multiplayer-avatar-url-failed', {
                     url,
                     error: error instanceof Error ? error.message : String(error ?? 'unknown')
                 });
-                this.tryLoadMultiplayerAvatarUrl(index + 1, reason, details);
+                for (const player of this.multiplayerPlayers) {
+                    if (this.multiplayerAvatarUrl(player) === url) {
+                        const marker = this.multiplayerMarkers.get(player.id);
+                        if (marker) this.updateMultiplayerMarkerAvatarState(marker, player);
+                    }
+                }
+                this.update();
+                this.scene.forceRender = true;
                 return;
             }
 
-            this.multiplayerAvatarLoading = false;
-            this.multiplayerAvatarAsset = asset;
-            this.multiplayerAvatarIsVrm = url === MULTIPLAYER_VRM_URL;
+            this.multiplayerAvatarAssets.set(url, asset);
             const resource = asset.resource as MultiplayerAvatarContainer | undefined;
             this.emitDiagnostic('multiplayer-avatar-preload-ready', {
                 url,
                 loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
                 animations: resource?.animations?.map(animation => animation.name) ?? [],
-                waitingPlayers: this.multiplayerPlayers.length
+                waitingPlayers: this.multiplayerPlayers.filter(player => this.multiplayerAvatarUrl(player) === url).length
             });
-            for (const marker of this.multiplayerMarkers.values()) {
-                this.updateMultiplayerMarkerAvatarState(marker);
+            for (const player of this.multiplayerPlayers) {
+                if (this.multiplayerAvatarUrl(player) === url) {
+                    const marker = this.multiplayerMarkers.get(player.id);
+                    if (marker) this.updateMultiplayerMarkerAvatarState(marker, player);
+                }
             }
             this.update();
             this.scene.forceRender = true;
@@ -886,7 +892,7 @@ class SemanticAnnotationOverlay {
 
         // Mixamo VRM avatars rest in a T-pose; rotate the upper arms down to the
         // sides so they don't stick straight out (Kenney already rests arms-down).
-        const armDown = this.multiplayerAvatarIsVrm ? MULTIPLAYER_VRM_ARM_DOWN_DEGREES : 0;
+        const armDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_ARM_DOWN_DEGREES : 0;
 
         if (running) {
             this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5 + armDown);
@@ -906,13 +912,17 @@ class SemanticAnnotationOverlay {
     }
 
     private ensureMultiplayerAvatar(player: MultiplayerOverlayPlayer) {
+        const avatarUrl = this.multiplayerAvatarUrl(player);
         const existing = this.multiplayerAvatarInstances.get(player.id);
         if (existing) {
-            return existing;
+            if (existing.avatarUrl === avatarUrl) {
+                return existing;
+            }
+            this.destroyMultiplayerAvatar(player.id);
         }
 
-        this.loadMultiplayerAvatarAsset();
-        const resource = this.multiplayerAvatarAsset?.resource as MultiplayerAvatarContainer | undefined;
+        this.loadMultiplayerAvatarAsset(avatarUrl);
+        const resource = this.multiplayerAvatarAssets.get(avatarUrl)?.resource as MultiplayerAvatarContainer | undefined;
         if (!resource) {
             return null;
         }
@@ -920,7 +930,7 @@ class SemanticAnnotationOverlay {
         const entity = resource.instantiateRenderEntity?.({ castShadows: false, receiveShadows: false }) ??
             resource.instantiateModelEntity?.({ castShadows: false, receiveShadows: false });
         if (!entity) {
-            this.multiplayerAvatarFailed = true;
+            this.multiplayerAvatarFailedUrls.add(avatarUrl);
             return null;
         }
 
@@ -940,6 +950,8 @@ class SemanticAnnotationOverlay {
             });
         });
         const instance = {
+            avatarUrl,
+            avatarIsVrm: this.multiplayerAvatarIsVrmUrl(avatarUrl),
             entity,
             rig,
             usesProceduralRig: !animationSetup.nativeAnimation,
@@ -954,6 +966,9 @@ class SemanticAnnotationOverlay {
         this.multiplayerAvatarInstances.set(player.id, instance);
         this.emitDiagnostic('multiplayer-avatar-rig-ready', {
             playerId: player.id,
+            avatarId: player.avatarId ?? null,
+            avatarName: player.avatarName ?? null,
+            avatarUrl,
             nativeAnimation: animationSetup.nativeAnimation,
             animPlayable: animationSetup.animPlayable ?? null,
             fallbackReason: animationSetup.fallbackReason ?? null,
@@ -1004,7 +1019,7 @@ class SemanticAnnotationOverlay {
             forwardZ = player.target[2] - player.position[2];
         }
         if (forwardX * forwardX + forwardZ * forwardZ > 1e-6) {
-            const vrmFlip = this.multiplayerAvatarIsVrm ? 180 : 0;
+            const vrmFlip = instance.avatarIsVrm ? 180 : 0;
             const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES + vrmFlip;
             instance.entity.setEulerAngles(0, yaw, 0);
         }
@@ -1013,8 +1028,8 @@ class SemanticAnnotationOverlay {
         // the Kenney source height. Size VRMs to a consistent adult height so they
         // never render child-sized when a scene's eye-to-floor height is short;
         // feet still sit on the detected ground (feetY above).
-        const sourceHeight = this.multiplayerAvatarIsVrm ? 1.6 : MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
-        const targetHeight = this.multiplayerAvatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+        const sourceHeight = instance.avatarIsVrm ? 1.6 : MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
+        const targetHeight = instance.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
         const scale = targetHeight / sourceHeight;
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
@@ -1831,16 +1846,14 @@ class SemanticAnnotationOverlay {
     }
 
     private updateMultiplayerPlayers(clientWidth: number, clientHeight: number, cameraPosition: Vec3) {
-        if (this.multiplayerPlayers.length > 0) {
-            this.loadMultiplayerAvatarAsset('update');
-        }
-
         const nowMs = performance.now();
         for (const player of this.multiplayerPlayers) {
             const marker = this.multiplayerMarkers.get(player.id);
             if (!marker) {
                 continue;
             }
+            const avatarUrl = this.multiplayerAvatarUrl(player);
+            this.loadMultiplayerAvatarAsset(avatarUrl, 'update');
 
             this.multiplayerWorld.set(player.position[0], player.position[1], player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerWorld, this.screenPos);
@@ -1872,13 +1885,17 @@ class SemanticAnnotationOverlay {
             if (avatar) {
                 this.updateMultiplayerAvatar(player, avatar, avatarWorldHeight, nowMs);
             }
-            this.updateMultiplayerMarkerAvatarState(marker, avatar);
+            this.updateMultiplayerMarkerAvatarState(marker, player, avatar);
 
             this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
+            this.multiplayerLabelWorld.set(player.position[0], player.position[1] + 0.22, player.position[2]);
+            this.scene.camera.worldToScreen(this.multiplayerLabelWorld, this.multiplayerLabelScreenPos);
 
             const headX = this.screenPos.x * clientWidth;
             const headY = this.screenPos.y * clientHeight;
+            const labelX = this.multiplayerLabelScreenPos.x * clientWidth;
+            const labelY = this.multiplayerLabelScreenPos.y * clientHeight;
             const feetY = this.multiplayerFeetScreenPos.y * clientHeight;
             const projectedHeight = Math.abs(feetY - headY);
             const distance = Math.max(0.1, this.multiplayerDelta.sub2(this.multiplayerWorld, cameraPosition).length());
@@ -1890,8 +1907,8 @@ class SemanticAnnotationOverlay {
 
             marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
             marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
-            marker.style.transform = avatar || !this.multiplayerAvatarFailed ?
-                `translate(${headX.toFixed(1)}px, ${headY.toFixed(1)}px)` :
+            marker.style.transform = avatar || !this.multiplayerAvatarFailedUrls.has(avatarUrl) ?
+                `translate(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px)` :
                 `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
 

@@ -75,6 +75,9 @@ type MultiplayerPlayer = {
     id: string;
     label: string;
     color?: string;
+    avatarId?: string;
+    avatarName?: string;
+    avatarUrl?: string;
     position: Vec3Tuple;
     target?: Vec3Tuple;
     speaking?: boolean;
@@ -510,6 +513,9 @@ const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessa
             typeof player.id === 'string' &&
             typeof player.label === 'string' &&
             (player.color === undefined || typeof player.color === 'string') &&
+            (player.avatarId === undefined || typeof player.avatarId === 'string') &&
+            (player.avatarName === undefined || typeof player.avatarName === 'string') &&
+            (player.avatarUrl === undefined || typeof player.avatarUrl === 'string') &&
             isVec3Tuple(player.position) &&
             (player.target === undefined || isVec3Tuple(player.target))
         ))
