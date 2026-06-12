@@ -43,6 +43,7 @@ type MultiplayerOverlayPlayer = {
     position: [number, number, number];
     target?: [number, number, number];
     speaking?: boolean;
+    hidden?: boolean;
 };
 
 type MultiplayerHeightCalibration = {
@@ -1884,6 +1885,18 @@ class SemanticAnnotationOverlay {
         for (const player of this.multiplayerPlayers) {
             const marker = this.multiplayerMarkers.get(player.id);
             if (!marker) {
+                continue;
+            }
+            if (player.hidden) {
+                marker.hidden = true;
+                const avatar = this.multiplayerAvatarInstances.get(player.id);
+                if (avatar) {
+                    avatar.entity.enabled = false;
+                    this.transitionMultiplayerAvatar(avatar, 'idle');
+                    avatar.smoothedPlanarSpeed = 0;
+                    avatar.lastPosition.set(player.position[0], player.position[1], player.position[2]);
+                    avatar.lastUpdateMs = nowMs;
+                }
                 continue;
             }
             const avatarUrl = this.multiplayerAvatarUrl(player);

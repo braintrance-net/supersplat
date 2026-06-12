@@ -101,6 +101,8 @@ const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
 const COLLISION_MESH_BLOCKING_ENABLED = false;
 const COLLISION_MESH_FIRST_PERSON_DISTANCE = 0.035;
 const COLLISION_MESH_THIRD_PERSON_DISTANCE = 2.2;
+const COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE = 0.45;
+const COLLISION_MESH_VIEW_DISTANCE_STEP = 0.52;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
@@ -1065,14 +1067,40 @@ class WalkTool {
         }
         event.preventDefault();
         event.stopPropagation();
-        const thirdPerson = event.deltaY > 0;
-        this.setEmbeddedViewDistance(thirdPerson ? COLLISION_MESH_THIRD_PERSON_DISTANCE : COLLISION_MESH_FIRST_PERSON_DISTANCE);
+        let pixelDeltaY = event.deltaY;
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+            pixelDeltaY *= 40;
+        } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+            pixelDeltaY *= 600;
+        }
+        if (pixelDeltaY === 0) {
+            return;
+        }
+
+        const currentDistance = this.embeddedViewDistance();
+        const direction = Math.sign(pixelDeltaY);
+        const magnitude = Math.min(3, Math.max(0.35, Math.abs(pixelDeltaY) / 80));
+        let nextDistance = currentDistance + direction * COLLISION_MESH_VIEW_DISTANCE_STEP * magnitude;
+        if (direction < 0 && nextDistance <= COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE) {
+            nextDistance = COLLISION_MESH_FIRST_PERSON_DISTANCE;
+        }
+        if (direction > 0 && currentDistance <= COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE) {
+            nextDistance = Math.max(nextDistance, COLLISION_MESH_THIRD_PERSON_DISTANCE);
+        }
+        this.setEmbeddedViewDistance(nextDistance);
+    }
+
+    private embeddedViewDistance() {
+        return this.camera.distance * this.camera.sceneRadius / this.camera.fovFactor;
     }
 
     private setEmbeddedViewDistance(worldDistance: number) {
         const camera = this.camera;
         const playerHead = this.playerHead(camera);
-        const nextDistance = Math.max(COLLISION_MESH_FIRST_PERSON_DISTANCE, worldDistance);
+        const nextDistance = Math.max(
+            COLLISION_MESH_FIRST_PERSON_DISTANCE,
+            Math.min(COLLISION_MESH_THIRD_PERSON_DISTANCE, worldDistance)
+        );
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
         const focalPoint = playerHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
         camera.setDistance(nextDistance / camera.sceneRadius * camera.fovFactor, 0);
