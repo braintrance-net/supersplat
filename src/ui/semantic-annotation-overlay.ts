@@ -134,9 +134,6 @@ const MULTIPLAYER_MIN_HEIGHT = 0.95;
 const MULTIPLAYER_MAX_HEIGHT = 2.35;
 const MULTIPLAYER_RAYCAST_MAX_SAMPLES = 260_000;
 const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
-// Use the meeting library VRM avatar only; if it fails, show the procedural
-// marker instead of falling back to the bundled Kenney avatar.
-const MULTIPLAYER_VRM_URL = 'https://arweave.net/gfVzs1oH_aPaHVxpQK86HT_rqzyrFPOUKUrDJ30yprs';
 const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
@@ -149,6 +146,8 @@ const MULTIPLAYER_VRM_MOUTH_MORPH_INDEX = 2;
 // Render VRM avatars at a consistent adult height regardless of the scene's
 // (often short) eye-to-floor calibration.
 const MULTIPLAYER_VRM_TARGET_HEIGHT = 1.7;
+const MULTIPLAYER_VRM_EYE_HEIGHT = 1.48;
+const MULTIPLAYER_AVATAR_LABEL_CLEARANCE = 0.24;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -490,7 +489,7 @@ class SemanticAnnotationOverlay {
 
     private multiplayerAvatarUrl(player?: MultiplayerOverlayPlayer) {
         const url = player?.avatarUrl?.trim();
-        return url || MULTIPLAYER_VRM_URL;
+        return url || undefined;
     }
 
     private multiplayerAvatarIsVrmUrl(_url: string) {
@@ -502,9 +501,10 @@ class SemanticAnnotationOverlay {
         player?: MultiplayerOverlayPlayer,
         avatar: MultiplayerAvatarInstance | null = null
     ) {
-        const expects3dAvatar = !this.multiplayerAvatarFailedUrls.has(this.multiplayerAvatarUrl(player));
+        const avatarUrl = this.multiplayerAvatarUrl(player);
+        const expects3dAvatar = Boolean(avatarUrl && !this.multiplayerAvatarFailedUrls.has(avatarUrl));
         marker.classList.toggle('has-3d-avatar', Boolean(avatar));
-        marker.classList.toggle('awaiting-3d-avatar', expects3dAvatar && !avatar);
+        marker.classList.toggle('awaiting-3d-avatar', false);
     }
 
     private setMultiplayerPlayers(players?: MultiplayerOverlayPlayer[]) {
@@ -683,7 +683,10 @@ class SemanticAnnotationOverlay {
         this.loadMultiplayerAvatarAsset(this.multiplayerAvatarUrl(player), details.reason ?? 'preload', details);
     }
 
-    private loadMultiplayerAvatarAsset(url = MULTIPLAYER_VRM_URL, reason = 'update', details: Record<string, unknown> = {}) {
+    private loadMultiplayerAvatarAsset(url?: string, reason = 'update', details: Record<string, unknown> = {}) {
+        if (!url) {
+            return;
+        }
         if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url) || this.multiplayerAvatarFailedUrls.has(url)) {
             return;
         }
@@ -914,6 +917,12 @@ class SemanticAnnotationOverlay {
     private ensureMultiplayerAvatar(player: MultiplayerOverlayPlayer) {
         const avatarUrl = this.multiplayerAvatarUrl(player);
         const existing = this.multiplayerAvatarInstances.get(player.id);
+        if (!avatarUrl) {
+            if (existing) {
+                this.destroyMultiplayerAvatar(player.id);
+            }
+            return null;
+        }
         if (existing) {
             if (existing.avatarUrl === avatarUrl) {
                 return existing;
@@ -999,7 +1008,8 @@ class SemanticAnnotationOverlay {
         nowMs: number
     ) {
         const feetX = player.position[0];
-        const feetY = player.position[1] - avatarWorldHeight;
+        const avatarEyeHeight = instance.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
+        const feetY = player.position[1] - avatarEyeHeight;
         const feetZ = player.position[2];
         const dx = feetX - instance.lastPosition.x;
         const dz = feetZ - instance.lastPosition.z;
@@ -1887,9 +1897,12 @@ class SemanticAnnotationOverlay {
             }
             this.updateMultiplayerMarkerAvatarState(marker, player, avatar);
 
-            this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
+            const renderedAvatarHeight = avatar?.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+            const avatarEyeHeight = avatar?.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
+            const avatarFeetY = player.position[1] - avatarEyeHeight;
+            this.multiplayerFeetWorld.set(player.position[0], avatarFeetY, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
-            this.multiplayerLabelWorld.set(player.position[0], player.position[1] + 0.22, player.position[2]);
+            this.multiplayerLabelWorld.set(player.position[0], avatarFeetY + renderedAvatarHeight + MULTIPLAYER_AVATAR_LABEL_CLEARANCE, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerLabelWorld, this.multiplayerLabelScreenPos);
 
             const headX = this.screenPos.x * clientWidth;
@@ -1904,10 +1917,9 @@ class SemanticAnnotationOverlay {
             const avatarSpan = hasProjectedFeet ? Math.max(150, Math.min(330, projectedHeight)) : fallbackSpan;
             const avatarHeight = avatarSpan / 0.87;
             const anchorY = hasProjectedFeet ? feetY : headY + avatarSpan;
-
             marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
             marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
-            marker.style.transform = avatar || !this.multiplayerAvatarFailedUrls.has(avatarUrl) ?
+            marker.style.transform = avatar ?
                 `translate(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px)` :
                 `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
