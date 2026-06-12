@@ -52,7 +52,11 @@ type MultiplayerHeightCalibration = {
 
 type MultiplayerAvatarAnimation = 'idle' | 'run';
 
-type MultiplayerMorph = { setWeight(index: number, weight: number): void };
+type MultiplayerMorph = {
+    getWeight?: (key: number | string) => number | undefined;
+    setWeight: (key: number | string, weight: number) => void;
+    _weightMap?: Map<string, number>;
+};
 
 type MultiplayerAvatarInstance = {
     avatarUrl: string;
@@ -65,7 +69,7 @@ type MultiplayerAvatarInstance = {
     phase: number;
     lastPosition: Vec3;
     lastUpdateMs: number;
-    morphInstances: MultiplayerMorph[];
+    mouthMorphKeys: Array<{ morph: MultiplayerMorph; keys: Array<number | string> }>;
     speaking: boolean;
 };
 
@@ -141,8 +145,13 @@ const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 72;
-// Morph-target index that opens the mouth on the library VRM avatars.
-const MULTIPLAYER_VRM_MOUTH_MORPH_INDEX = 2;
+const MULTIPLAYER_VRM_MOUTH_MORPH_NAMES = [
+    'A', 'I', 'U', 'E', 'O',
+    'aa', 'ih', 'ou', 'oh',
+    'vrc_v_aa', 'vrc_v_ih', 'vrc_v_oh', 'vrc_v_ou',
+    'mouthOpen', 'MouthOpen'
+];
+const MULTIPLAYER_VRM_MOUTH_MORPH_FALLBACK_INDICES = [0, 1, 2, 3, 4];
 // Render VRM avatars at a consistent adult height regardless of the scene's
 // (often short) eye-to-floor calibration.
 const MULTIPLAYER_VRM_TARGET_HEIGHT = 1.7;
@@ -343,9 +352,6 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerWorld = new Vec3();
     private readonly multiplayerLabelWorld = new Vec3();
     private readonly multiplayerLabelScreenPos = new Vec3();
-    private readonly multiplayerFeetWorld = new Vec3();
-    private readonly multiplayerFeetScreenPos = new Vec3();
-    private readonly multiplayerDelta = new Vec3();
     private readonly multiplayerTargetWorld = new Vec3();
     private readonly multiplayerTargetScreenPos = new Vec3();
     private readonly captureViewMatrix = new Mat4();
@@ -501,8 +507,6 @@ class SemanticAnnotationOverlay {
         player?: MultiplayerOverlayPlayer,
         avatar: MultiplayerAvatarInstance | null = null
     ) {
-        const avatarUrl = this.multiplayerAvatarUrl(player);
-        const expects3dAvatar = Boolean(avatarUrl && !this.multiplayerAvatarFailedUrls.has(avatarUrl));
         marker.classList.toggle('has-3d-avatar', Boolean(avatar));
         marker.classList.toggle('awaiting-3d-avatar', false);
     }
@@ -669,10 +673,12 @@ class SemanticAnnotationOverlay {
             if (avatar.usesProceduralRig) {
                 this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
             }
-            if (avatar.morphInstances.length) {
+            if (avatar.mouthMorphKeys.length) {
                 const mouth = avatar.speaking ? 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(nowMs * 0.025 + avatar.phase)) : 0;
-                for (const morph of avatar.morphInstances) {
-                    morph.setWeight(MULTIPLAYER_VRM_MOUTH_MORPH_INDEX, mouth);
+                for (const mouthMorph of avatar.mouthMorphKeys) {
+                    for (const key of mouthMorph.keys) {
+                        mouthMorph.morph.setWeight(key, mouth);
+                    }
                 }
             }
         }
@@ -742,6 +748,21 @@ class SemanticAnnotationOverlay {
         }
         avatar.entity.destroy();
         this.multiplayerAvatarInstances.delete(id);
+    }
+
+    private resolveMultiplayerMouthMorphKeys(morph: MultiplayerMorph) {
+        const namedKeys = MULTIPLAYER_VRM_MOUTH_MORPH_NAMES.filter(name => morph._weightMap?.has(name));
+        if (namedKeys.length) {
+            return namedKeys.slice(0, 1);
+        }
+
+        const numericKeys = MULTIPLAYER_VRM_MOUTH_MORPH_FALLBACK_INDICES.filter((index) => {
+            if (!morph.getWeight) {
+                return true;
+            }
+            return typeof morph.getWeight(index) === 'number';
+        });
+        return numericKeys.slice(0, 1);
     }
 
     private setMultiplayerAvatarLayers(entity: Entity) {
@@ -950,11 +971,14 @@ class SemanticAnnotationOverlay {
         this.scene.contentRoot.addChild(entity);
 
         const rig = this.createMultiplayerAvatarRig(entity);
-        const morphInstances: MultiplayerMorph[] = [];
+        const mouthMorphKeys: MultiplayerAvatarInstance['mouthMorphKeys'] = [];
         entity.findComponents('render').forEach((component) => {
             ((component as { meshInstances?: { morphInstance?: MultiplayerMorph }[] }).meshInstances ?? []).forEach((meshInstance) => {
                 if (meshInstance.morphInstance) {
-                    morphInstances.push(meshInstance.morphInstance);
+                    const keys = this.resolveMultiplayerMouthMorphKeys(meshInstance.morphInstance);
+                    if (keys.length) {
+                        mouthMorphKeys.push({ morph: meshInstance.morphInstance, keys });
+                    }
                 }
             });
         });
@@ -969,7 +993,7 @@ class SemanticAnnotationOverlay {
             phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
             lastUpdateMs: performance.now(),
-            morphInstances,
+            mouthMorphKeys,
             speaking: false
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
@@ -1852,10 +1876,10 @@ class SemanticAnnotationOverlay {
             });
         }
 
-        this.updateMultiplayerPlayers(clientWidth, clientHeight, cameraPosition);
+        this.updateMultiplayerPlayers(clientWidth, clientHeight);
     }
 
-    private updateMultiplayerPlayers(clientWidth: number, clientHeight: number, cameraPosition: Vec3) {
+    private updateMultiplayerPlayers(clientWidth: number, clientHeight: number) {
         const nowMs = performance.now();
         for (const player of this.multiplayerPlayers) {
             const marker = this.multiplayerMarkers.get(player.id);
@@ -1896,32 +1920,20 @@ class SemanticAnnotationOverlay {
                 this.updateMultiplayerAvatar(player, avatar, avatarWorldHeight, nowMs);
             }
             this.updateMultiplayerMarkerAvatarState(marker, player, avatar);
+            marker.hidden = !avatar;
+            if (!avatar) {
+                continue;
+            }
 
-            const renderedAvatarHeight = avatar?.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
-            const avatarEyeHeight = avatar?.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
+            const renderedAvatarHeight = avatar.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+            const avatarEyeHeight = avatar.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
             const avatarFeetY = player.position[1] - avatarEyeHeight;
-            this.multiplayerFeetWorld.set(player.position[0], avatarFeetY, player.position[2]);
-            this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
             this.multiplayerLabelWorld.set(player.position[0], avatarFeetY + renderedAvatarHeight + MULTIPLAYER_AVATAR_LABEL_CLEARANCE, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerLabelWorld, this.multiplayerLabelScreenPos);
 
-            const headX = this.screenPos.x * clientWidth;
-            const headY = this.screenPos.y * clientHeight;
             const labelX = this.multiplayerLabelScreenPos.x * clientWidth;
             const labelY = this.multiplayerLabelScreenPos.y * clientHeight;
-            const feetY = this.multiplayerFeetScreenPos.y * clientHeight;
-            const projectedHeight = Math.abs(feetY - headY);
-            const distance = Math.max(0.1, this.multiplayerDelta.sub2(this.multiplayerWorld, cameraPosition).length());
-            const fallbackSpan = Math.max(150, Math.min(270, 310 / Math.sqrt(distance)));
-            const hasProjectedFeet = Number.isFinite(projectedHeight) && projectedHeight >= 48;
-            const avatarSpan = hasProjectedFeet ? Math.max(150, Math.min(330, projectedHeight)) : fallbackSpan;
-            const avatarHeight = avatarSpan / 0.87;
-            const anchorY = hasProjectedFeet ? feetY : headY + avatarSpan;
-            marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
-            marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
-            marker.style.transform = avatar ?
-                `translate(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px)` :
-                `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
+            marker.style.transform = `translate(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
 
             if (player.target) {

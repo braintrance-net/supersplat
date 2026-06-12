@@ -10,6 +10,18 @@ const forwardVec = new Vec3();
 
 // calculate the distance between two 2d points
 const dist = (x0: number, y0: number, x1: number, y1: number) => Math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2);
+const tryPointerCapture = (target: HTMLElement, pointerId: number, capture: boolean) => {
+    try {
+        if (capture) {
+            target.setPointerCapture(pointerId);
+        } else if (target.hasPointerCapture(pointerId)) {
+            target.releasePointerCapture(pointerId);
+        }
+    } catch {
+        // Embedded frames can invalidate pointer capture before the controller
+        // receives its matching pointerup. Treat that as an input no-op.
+    }
+};
 
 class PointerController {
     update: (deltaTime: number) => void;
@@ -82,13 +94,13 @@ class PointerController {
                 if (pressedButton !== -1) {
                     return;
                 }
-                target.setPointerCapture(event.pointerId);
+                tryPointerCapture(target, event.pointerId, true);
                 pressedButton = event.button;
                 x = event.offsetX;
                 y = event.offsetY;
             } else if (event.pointerType === 'touch') {
                 if (touches.length === 0) {
-                    target.setPointerCapture(event.pointerId);
+                    tryPointerCapture(target, event.pointerId, true);
                 }
                 touches.push({
                     x: event.offsetX,
@@ -109,12 +121,12 @@ class PointerController {
                 // Only release if this is the button that was initially pressed
                 if (event.button === pressedButton) {
                     pressedButton = -1;
-                    target.releasePointerCapture(event.pointerId);
+                    tryPointerCapture(target, event.pointerId, false);
                 }
             } else {
                 touches = touches.filter(touch => touch.id !== event.pointerId);
                 if (touches.length === 0) {
-                    target.releasePointerCapture(event.pointerId);
+                    tryPointerCapture(target, event.pointerId, false);
                 }
             }
         };

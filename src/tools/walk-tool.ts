@@ -894,10 +894,10 @@ class WalkTool {
         this.active = true;
         if (!this.embeddedControls) {
             this.createOverlay();
+            this.createHeightControls();
         } else {
             this.createEmbeddedKeyboardControls();
         }
-        this.createHeightControls();
         this.ensureUpdateLoop();
     }
 
@@ -993,6 +993,7 @@ class WalkTool {
                 document.exitPointerLock();
             }
             this.destroyOverlay();
+            this.destroyHeightControls();
             this.createEmbeddedKeyboardControls();
             return;
         }
@@ -1000,6 +1001,7 @@ class WalkTool {
         this.destroyEmbeddedKeyboardControls();
         if (this.active) {
             this.createOverlay();
+            this.createHeightControls();
         }
     }
 
