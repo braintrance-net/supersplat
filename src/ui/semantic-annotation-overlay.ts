@@ -80,6 +80,8 @@ type MultiplayerAvatarRigBone = {
 };
 
 type MultiplayerAvatarRig = {
+    leftShoulder?: MultiplayerAvatarRigBone;
+    rightShoulder?: MultiplayerAvatarRigBone;
     leftArm?: MultiplayerAvatarRigBone;
     rightArm?: MultiplayerAvatarRigBone;
     leftLeg?: MultiplayerAvatarRigBone;
@@ -145,11 +147,12 @@ const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
 const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
-const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 72;
+const MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES = 12;
+const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 88;
 const MULTIPLAYER_VRM_MOUTH_MORPH_NAMES = [
     'A', 'I', 'U', 'E', 'O',
     'aa', 'ih', 'ou', 'oh',
-    'vrc_v_aa', 'vrc_v_ih', 'vrc_v_oh', 'vrc_v_ou',
+    'vrc_v_aa', 'vrc_v_ee', 'vrc_v_ih', 'vrc_v_oh', 'vrc_v_ou',
     'mouthOpen', 'MouthOpen'
 ];
 const MULTIPLAYER_VRM_MOUTH_MORPH_FALLBACK_INDICES = [0, 1, 2, 3, 4];
@@ -752,7 +755,11 @@ class SemanticAnnotationOverlay {
     }
 
     private resolveMultiplayerMouthMorphKeys(morph: MultiplayerMorph) {
-        const namedKeys = MULTIPLAYER_VRM_MOUTH_MORPH_NAMES.filter(name => morph._weightMap?.has(name));
+        const weightKeys = [...(morph._weightMap?.keys() ?? [])];
+        const namedKeys = MULTIPLAYER_VRM_MOUTH_MORPH_NAMES.flatMap((name) => {
+            const key = weightKeys.find(candidate => candidate === name || candidate.endsWith(`.${name}`));
+            return key ? [key] : [];
+        });
         if (namedKeys.length) {
             return namedKeys.slice(0, 1);
         }
@@ -868,6 +875,8 @@ class SemanticAnnotationOverlay {
 
     private createMultiplayerAvatarRig(entity: Entity): MultiplayerAvatarRig {
         return {
+            leftShoulder: this.multiplayerRigBone(entity, 'LeftShoulder'),
+            rightShoulder: this.multiplayerRigBone(entity, 'RightShoulder'),
             leftArm: this.multiplayerRigBone(entity, 'LeftArm'),
             rightArm: this.multiplayerRigBone(entity, 'RightArm'),
             leftLeg: this.multiplayerRigBone(entity, 'LeftUpLeg'),
@@ -883,6 +892,8 @@ class SemanticAnnotationOverlay {
         }
 
         return {
+            leftShoulder: rig.leftShoulder?.entity.name ?? null,
+            rightShoulder: rig.rightShoulder?.entity.name ?? null,
             leftArm: rig.leftArm?.entity.name ?? null,
             rightArm: rig.rightArm?.entity.name ?? null,
             leftLeg: rig.leftLeg?.entity.name ?? null,
@@ -917,9 +928,12 @@ class SemanticAnnotationOverlay {
 
         // Mixamo VRM avatars rest in a T-pose; rotate the upper arms down to the
         // sides so they don't stick straight out (Kenney already rests arms-down).
+        const shoulderDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES : 0;
         const armDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_ARM_DOWN_DEGREES : 0;
 
         if (running) {
+            this.setMultiplayerRigBone(rig.leftShoulder, 0, 0, shoulderDown);
+            this.setMultiplayerRigBone(rig.rightShoulder, 0, 0, -shoulderDown);
             this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5 + armDown);
             this.setMultiplayerRigBone(rig.rightArm, counterStride * 28, 0, -5 - armDown);
             this.setMultiplayerRigBone(rig.leftLeg, counterStride * 30, 0, 2);
@@ -927,6 +941,8 @@ class SemanticAnnotationOverlay {
             this.setMultiplayerRigBone(rig.spine, lift * 2, 0, stride * 5);
             this.setMultiplayerRigBone(rig.head, lift * 1.2, stride * 4, 0);
         } else {
+            this.setMultiplayerRigBone(rig.leftShoulder, 0, 0, shoulderDown);
+            this.setMultiplayerRigBone(rig.rightShoulder, 0, 0, -shoulderDown);
             this.setMultiplayerRigBone(rig.leftArm, 3 + stride * 3, 0, 2 + armDown);
             this.setMultiplayerRigBone(rig.rightArm, 3 + counterStride * 3, 0, -2 - armDown);
             this.setMultiplayerRigBone(rig.leftLeg);
@@ -998,6 +1014,9 @@ class SemanticAnnotationOverlay {
             speaking: false
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
+        if (instance.usesProceduralRig) {
+            this.animateMultiplayerAvatarRig(instance, 0);
+        }
         this.emitDiagnostic('multiplayer-avatar-rig-ready', {
             playerId: player.id,
             avatarId: player.avatarId ?? null,
