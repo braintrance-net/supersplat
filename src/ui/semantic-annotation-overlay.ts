@@ -859,10 +859,33 @@ class SemanticAnnotationOverlay {
         };
     }
 
+    private findMultiplayerRigBoneEntity(entity: Entity, name: string): Entity | null {
+        const mixamoName = `mixamorig:${name}`;
+        const exact = (entity.findByName(name) ?? entity.findByName(mixamoName)) as Entity | null;
+        if (exact) {
+            return exact;
+        }
+
+        const matches = (candidate: string) => (
+            candidate.endsWith(`:${name}`) ||
+            candidate.endsWith(`:${mixamoName}`)
+        );
+        const stack = [entity];
+        while (stack.length) {
+            const current = stack.pop();
+            if (!current) {
+                continue;
+            }
+            if (matches(current.name)) {
+                return current;
+            }
+            stack.push(...current.children as Entity[]);
+        }
+        return null;
+    }
+
     private multiplayerRigBone(entity: Entity, name: string): MultiplayerAvatarRigBone | undefined {
-        // Library VRM/GLB avatars use Mixamo bone names (mixamorig:LeftArm, ...);
-        // the Kenney avatar uses bare names. Try both so the rig binds either way.
-        const bone = (entity.findByName(name) ?? entity.findByName(`mixamorig:${name}`)) as Entity | null;
+        const bone = this.findMultiplayerRigBoneEntity(entity, name);
         if (!bone) {
             return undefined;
         }
