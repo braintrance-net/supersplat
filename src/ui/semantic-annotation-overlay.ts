@@ -502,8 +502,19 @@ class SemanticAnnotationOverlay {
         return url || undefined;
     }
 
-    private multiplayerAvatarIsVrmUrl(_url: string) {
-        return true;
+    private multiplayerAvatarUsesMeetingVrmProfile(
+        player: MultiplayerOverlayPlayer,
+        mouthMorphKeys: MultiplayerAvatarInstance['mouthMorphKeys']
+    ) {
+        return Boolean(player.avatarId && mouthMorphKeys.length);
+    }
+
+    private multiplayerAvatarRenderedHeight(instance: MultiplayerAvatarInstance, avatarWorldHeight: number) {
+        return instance.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+    }
+
+    private multiplayerAvatarEyeHeight(instance: MultiplayerAvatarInstance, avatarWorldHeight: number) {
+        return instance.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
     }
 
     private updateMultiplayerMarkerAvatarState(
@@ -1024,7 +1035,7 @@ class SemanticAnnotationOverlay {
         });
         const instance = {
             avatarUrl,
-            avatarIsVrm: this.multiplayerAvatarIsVrmUrl(avatarUrl),
+            avatarIsVrm: this.multiplayerAvatarUsesMeetingVrmProfile(player, mouthMorphKeys),
             entity,
             rig,
             usesProceduralRig: !animationSetup.nativeAnimation,
@@ -1075,7 +1086,7 @@ class SemanticAnnotationOverlay {
         nowMs: number
     ) {
         const feetX = player.position[0];
-        const avatarEyeHeight = instance.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
+        const avatarEyeHeight = this.multiplayerAvatarEyeHeight(instance, avatarWorldHeight);
         const feetY = player.position[1] - avatarEyeHeight;
         const feetZ = player.position[2];
         const dx = feetX - instance.lastPosition.x;
@@ -1106,7 +1117,7 @@ class SemanticAnnotationOverlay {
         // never render child-sized when a scene's eye-to-floor height is short;
         // feet still sit on the detected ground (feetY above).
         const sourceHeight = instance.avatarIsVrm ? 1.6 : MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
-        const targetHeight = instance.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+        const targetHeight = this.multiplayerAvatarRenderedHeight(instance, avatarWorldHeight);
         const scale = targetHeight / sourceHeight;
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
@@ -1980,8 +1991,8 @@ class SemanticAnnotationOverlay {
                 continue;
             }
 
-            const renderedAvatarHeight = avatar.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
-            const avatarEyeHeight = avatar.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
+            const renderedAvatarHeight = this.multiplayerAvatarRenderedHeight(avatar, avatarWorldHeight);
+            const avatarEyeHeight = this.multiplayerAvatarEyeHeight(avatar, avatarWorldHeight);
             const avatarFeetY = player.position[1] - avatarEyeHeight;
             this.multiplayerLabelWorld.set(player.position[0], avatarFeetY + renderedAvatarHeight + MULTIPLAYER_AVATAR_LABEL_CLEARANCE, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerLabelWorld, this.multiplayerLabelScreenPos);

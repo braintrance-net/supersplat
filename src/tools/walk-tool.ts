@@ -1096,19 +1096,22 @@ class WalkTool {
 
     private setEmbeddedViewDistance(worldDistance: number) {
         const camera = this.camera;
-        const playerHead = this.playerHead(camera);
+        const playerAnchor = camera.focalPoint.clone();
+        const currentHead = this.playerHead(camera);
         const nextDistance = Math.max(
             COLLISION_MESH_FIRST_PERSON_DISTANCE,
             Math.min(COLLISION_MESH_THIRD_PERSON_DISTANCE, worldDistance)
         );
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
         const focalPoint = nextDistance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
-            playerHead :
-            playerHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
+            playerAnchor :
+            currentHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
         camera.setDistance(nextDistance / camera.sceneRadius * camera.fovFactor, 0);
         camera.setFocalPoint(focalPoint, 0);
         if (this.collisionMeshHeadY !== null) {
-            this.collisionMeshHeadY = playerHead.y;
+            this.collisionMeshHeadY = nextDistance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
+                focalPoint.y :
+                currentHead.y;
         }
         this.scene.forceRender = true;
     }

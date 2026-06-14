@@ -281,7 +281,7 @@ interface ScreenSurfaceMessage {
 interface ScreenFrameMessage {
     type: typeof SCREEN_FRAME;
     bitmap?: ImageBitmap;
-    data?: ArrayBuffer;
+    data?: ArrayBuffer | ArrayBufferView;
     mimeType?: string;
 }
 
@@ -517,7 +517,8 @@ const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessa
             (player.avatarName === undefined || typeof player.avatarName === 'string') &&
             (player.avatarUrl === undefined || typeof player.avatarUrl === 'string') &&
             isVec3Tuple(player.position) &&
-            (player.target === undefined || isVec3Tuple(player.target))
+            (player.target === undefined || isVec3Tuple(player.target)) &&
+            (player.speaking === undefined || typeof player.speaking === 'boolean')
         ))
     );
 };
@@ -551,9 +552,20 @@ const isScreenFrameMessage = (data: any): data is ScreenFrameMessage => (
     data.type === SCREEN_FRAME &&
     (
         (typeof ImageBitmap !== 'undefined' && data.bitmap instanceof ImageBitmap) ||
-        data.data instanceof ArrayBuffer
+        data.data instanceof ArrayBuffer ||
+        ArrayBuffer.isView(data.data)
     )
 );
+
+const screenFrameBlobPart = (data: ArrayBuffer | ArrayBufferView): BlobPart => {
+    if (data instanceof ArrayBuffer) {
+        return data;
+    }
+
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    return copy;
+};
 
 const isScreenClearMessage = (data: any): data is ScreenClearMessage => (
     data && typeof data === 'object' && data.type === SCREEN_CLEAR
@@ -850,6 +862,7 @@ const registerIframeApi = (events: Events) => {
     let pendingPointerLookFrame: number | null = null;
     let pendingPointerLookSource: Window | null = null;
     let pendingPointerLookOrigin = '*';
+    let latestScreenFrameId = 0;
     let perfFrameCount = 0;
     let perfTotalGapMs = 0;
     let perfMaxGapMs = 0;
@@ -1464,13 +1477,18 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isScreenFrameMessage(event.data)) {
+            const frameId = ++latestScreenFrameId;
             if (event.data.bitmap) {
                 events.fire('screen.frame', event.data.bitmap);
             } else if (event.data.data) {
                 try {
-                    const blob = new Blob([event.data.data], { type: event.data.mimeType || 'image/jpeg' });
+                    const blob = new Blob([screenFrameBlobPart(event.data.data)], { type: event.data.mimeType || 'image/jpeg' });
                     const bitmap = await createImageBitmap(blob);
-                    events.fire('screen.frame', bitmap);
+                    if (frameId === latestScreenFrameId) {
+                        events.fire('screen.frame', bitmap);
+                    } else {
+                        bitmap.close?.();
+                    }
                 } catch (error) {
                     postDiagnostic(source, event.origin, 'screen-frame-decode-failed', {
                         error: error instanceof Error ? error.message : 'screen frame decode failed'
@@ -1481,6 +1499,7 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isScreenClearMessage(event.data)) {
+            latestScreenFrameId += 1;
             events.fire('screen.clear');
             return;
         }

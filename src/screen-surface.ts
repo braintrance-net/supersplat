@@ -119,6 +119,11 @@ class ScreenSurface extends Element {
     // wrong-sized texture causes a texSubImage size-mismatch and an empty plane.
     private ensureTexture(width: number, height: number) {
         if (this.texture && this.texture.width === width && this.texture.height === height) {
+            if (this.material.emissiveMap !== this.texture) {
+                this.material.emissive = new Color(1, 1, 1);
+                this.material.emissiveMap = this.texture;
+                this.material.update();
+            }
             return;
         }
 
