@@ -46,6 +46,7 @@ const SCREEN_CLEAR = 'supersplat:screen-clear';
 const RAYCAST = 'supersplat:raycast';
 const RAYCAST_RESULT = 'supersplat:raycast-result';
 const RENDER_WARMUP = 'supersplat:render-warmup';
+const ROOM_WARMUP_MODE = 'supersplat:room-warmup-mode';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 const COLLISION_DEBUG_BUNDLE_GET = 'supersplat:collision-debug-bundle-get';
 const COLLISION_DEBUG_BUNDLE = 'supersplat:collision-debug-bundle';
@@ -255,6 +256,11 @@ interface CrosshairClickMessage {
 interface RenderWarmupMessage {
     type: typeof RENDER_WARMUP;
     frames?: number;
+}
+
+interface RoomWarmupModeMessage {
+    type: typeof ROOM_WARMUP_MODE;
+    background: boolean;
 }
 
 interface ViewerPerfResetMessage {
@@ -491,6 +497,10 @@ const isCrosshairClickMessage = (data: any): data is CrosshairClickMessage => {
 
 const isRenderWarmupMessage = (data: any): data is RenderWarmupMessage => {
     return data && typeof data === 'object' && data.type === RENDER_WARMUP && (data.frames === undefined || typeof data.frames === 'number');
+};
+
+const isRoomWarmupModeMessage = (data: any): data is RoomWarmupModeMessage => {
+    return data && typeof data === 'object' && data.type === ROOM_WARMUP_MODE && typeof data.background === 'boolean';
 };
 
 const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => {
@@ -846,6 +856,8 @@ const LONG_TASK_REPORT_MS = 5000;
 const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
 const GAME_MODE_ACTIVE_RENDER_IDLE_MS = 320;
+const ROOM_WARMUP_BACKGROUND_PIXEL_SCALE = 2;
+const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
 
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -888,6 +900,9 @@ const registerIframeApi = (events: Events) => {
     let activeRenderFrame: number | null = null;
     let activeRenderUntil = 0;
     let activeRenderWalkHeld = false;
+    let roomWarmupBackground = false;
+    let roomWarmupPreviousPixelScale: number | null = null;
+    let roomWarmupPreviousMaxPixelRatio: number | null = null;
     let activeRenderTickCount = 0;
     let activeRenderTotalGapMs = 0;
     let activeRenderMaxGapMs = 0;
@@ -932,7 +947,7 @@ const registerIframeApi = (events: Events) => {
 
     const startRenderWarmup = (frames?: number) => {
         const scene = window.scene as any;
-        if (!scene) {
+        if (!scene || roomWarmupBackground) {
             return;
         }
 
@@ -1009,7 +1024,7 @@ const registerIframeApi = (events: Events) => {
     };
 
     const scheduleActiveRender = (leaseMs = GAME_MODE_ACTIVE_RENDER_IDLE_MS) => {
-        if (!gameModeActive) {
+        if (!gameModeActive || roomWarmupBackground) {
             return;
         }
 
@@ -1039,6 +1054,76 @@ const registerIframeApi = (events: Events) => {
             activeRenderFrame = window.requestAnimationFrame(tick);
         };
         tick();
+    };
+
+    const resetPointerLookState = () => {
+        pointerLookStats = emptyPointerLookStats();
+        pendingPointerLookDx = 0;
+        pendingPointerLookDy = 0;
+        pendingPointerLookSource = null;
+        pendingPointerLookOrigin = '*';
+        if (pendingPointerLookFrame !== null) {
+            window.cancelAnimationFrame(pendingPointerLookFrame);
+            pendingPointerLookFrame = null;
+        }
+    };
+
+    const applyRoomWarmupMode = (background: boolean, source?: Window | null, origin = '*') => {
+        if (roomWarmupBackground === background) {
+            return;
+        }
+
+        roomWarmupBackground = background;
+        const scene = window.scene as any;
+        const graphicsDevice = scene?.app?.graphicsDevice;
+
+        if (background) {
+            if (renderWarmupFrame !== null) {
+                window.cancelAnimationFrame(renderWarmupFrame);
+                renderWarmupFrame = null;
+            }
+            stopActiveRender();
+            resetPointerLookState();
+        }
+
+        if (scene?.config?.camera) {
+            if (background) {
+                const previousPixelScale = roomWarmupPreviousPixelScale ?? scene.config.camera.pixelScale;
+                roomWarmupPreviousPixelScale = previousPixelScale;
+                scene.config.camera.pixelScale = Math.max(previousPixelScale, ROOM_WARMUP_BACKGROUND_PIXEL_SCALE);
+            } else if (roomWarmupPreviousPixelScale !== null) {
+                scene.config.camera.pixelScale = roomWarmupPreviousPixelScale;
+                roomWarmupPreviousPixelScale = null;
+            }
+        }
+
+        if (graphicsDevice) {
+            if (background) {
+                const previousMaxPixelRatio = roomWarmupPreviousMaxPixelRatio ?? graphicsDevice.maxPixelRatio;
+                roomWarmupPreviousMaxPixelRatio = previousMaxPixelRatio;
+                graphicsDevice.maxPixelRatio = Math.min(previousMaxPixelRatio, ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO);
+            } else if (roomWarmupPreviousMaxPixelRatio !== null) {
+                graphicsDevice.maxPixelRatio = roomWarmupPreviousMaxPixelRatio;
+                roomWarmupPreviousMaxPixelRatio = null;
+            }
+        }
+
+        if (scene) {
+            scene.forceRender = true;
+        }
+
+        events.fire('walk.warmupBackground', background);
+
+        if (!background) {
+            startRenderWarmup(8);
+            scheduleActiveRender(1200);
+        }
+
+        postDiagnostic(source ?? window.parent, origin, 'room-warmup-mode', {
+            background,
+            pixelScale: scene?.config?.camera?.pixelScale ?? null,
+            maxPixelRatio: graphicsDevice?.maxPixelRatio ?? null
+        });
     };
 
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
@@ -1088,18 +1173,6 @@ const registerIframeApi = (events: Events) => {
         window.setInterval(() => flushLongTasks('interval'), LONG_TASK_REPORT_MS);
     }
 
-    const resetPointerLookState = () => {
-        pointerLookStats = emptyPointerLookStats();
-        pendingPointerLookDx = 0;
-        pendingPointerLookDy = 0;
-        pendingPointerLookSource = null;
-        pendingPointerLookOrigin = '*';
-        if (pendingPointerLookFrame !== null) {
-            window.cancelAnimationFrame(pendingPointerLookFrame);
-            pendingPointerLookFrame = null;
-        }
-    };
-
     const tickRafPerf = () => {
         const now = performance.now();
         if (rafLastFrameAt !== null) {
@@ -1115,6 +1188,10 @@ const registerIframeApi = (events: Events) => {
         }
         rafLastFrameAt = now;
         rafFrameCount += 1;
+        if (roomWarmupBackground) {
+            window.setTimeout(() => window.requestAnimationFrame(tickRafPerf), 750);
+            return;
+        }
         window.requestAnimationFrame(tickRafPerf);
     };
     window.requestAnimationFrame(tickRafPerf);
@@ -1181,7 +1258,7 @@ const registerIframeApi = (events: Events) => {
         const dy = pendingPointerLookDy;
         pendingPointerLookDx = 0;
         pendingPointerLookDy = 0;
-        if (dx === 0 && dy === 0) {
+        if (roomWarmupBackground || (dx === 0 && dy === 0)) {
             return;
         }
 
@@ -1452,7 +1529,8 @@ const registerIframeApi = (events: Events) => {
                     screenFrameBytes: true,
                     raycast: true,
                     collisionDebugBundle: true,
-                    version: 7
+                    roomWarmupMode: true,
+                    version: 8
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1511,6 +1589,11 @@ const registerIframeApi = (events: Events) => {
             return;
         }
 
+        if (isRoomWarmupModeMessage(event.data)) {
+            applyRoomWarmupMode(event.data.background, source, event.origin);
+            return;
+        }
+
         if (isCaptureThumbnailQuery(event.data)) {
             const width = event.data.width ?? 1200;
             const height = event.data.height ?? 1440;
@@ -1551,6 +1634,10 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isPointerLookMessage(event.data)) {
+            if (roomWarmupBackground) {
+                resetPointerLookState();
+                return;
+            }
             const receivedAt = performance.now();
             if (pointerLookStats.lastAt !== null) {
                 const gapMs = receivedAt - pointerLookStats.lastAt;
@@ -1581,6 +1668,11 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isWalkInputMessage(event.data)) {
+            if (roomWarmupBackground) {
+                activeRenderWalkHeld = false;
+                events.fire('walk.input', {});
+                return;
+            }
             activeRenderWalkHeld = hasWalkInput(event.data.keys);
             events.fire('walk.input', event.data.keys);
             scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);

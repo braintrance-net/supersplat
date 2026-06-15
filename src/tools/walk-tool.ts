@@ -715,6 +715,7 @@ class WalkTool {
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
     private embeddedControls = false;
+    private warmupBackground = false;
     private lastArrowPositionAt = 0;
     private collisionMesh: WalkCollisionMesh | null = null;
     private collisionMeshUrl: string | null = null;
@@ -757,6 +758,7 @@ class WalkTool {
         this.events.on('walk.pointerLook', this.onExternalPointerLook, this);
         this.events.on('walk.input', this.onExternalWalkInput, this);
         this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
+        this.events.on('walk.warmupBackground', this.onWarmupBackground, this);
         this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
         this.events.on('walk.collisionMeshClear', this.clearCollisionMesh, this);
         this.events.on('walk.saveFloorHeight', this.saveCollisionMeshFloorHeight, this);
@@ -1007,6 +1009,28 @@ class WalkTool {
         }
     }
 
+    private onWarmupBackground(enabled = false) {
+        this.warmupBackground = Boolean(enabled);
+        if (!this.warmupBackground) {
+            if (this.active || this.hasExternalWalkInput()) {
+                this.ensureUpdateLoop();
+            }
+            this.scene.forceRender = true;
+            return;
+        }
+
+        this.externalWalkInput = {};
+        this.embeddedKeyboardInput = {};
+        this.externalVerticalVelocity = 0;
+        this.externalJumpWasPressed = false;
+        this.clearNativeFlyInput();
+
+        if (this.animFrame !== null) {
+            cancelAnimationFrame(this.animFrame);
+            this.animFrame = null;
+        }
+    }
+
     private createEmbeddedKeyboardControls() {
         if (this.onEmbeddedKeyDownBound || this.onEmbeddedKeyUpBound) {
             return;
@@ -1062,7 +1086,7 @@ class WalkTool {
     }
 
     private onEmbeddedWheel(event: WheelEvent) {
-        if (!this.embeddedControls || !this.active) {
+        if (!this.embeddedControls || !this.active || this.warmupBackground) {
             return;
         }
         event.preventDefault();
@@ -1136,7 +1160,7 @@ class WalkTool {
     }
 
     private onEmbeddedKey(event: KeyboardEvent, pressed: boolean) {
-        if (!this.embeddedControls || !this.active) {
+        if (!this.embeddedControls || !this.active || this.warmupBackground) {
             return;
         }
         if (pressed && this.isTypingTarget(event.target)) {
@@ -1309,7 +1333,7 @@ class WalkTool {
     }
 
     private onPointerLockMouseMove(event: MouseEvent) {
-        if (!this.active || document.pointerLockElement !== this.container) {
+        if (!this.active || this.warmupBackground || document.pointerLockElement !== this.container) {
             return;
         }
 
@@ -1324,11 +1348,22 @@ class WalkTool {
     }
 
     private onExternalPointerLook(dx = 0, dy = 0) {
+        if (this.warmupBackground) {
+            return;
+        }
         this.lastLookAt = performance.now();
         this.look(Math.max(-200, Math.min(200, dx)), Math.max(-200, Math.min(200, dy)));
     }
 
     private onExternalWalkInput(input: WalkInputState = {}) {
+        if (this.warmupBackground) {
+            this.externalWalkInput = {};
+            this.externalVerticalVelocity = 0;
+            this.externalJumpWasPressed = false;
+            this.clearNativeFlyInput();
+            return;
+        }
+
         this.externalWalkInput = {
             forward: Boolean(input.forward),
             backward: Boolean(input.backward),
@@ -1374,6 +1409,10 @@ class WalkTool {
     }
 
     private ensureUpdateLoop() {
+        if (this.warmupBackground) {
+            return;
+        }
+
         if (this.animFrame === null) {
             this.lastExternalMoveAt = performance.now();
             this.animFrame = requestAnimationFrame(() => this.updateLoop());
@@ -2429,6 +2468,11 @@ class WalkTool {
     }
 
     private updateLoop() {
+        if (this.warmupBackground) {
+            this.animFrame = null;
+            return;
+        }
+
         if (!this.active && !this.hasExternalWalkInput()) {
             this.animFrame = null;
             return;
