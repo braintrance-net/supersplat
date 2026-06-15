@@ -945,9 +945,9 @@ const registerIframeApi = (events: Events) => {
         resetLongTaskStats();
     };
 
-    const startRenderWarmup = (frames?: number) => {
+    const startRenderWarmup = (frames?: number, options: { allowBackground?: boolean } = {}) => {
         const scene = window.scene as any;
-        if (!scene || roomWarmupBackground) {
+        if (!scene || (roomWarmupBackground && !options.allowBackground)) {
             return;
         }
 
@@ -956,7 +956,8 @@ const registerIframeApi = (events: Events) => {
             renderWarmupFrame = null;
         }
 
-        let remaining = Math.max(1, Math.min(240, Math.round(frames ?? 30)));
+        const maxFrames = roomWarmupBackground ? 3 : 240;
+        let remaining = Math.max(1, Math.min(maxFrames, Math.round(frames ?? 30)));
         const tick = () => {
             scene.forceRender = true;
             remaining -= 1;
@@ -1886,6 +1887,7 @@ const registerIframeApi = (events: Events) => {
                     });
                 }
                 applyCameraState(events, event.data.camera);
+                startRenderWarmup(roomWarmupBackground ? 3 : 8, { allowBackground: true });
                 rendered = await waitForPostRender(events);
                 postDiagnostic(source, event.origin, 'load-file-postrender', { rendered }, event.data.requestId);
             } catch (err) {
