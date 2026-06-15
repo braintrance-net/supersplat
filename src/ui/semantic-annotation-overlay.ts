@@ -43,6 +43,7 @@ type MultiplayerOverlayPlayer = {
     position: [number, number, number];
     target?: [number, number, number];
     speaking?: boolean;
+    level?: number;
     hidden?: boolean;
 };
 
@@ -72,6 +73,8 @@ type MultiplayerAvatarInstance = {
     lastUpdateMs: number;
     mouthMorphKeys: Array<{ morph: MultiplayerMorph; keys: Array<number | string> }>;
     speaking: boolean;
+    voiceLevel: number;
+    smoothedVoiceLevel: number;
 };
 
 type MultiplayerAvatarRigBone = {
@@ -145,6 +148,8 @@ const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
 const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
+const MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS = 0.045;
+const MULTIPLAYER_AVATAR_MOUTH_RELEASE_SECONDS = 0.11;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
 const MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES = 12;
@@ -168,6 +173,8 @@ const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, rejec
     image.onerror = () => reject(new Error('Image failed to load'));
     image.src = src;
 });
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
 const selectedMaskPixels = async (src: string, maxSamples = 256): Promise<MaskPixels> => {
     const image = await loadImage(src);
@@ -689,7 +696,14 @@ class SemanticAnnotationOverlay {
                 this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
             }
             if (avatar.mouthMorphKeys.length) {
-                const mouth = avatar.speaking ? 0.25 + 0.45 * (0.5 + 0.5 * Math.sin(nowMs * 0.025 + avatar.phase)) : 0;
+                const targetLevel = avatar.speaking ? Math.max(0.12, avatar.voiceLevel) : 0;
+                const smoothingSeconds = targetLevel > avatar.smoothedVoiceLevel ?
+                    MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS :
+                    MULTIPLAYER_AVATAR_MOUTH_RELEASE_SECONDS;
+                const blend = 1 - Math.exp(-rigDeltaTime / smoothingSeconds);
+                avatar.smoothedVoiceLevel += (targetLevel - avatar.smoothedVoiceLevel) * blend;
+                const pulse = avatar.speaking ? 0.94 + 0.06 * Math.sin(nowMs * 0.026 + avatar.phase) : 1;
+                const mouth = clamp01(avatar.smoothedVoiceLevel * pulse) * 0.82;
                 for (const mouthMorph of avatar.mouthMorphKeys) {
                     for (const key of mouthMorph.keys) {
                         mouthMorph.morph.setWeight(key, mouth);
@@ -1045,7 +1059,9 @@ class SemanticAnnotationOverlay {
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
             lastUpdateMs: performance.now(),
             mouthMorphKeys,
-            speaking: false
+            speaking: false,
+            voiceLevel: 0,
+            smoothedVoiceLevel: 0
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
         if (instance.usesProceduralRig) {
@@ -1123,6 +1139,7 @@ class SemanticAnnotationOverlay {
         instance.entity.setLocalScale(scale, scale, scale);
         instance.entity.setPosition(feetX, feetY, feetZ);
         instance.speaking = Boolean(player.speaking);
+        instance.voiceLevel = Number.isFinite(player.level) ? clamp01(player.level ?? 0) : 0;
         instance.lastPosition.set(feetX, feetY, feetZ);
         instance.lastUpdateMs = nowMs;
     }

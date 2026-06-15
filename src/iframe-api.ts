@@ -82,6 +82,7 @@ type MultiplayerPlayer = {
     position: Vec3Tuple;
     target?: Vec3Tuple;
     speaking?: boolean;
+    level?: number;
 };
 
 interface IsSceneDirtyQuery {
@@ -528,7 +529,8 @@ const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessa
             (player.avatarUrl === undefined || typeof player.avatarUrl === 'string') &&
             isVec3Tuple(player.position) &&
             (player.target === undefined || isVec3Tuple(player.target)) &&
-            (player.speaking === undefined || typeof player.speaking === 'boolean')
+            (player.speaking === undefined || typeof player.speaking === 'boolean') &&
+            (player.level === undefined || typeof player.level === 'number')
         ))
     );
 };
