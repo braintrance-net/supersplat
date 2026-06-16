@@ -66,6 +66,7 @@ type MultiplayerAvatarInstance = {
     entity: Entity;
     rig: MultiplayerAvatarRig | null;
     usesProceduralRig: boolean;
+    proceduralRigSettled: boolean;
     state: MultiplayerAvatarAnimation;
     smoothedPlanarSpeed: number;
     phase: number;
@@ -78,6 +79,7 @@ type MultiplayerAvatarInstance = {
     renderInitialized: boolean;
     renderYawDeg: number | null;
     mouthMorphKeys: Array<{ morph: MultiplayerMorph; keys: Array<number | string> }>;
+    lastMouthWeight: number;
     speaking: boolean;
     voiceLevel: number;
     smoothedVoiceLevel: number;
@@ -758,14 +760,21 @@ class SemanticAnnotationOverlay {
 
         const rigDeltaTime = Math.min(Math.max(deltaTime, 1 / 120), 1 / 15);
         const nowMs = performance.now();
+        let changed = false;
         for (const avatar of this.multiplayerAvatarInstances.values()) {
             if (!avatar.entity.enabled) {
                 continue;
             }
             if (avatar.usesProceduralRig) {
-                this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
+                const activeRig = avatar.state === 'run' || avatar.speaking || avatar.smoothedVoiceLevel > 0.01;
+                if (activeRig || !avatar.proceduralRigSettled) {
+                    this.animateMultiplayerAvatarRig(avatar, activeRig ? rigDeltaTime : 0, !activeRig);
+                    avatar.proceduralRigSettled = !activeRig;
+                    changed = true;
+                }
             }
             if (avatar.mouthMorphKeys.length) {
+                const previousVoiceLevel = avatar.smoothedVoiceLevel;
                 const targetLevel = avatar.speaking ? Math.max(0.12, avatar.voiceLevel) : 0;
                 const smoothingSeconds = targetLevel > avatar.smoothedVoiceLevel ?
                     MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS :
@@ -774,14 +783,20 @@ class SemanticAnnotationOverlay {
                 avatar.smoothedVoiceLevel += (targetLevel - avatar.smoothedVoiceLevel) * blend;
                 const pulse = avatar.speaking ? 0.94 + 0.06 * Math.sin(nowMs * 0.026 + avatar.phase) : 1;
                 const mouth = clamp01(avatar.smoothedVoiceLevel * pulse) * 0.82;
-                for (const mouthMorph of avatar.mouthMorphKeys) {
-                    for (const key of mouthMorph.keys) {
-                        mouthMorph.morph.setWeight(key, mouth);
+                if ((avatar.speaking || previousVoiceLevel > 0.001 || mouth > 0.001) && Math.abs(mouth - avatar.lastMouthWeight) > 0.002) {
+                    for (const mouthMorph of avatar.mouthMorphKeys) {
+                        for (const key of mouthMorph.keys) {
+                            mouthMorph.morph.setWeight(key, mouth);
+                        }
                     }
+                    avatar.lastMouthWeight = mouth;
+                    changed = true;
                 }
             }
         }
-        this.scene.forceRender = true;
+        if (changed) {
+            this.scene.forceRender = true;
+        }
     }
 
     private preloadMultiplayerAvatarAsset(player?: MultiplayerOverlayPlayer, details: { reason?: string; count?: number } = {}) {
@@ -1056,17 +1071,19 @@ class SemanticAnnotationOverlay {
         );
     }
 
-    private animateMultiplayerAvatarRig(instance: MultiplayerAvatarInstance, dt: number) {
+    private animateMultiplayerAvatarRig(instance: MultiplayerAvatarInstance, dt: number, settleIdle = false) {
         const rig = instance.rig;
         if (!rig) {
             return;
         }
 
         const running = instance.state === 'run';
-        instance.phase += dt * (running ? 9.5 : 2.4);
-        const stride = Math.sin(instance.phase);
-        const counterStride = Math.sin(instance.phase + Math.PI);
-        const lift = Math.sin(instance.phase * 2);
+        if (!settleIdle) {
+            instance.phase += dt * (running ? 9.5 : 2.4);
+        }
+        const stride = settleIdle ? 0 : Math.sin(instance.phase);
+        const counterStride = settleIdle ? 0 : Math.sin(instance.phase + Math.PI);
+        const lift = settleIdle ? 0 : Math.sin(instance.phase * 2);
 
         // Mixamo VRM avatars rest in a T-pose; rotate the upper arms near the
         // sides while leaving clavicles neutral so the arms don't fold inward.
@@ -1149,6 +1166,7 @@ class SemanticAnnotationOverlay {
             entity,
             rig,
             usesProceduralRig: !animationSetup.nativeAnimation,
+            proceduralRigSettled: false as boolean,
             state: 'idle',
             smoothedPlanarSpeed: 0,
             phase: Math.random() * Math.PI * 2,
@@ -1161,13 +1179,15 @@ class SemanticAnnotationOverlay {
             renderInitialized: false,
             renderYawDeg: null as number | null,
             mouthMorphKeys,
+            lastMouthWeight: 0,
             speaking: false,
             voiceLevel: 0,
             smoothedVoiceLevel: 0
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
         if (instance.usesProceduralRig) {
-            this.animateMultiplayerAvatarRig(instance, 0);
+            this.animateMultiplayerAvatarRig(instance, 0, true);
+            instance.proceduralRigSettled = true;
         }
         this.emitDiagnostic('multiplayer-avatar-rig-ready', {
             playerId: player.id,
@@ -1191,6 +1211,7 @@ class SemanticAnnotationOverlay {
         }
 
         instance.state = state;
+        instance.proceduralRigSettled = false;
         if (!instance.usesProceduralRig) {
             const anim = (instance.entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
             anim?.baseLayer?.transition(state === 'run' ? 'Run' : 'Idle', MULTIPLAYER_AVATAR_TRANSITION_SECONDS);
@@ -1200,6 +1221,7 @@ class SemanticAnnotationOverlay {
     private resetMultiplayerAvatarMotion(instance: MultiplayerAvatarInstance, player: MultiplayerOverlayPlayer, nowMs: number) {
         instance.renderInitialized = false;
         instance.renderYawDeg = null;
+        instance.proceduralRigSettled = false;
         instance.targetVelocity.set(0, 0, 0);
         instance.renderPosition.set(player.position[0], player.position[1], player.position[2]);
         instance.lastPosition.set(player.position[0], player.position[1], player.position[2]);
