@@ -126,6 +126,7 @@ body.advanced-ui {
 #bottom-toolbar-brush-boxer,
 #bottom-toolbar-brush-sam,
 #bottom-toolbar-brush-raw,
+#bottom-toolbar-brush-raw-3d,
 #bottom-toolbar-boxer-all,
 #bottom-toolbar-manual-box,
 #bottom-toolbar-box-volume,
@@ -156,20 +157,44 @@ body.advanced-ui {
     pointer-events: none;
 }
 
+.bottom-toolbar-experimental-badge {
+    position: absolute;
+    right: 2px;
+    top: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: #f1b547;
+    color: #151515;
+    font-size: 9px;
+    font-weight: 800;
+    line-height: 12px;
+    text-align: center;
+    pointer-events: none;
+}
+
 .bottom-toolbar-tool.active .bottom-toolbar-variant-badge {
     background: $clr-active;
     color: $clr-hilight;
 }
 
 #sam3-mode-wrap {
+    position: absolute;
+    bottom: 48px;
     display: flex;
     align-items: center;
+    gap: 2px;
     height: 32px;
-    margin: 0 4px;
     padding: 2px;
     border: 1px solid $bg-light-tertiary;
     border-radius: 6px;
     background-color: $bcg-secondary;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+    transform: translateX(-50%);
+
+    &.hidden {
+        display: none;
+    }
 }
 
 .sam3-mode-button {

@@ -73,7 +73,7 @@ const popupConfig: Record<string, CategoryConfig> = {
             { id: 'tool.sam3Selection', localeKey: 'SAM3 AI Selection' },
             { id: 'tool.brushSelection.boxer', localeKey: 'Brush Boxer' },
             { id: 'tool.brushSelection.sam', localeKey: 'Brush SAM' },
-            { id: 'tool.brushSelection.raw', localeKey: 'Raw Brush' },
+            { id: 'tool.brushSelection.raw', localeKey: '2D Brush' },
             { id: 'tool.boxerDetectAll', localeKey: 'Boxer Detect All' },
             { id: 'tool.boxSelection', localeKey: '4 Click Box' },
             { id: 'tool.boxVolume', localeKey: 'Box Volume' },

@@ -531,6 +531,7 @@ type BoxerBrushPrompt = {
     // for fusion/validation instead of taking the broad fast shortcut
     mode?: 'raw' | 'evidence';
     selection_mode?: 'new' | 'add' | 'remove' | 'intersect';
+    brush_space?: '2d' | '3d';
     // diagnostic: per-point pointer position (client px) and the collision
     // surface hit under it, recorded by the brush tool for replication
     probe_trace?: { client: [number, number]; world: [number, number, number] | null; distance: number | null }[];
@@ -6776,14 +6777,25 @@ class BoxerSelection {
         } catch (err) {
             console.warn('[Boxer] boxer.clearOverlays was already registered', err);
         }
+        const debugDock = document.createElement('div');
+        debugDock.id = 'boxer-debug-dock';
+        debugDock.style.position = 'fixed';
+        debugDock.style.right = '16px';
+        debugDock.style.top = '72px';
+        debugDock.style.width = '320px';
+        debugDock.style.zIndex = '10000';
+        debugDock.style.display = 'flex';
+        debugDock.style.flexDirection = 'column';
+        debugDock.style.gap = '8px';
+        debugDock.style.pointerEvents = 'none';
+        document.body.appendChild(debugDock);
+
         const debugPanel = document.createElement('div');
-        debugPanel.style.position = 'absolute';
-        debugPanel.style.right = '12px';
-        debugPanel.style.top = '12px';
-        debugPanel.style.width = '320px';
-        debugPanel.style.maxHeight = '58vh';
+        debugPanel.id = 'boxer-debug-panel';
+        debugPanel.style.position = 'static';
+        debugPanel.style.width = '100%';
+        debugPanel.style.maxHeight = '42vh';
         debugPanel.style.overflow = 'auto';
-        debugPanel.style.zIndex = '12';
         debugPanel.style.display = 'none';
         debugPanel.style.pointerEvents = 'auto';
         debugPanel.style.padding = '10px';
@@ -6792,14 +6804,12 @@ class BoxerSelection {
         debugPanel.style.color = '#e8f7ff';
         debugPanel.style.font = '11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
         debugPanel.style.boxShadow = '0 10px 28px rgba(0, 0, 0, 0.28)';
-        parent.appendChild(debugPanel);
+        debugDock.appendChild(debugPanel);
 
         const brushPanel = document.createElement('div');
-        brushPanel.style.position = 'fixed';
-        brushPanel.style.right = '16px';
-        brushPanel.style.top = '72px';
-        brushPanel.style.width = '320px';
-        brushPanel.style.zIndex = '10000';
+        brushPanel.id = 'boxer-brush-panel';
+        brushPanel.style.position = 'static';
+        brushPanel.style.width = '100%';
         brushPanel.style.display = 'none';
         brushPanel.style.pointerEvents = 'auto';
         brushPanel.style.padding = '10px';
@@ -6808,7 +6818,24 @@ class BoxerSelection {
         brushPanel.style.color = '#e8f7ff';
         brushPanel.style.font = '11px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
         brushPanel.style.boxShadow = '0 10px 28px rgba(0, 0, 0, 0.28)';
-        document.body.appendChild(brushPanel);
+        debugDock.appendChild(brushPanel);
+
+        let debugPanelsVisible = false;
+        let debugPanelHasContent = false;
+        let brushPanelHasContent = false;
+        const syncDebugPanelsVisibility = () => {
+            debugPanel.style.display = debugPanelsVisible && debugPanelHasContent ? '' : 'none';
+            brushPanel.style.display = debugPanelsVisible && brushPanelHasContent ? '' : 'none';
+            events.fire('boxer.debugPanels.visible', debugPanelsVisible);
+        };
+        const setDebugPanelsVisible = (visible: boolean) => {
+            debugPanelsVisible = visible;
+            syncDebugPanelsVisibility();
+            return debugPanelsVisible;
+        };
+        events.on('boxer.debugPanels.toggleVisible', () => {
+            setDebugPanelsVisible(!debugPanelsVisible);
+        });
 
         const fmtMs = (value?: number) => {
             const numeric = value ?? NaN;
@@ -6909,7 +6936,8 @@ class BoxerSelection {
         const renderBrushPanel = () => {
             if (!lastBrushPrompt) {
                 if (!stickyEvalTarget) {
-                    brushPanel.style.display = 'none';
+                    brushPanelHasContent = false;
+                    syncDebugPanelsVisibility();
                     return;
                 }
 
@@ -6921,7 +6949,8 @@ class BoxerSelection {
                     <div>Switch to a brush selection tool, then paint the object.</div>
                     <div style="margin-top:6px;">After you release the stroke, this panel will show Run Brush and Save Brush Eval.</div>
                 `;
-                brushPanel.style.display = '';
+                brushPanelHasContent = true;
+                syncDebugPanelsVisibility();
                 return;
             }
 
@@ -6957,7 +6986,8 @@ class BoxerSelection {
                 events.invoke('boxer.copyLastBrushEvalCase', { copy_clipboard: false, save_local: true });
             });
             bindFusionClearButton();
-            brushPanel.style.display = '';
+            brushPanelHasContent = true;
+            syncDebugPanelsVisibility();
         };
         const updateDebugPanel = (state: BoxerClickDebugPanelState) => {
             (window as any).__lastBoxerClickDebug = state;
@@ -7008,7 +7038,8 @@ class BoxerSelection {
                 e.stopPropagation();
                 events.invoke('boxer.clearEvalTarget');
             });
-            debugPanel.style.display = '';
+            debugPanelHasContent = true;
+            syncDebugPanelsVisibility();
             events.fire('boxer.debugUpdated', state);
         };
         try {
@@ -7016,9 +7047,10 @@ class BoxerSelection {
             events.function('boxer.2dOverlays.setVisible', (visible: boolean) => set2DBoxOverlaysVisible(visible === true));
             events.function('boxer.2dOverlays.toggleVisible', () => set2DBoxOverlaysVisible(!boxer2DOverlaysVisible));
             events.function('boxer.debugPanel.toggleVisible', () => {
-                debugPanel.style.display = debugPanel.style.display === 'none' ? '' : 'none';
-                return debugPanel.style.display !== 'none';
+                return setDebugPanelsVisible(!debugPanelsVisible);
             });
+            events.function('boxer.debugPanels.toggleVisible', () => setDebugPanelsVisible(!debugPanelsVisible));
+            events.function('boxer.debugPanels.setVisible', (visible: boolean) => setDebugPanelsVisible(visible === true));
         } catch (err) {
             console.warn('[Boxer] boxer.debugPanel.toggleVisible was already registered', err);
         }

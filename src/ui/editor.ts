@@ -87,6 +87,13 @@ class EditorUI {
         uiModeToggle.type = 'button';
         uiModeToggle.textContent = '⚙';
 
+        const boxerDebugToggle = document.createElement('button');
+        boxerDebugToggle.id = 'boxer-debug-toggle';
+        boxerDebugToggle.type = 'button';
+        boxerDebugToggle.textContent = 'D';
+        boxerDebugToggle.title = 'Boxer debug';
+        boxerDebugToggle.setAttribute('aria-label', 'Boxer debug');
+
         // app label
         const appLabel = new Label({
             id: 'app-label',
@@ -146,6 +153,7 @@ class EditorUI {
         const radialMenu = new RadialMenu(events);
 
         canvasContainer.dom.appendChild(canvas);
+        canvasContainer.dom.appendChild(boxerDebugToggle);
         canvasContainer.dom.appendChild(uiModeToggle);
         canvasContainer.append(appLabel);
         canvasContainer.append(cursorLabel);
@@ -180,6 +188,21 @@ class EditorUI {
         uiModeToggle.addEventListener('click', (event) => {
             event.stopPropagation();
             setAdvancedUi(!document.body.classList.contains('advanced-ui'));
+        });
+
+        boxerDebugToggle.addEventListener('pointerdown', (event) => {
+            event.stopPropagation();
+        });
+
+        boxerDebugToggle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            events.fire('boxer.debugPanels.toggleVisible');
+        });
+
+        events.on('boxer.debugPanels.visible', (visible: boolean) => {
+            boxerDebugToggle.classList.toggle('active', visible);
+            boxerDebugToggle.title = visible ? 'Hide Boxer debug' : 'Show Boxer debug';
+            boxerDebugToggle.setAttribute('aria-label', boxerDebugToggle.title);
         });
 
         // view axes container

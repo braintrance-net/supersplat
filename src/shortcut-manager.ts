@@ -45,6 +45,7 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'tool.brushSelection.boxer': { keys: ['4'] },
     'tool.brushSelection.sam': { keys: ['5'] },
     'tool.brushSelection.raw': { keys: ['6'] },
+    'tool.brushSelection.raw3d': {},
     'tool.boxerDetectAll': { keys: ['7'] },
     'tool.boxSelection': { keys: ['8'] },
     'tool.boxVolume': { keys: ['9'] },
