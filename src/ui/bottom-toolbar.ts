@@ -12,6 +12,7 @@ import brushSvg from './svg/select-brush.svg';
 import eyedropperSvg from './svg/select-eyedropper.svg';
 import floodSvg from './svg/select-flood.svg';
 import lassoSvg from './svg/select-lasso.svg';
+import normalSvg from './svg/select-normal.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
 import samSvg from './svg/select-sam.svg';
@@ -86,6 +87,11 @@ class BottomToolbar extends Container {
         };
 
         // Simplified toolbar
+        const normal = new Button({
+            id: 'bottom-toolbar-normal',
+            class: 'bottom-toolbar-tool'
+        });
+
         const mic = new Button({
             id: 'bottom-toolbar-mic',
             class: 'bottom-toolbar-tool'
@@ -174,6 +180,7 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        normal.dom.appendChild(createSvg(normalSvg));
         mic.dom.appendChild(createSvg(micSvg));
         touch.dom.appendChild(createSvg(touchSvg));
         boxer.dom.appendChild(createSvg(boxerSvg));
@@ -188,6 +195,7 @@ class BottomToolbar extends Container {
         semanticScan.dom.appendChild(createSvg(semanticScanSvg));
         simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
+        appendSimplified(normal);
         appendSimplified(mic);
         appendSimplified(touch);
         appendSimplified(boxer);
@@ -231,6 +239,7 @@ class BottomToolbar extends Container {
         appendSimplified(new Element({ class: 'bottom-toolbar-separator' }));
         appendSimplified(simplifiedAssetBrowser);
 
+        normal.dom.addEventListener('click', () => events.fire('tool.deactivate'));
         mic.dom.addEventListener('click', () => events.fire('voice.toggle'));
         mic.dom.addEventListener('contextmenu', (e) => {
             e.preventDefault();
@@ -256,6 +265,8 @@ class BottomToolbar extends Container {
         brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariant('boxer'));
         brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
         brushRawSelect.dom.addEventListener('click', () => activateBrushVariant('raw'));
+        events.on('tool.brushSelection.boxer', () => activateBrushVariant('boxer'));
+        events.on('tool.brushSelection.raw', () => activateBrushVariant('raw'));
         boxerAll.dom.addEventListener('click', async () => {
             try {
                 await events.invoke('boxer.runDetectAll');
@@ -269,14 +280,15 @@ class BottomToolbar extends Container {
         semanticScan.dom.addEventListener('click', () => events.fire('semanticScan.run'));
         simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
+        tooltips.register(normal, tooltip('No Tool', 'tool.deactivate'));
         tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
-        tooltips.register(brushBoxerSelect, 'Brush Boxer (real Boxer model lift)');
+        tooltips.register(brushBoxerSelect, tooltip('Brush Boxer', 'tool.brushSelection.boxer'));
         tooltips.register(brushSamSelect, 'Brush SAM (real SAM model)');
-        tooltips.register(brushRawSelect, 'Brush Raw (no model — local geometry)');
+        tooltips.register(brushRawSelect, tooltip('Brush Raw', 'tool.brushSelection.raw'));
         tooltips.register(boxerAll, 'Boxer Detect All');
-        tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
+        tooltips.register(manualBox, tooltip('4 Click Box', 'tool.boxSelection'));
         tooltips.register(boxVolume, 'Box Volume (point → width → depth → height)');
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
@@ -434,7 +446,8 @@ class BottomToolbar extends Container {
             brushRawSelect.class[toolName === 'brushSelection' && brushVariant === 'raw' ? 'add' : 'remove']('active');
         };
 
-        events.on('tool.activated', (toolName: string) => {
+        events.on('tool.activated', (toolName: string | null) => {
+            normal.class[toolName === null ? 'add' : 'remove']('active');
             touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
             syncBrushVariantActive(toolName);
