@@ -84,6 +84,38 @@ class BottomToolbar extends Container {
                 advancedGroup.dom.appendChild(node);
             }
         };
+        const numericShortcutOrder = (shortcutId: string | undefined, fallbackOrder: number) => {
+            const key = shortcutId ?
+                shortcutManager.get(shortcutId)?.keys?.find(value => /^[1-9]$/.test(value)) :
+                undefined;
+            return key ? Number(key) : fallbackOrder;
+        };
+        const appendSimplifiedOrdered = (items: {
+            node: HTMLElement | Element;
+            shortcutId?: string;
+            fallbackOrder: number;
+        }[]) => {
+            const seen = new Map<number, string>();
+            for (const item of items) {
+                if (!item.shortcutId) continue;
+                const key = shortcutManager.get(item.shortcutId)?.keys?.find(value => /^[1-9]$/.test(value));
+                if (!key) continue;
+                const numericKey = Number(key);
+                const existing = seen.get(numericKey);
+                if (existing) {
+                    console.warn(`[BottomToolbar] duplicate numeric shortcut ${numericKey}: ${existing}, ${item.shortcutId}`);
+                }
+                seen.set(numericKey, item.shortcutId);
+            }
+
+            [...items]
+            .sort((a, b) => {
+                const orderDelta = numericShortcutOrder(a.shortcutId, a.fallbackOrder) -
+                    numericShortcutOrder(b.shortcutId, b.fallbackOrder);
+                return orderDelta || a.fallbackOrder - b.fallbackOrder;
+            })
+            .forEach(item => appendSimplified(item.node));
+        };
 
         // Simplified toolbar
         const normal = new Button({
@@ -188,17 +220,19 @@ class BottomToolbar extends Container {
         semanticScan.dom.appendChild(createSvg(semanticScanSvg));
         simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
-        appendSimplified(normal);
-        appendSimplified(touch);
-        appendSimplified(boxer);
-        appendSimplified(brushBoxerSelect);
-        appendSimplified(brushSamSelect);
-        appendSimplified(brushRawSelect);
-        appendSimplified(boxerAll);
-        appendSimplified(manualBox);
-        appendSimplified(boxVolume);
-        appendSimplified(samModeWrap);
-        appendSimplified(semanticScan);
+        appendSimplifiedOrdered([
+            { node: normal, shortcutId: 'tool.deactivate', fallbackOrder: 1 },
+            { node: boxer, shortcutId: 'tool.boxerSelection', fallbackOrder: 2 },
+            { node: touch, shortcutId: 'tool.sam3Selection', fallbackOrder: 3 },
+            { node: brushBoxerSelect, shortcutId: 'tool.brushSelection.boxer', fallbackOrder: 4 },
+            { node: brushSamSelect, shortcutId: 'tool.brushSelection.sam', fallbackOrder: 5 },
+            { node: brushRawSelect, shortcutId: 'tool.brushSelection.raw', fallbackOrder: 6 },
+            { node: boxerAll, shortcutId: 'tool.boxerDetectAll', fallbackOrder: 7 },
+            { node: manualBox, shortcutId: 'tool.boxSelection', fallbackOrder: 8 },
+            { node: boxVolume, shortcutId: 'tool.boxVolume', fallbackOrder: 9 },
+            { node: samModeWrap, fallbackOrder: 10 },
+            { node: semanticScan, fallbackOrder: 11 }
+        ]);
 
         const aiInputWrap = document.createElement('div');
         aiInputWrap.id = 'ai-prompt-wrap';
@@ -253,15 +287,18 @@ class BottomToolbar extends Container {
         brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
         brushRawSelect.dom.addEventListener('click', () => activateBrushVariant('raw'));
         events.on('tool.brushSelection.boxer', () => activateBrushVariant('boxer'));
+        events.on('tool.brushSelection.sam', () => activateBrushVariant('sam'));
         events.on('tool.brushSelection.raw', () => activateBrushVariant('raw'));
-        boxerAll.dom.addEventListener('click', async () => {
+        const runBoxerDetectAll = async () => {
             try {
                 await events.invoke('boxer.runDetectAll');
             } catch (err) {
                 console.error('[Boxer] Detect-all probe failed', err);
                 events.fire('toast', 'Boxer detect-all probe failed', 'error');
             }
-        });
+        };
+        boxerAll.dom.addEventListener('click', runBoxerDetectAll);
+        events.on('tool.boxerDetectAll', runBoxerDetectAll);
         manualBox.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         boxVolume.dom.addEventListener('click', () => events.fire('tool.boxVolume'));
         semanticScan.dom.addEventListener('click', () => events.fire('semanticScan.run'));
@@ -271,11 +308,11 @@ class BottomToolbar extends Container {
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
         tooltips.register(brushBoxerSelect, tooltip('Brush Boxer', 'tool.brushSelection.boxer'));
-        tooltips.register(brushSamSelect, 'Brush SAM (real SAM model)');
+        tooltips.register(brushSamSelect, tooltip('Brush SAM', 'tool.brushSelection.sam'));
         tooltips.register(brushRawSelect, tooltip('Brush Raw', 'tool.brushSelection.raw'));
-        tooltips.register(boxerAll, 'Boxer Detect All');
+        tooltips.register(boxerAll, tooltip('Boxer Detect All', 'tool.boxerDetectAll'));
         tooltips.register(manualBox, tooltip('4 Click Box', 'tool.boxSelection'));
-        tooltips.register(boxVolume, 'Box Volume (point → width → depth → height)');
+        tooltips.register(boxVolume, tooltip('Box Volume', 'tool.boxVolume'));
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
