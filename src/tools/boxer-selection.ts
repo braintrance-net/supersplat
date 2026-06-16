@@ -8018,15 +8018,23 @@ class BoxerSelection {
         events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'client_brush_floor_snap' | 'brush_sam' | 'brush_sam_clean' | 'brush_boxer' }>) => {
             lastBrushPrompt = prompt;
             lastBrushReplay = null;
-            brushPanelStatus = 'running';
+            const shouldAutoRun = prompt.type === 'brush_boxer' ||
+                prompt.type === 'brush_sam' ||
+                prompt.type === 'brush_sam_clean';
+            brushPanelStatus = shouldAutoRun ? 'running' : 'done';
             renderBrushPanel();
             console.log('[Boxer] captured brush prompt', prompt);
-            events.fire('toast', prompt.type === 'brush_sam' || prompt.type === 'brush_sam_clean' ? 'Running SAM brush selection' : prompt.type === 'brush_boxer' ? 'Running Boxer model brush lift' : 'Running local brush selection', 'info');
+            if (!shouldAutoRun) {
+                return;
+            }
+
+            events.fire('toast', prompt.type === 'brush_sam' || prompt.type === 'brush_sam_clean' ? 'Running SAM brush selection' : 'Running Boxer model brush lift', 'info');
             new Promise<void>((resolve) => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }).then(() => runLastBrushBoxer()).then(() => {
                 brushPanelStatus = 'done';
                 renderBrushPanel();
+                events.fire('selection.commit', { source: 'boxerBrushSelection', promptType: prompt.type });
             }).catch((err) => {
                 brushPanelStatus = 'failed';
                 renderBrushPanel();
