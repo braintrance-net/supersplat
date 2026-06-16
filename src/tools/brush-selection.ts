@@ -411,19 +411,29 @@ class BrushSelection {
                 e.stopPropagation();
                 cancelLivePreview();
 
-                const selectionResult = await events.invoke(
-                    'select.byMask',
-                    selectionOpFromPointer(e),
-                    canvas,
-                    context
-                ) as { selected_after?: number; splat_count?: number } | undefined;
-                const prompt = buildBrushPrompt();
+                let selectionResult: { selected_after?: number; splat_count?: number } | undefined;
+                let prompt: ReturnType<typeof buildBrushPrompt> = null;
+                try {
+                    selectionResult = await events.invoke(
+                        'select.byMask',
+                        selectionOpFromPointer(e),
+                        canvas,
+                        context
+                    ) as { selected_after?: number; splat_count?: number } | undefined;
+                    prompt = buildBrushPrompt();
+                } catch (err) {
+                    console.warn('[BrushSelection] mask selection failed', err);
+                    events.fire('toast', 'Brush selection failed', 'error');
+                } finally {
+                    dragEnd();
+                }
+
+                if (selectionResult) {
+                    events.fire('selection.commit', { source: 'brushSelection', variant, result: selectionResult });
+                }
                 if (prompt) {
                     events.fire('boxer.brushPromptCaptured', prompt);
                 }
-
-                dragEnd();
-                events.fire('selection.commit', { source: 'brushSelection', variant, result: selectionResult });
             }
         };
 

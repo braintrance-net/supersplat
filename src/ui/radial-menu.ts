@@ -5,6 +5,8 @@ import placeSvg from './svg/place.svg';
 import trashSvg from './svg/trash.svg';
 import undoSvg from './svg/undo.svg';
 
+const SELECTION_TOOL_COMMIT_GRACE_MS = 1200;
+
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
     return new DOMParser().parseFromString(decodedStr, 'image/svg+xml').documentElement;
@@ -23,6 +25,7 @@ class RadialMenu extends Container {
     private menuEl: HTMLElement;
     private isVisible = false;
     private oneShotTool: string | null = null;
+    private selectionToolCommitVisibleUntil = 0;
     private events: Events;
     private selectionToolNames = new Set([
         'brushSelection',
@@ -168,6 +171,15 @@ class RadialMenu extends Container {
 
         const checkSelection = () => {
             if (this.selectionToolNames.has(events.invoke('tool.active') as string)) {
+                if (performance.now() <= this.selectionToolCommitVisibleUntil) {
+                    const hasSplats = events.invoke('selection.splats');
+                    if (hasSplats) {
+                        if (!this.isVisible) {
+                            this.showNearSelection(true);
+                        }
+                        return;
+                    }
+                }
                 this.hide();
                 return;
             }
@@ -189,6 +201,7 @@ class RadialMenu extends Container {
         events.on('splat.stateChanged', checkSelection);
 
         events.on('selection.commit', () => {
+            this.selectionToolCommitVisibleUntil = performance.now() + SELECTION_TOOL_COMMIT_GRACE_MS;
             let attempts = 0;
             const showCommittedSelection = () => {
                 if (events.invoke('selection.splats')) {
@@ -219,12 +232,14 @@ class RadialMenu extends Container {
         events.on('tool.activated', (toolName: string | null) => {
             if (toolName && this.selectionToolNames.has(toolName)) {
                 this.oneShotTool = null;
+                this.selectionToolCommitVisibleUntil = 0;
                 this.hide();
             }
         });
 
         // When selection is cleared, hide
         events.on('selection.deselect', () => {
+            this.selectionToolCommitVisibleUntil = 0;
             this.hide();
         });
 
