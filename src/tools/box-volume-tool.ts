@@ -92,6 +92,9 @@ class BoxVolumeTool {
         let lastDebugLogAt = 0;
         let debugEnabled = localStorage.getItem('boxVolumeDebugAuto') === '1';
         let syncingInputs = false;
+        let selectionRefreshQueued = false;
+        let selectionRefreshInFlight = false;
+        let selectionRefreshFrame: number | null = null;
         const resizeHandles: ResizeHandle[] = [];
 
         const depthAxis = (out: Vec3) => out.set(widthDir.z, 0, -widthDir.x);
@@ -104,8 +107,11 @@ class BoxVolumeTool {
             center.copy(box.pivot.getPosition());
             box.moved();
             syncCornerFromCenter();
+            updateVolumeShape();
             updateOverlay();
             updateResizeHandles();
+            queueSelectionRefresh();
+            scene.forceRender = true;
         });
 
         const overlaySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -168,14 +174,60 @@ class BoxVolumeTool {
             };
         };
 
-        const applySelection = (op: 'set' | 'add' | 'remove') => {
+        const selectCurrentBox = (op: 'set' | 'add' | 'remove' = 'set') => {
             const obb = currentBox();
-            events.fire('select.byOBB', op, {
+            return events.invoke('select.byOBBNow', op, {
                 center: obb.center,
                 dimensions: obb.dimensions,
                 rotation: obb.rotation
+            }) as Promise<unknown>;
+        };
+
+        const applySelection = (op: 'set' | 'add' | 'remove') => {
+            selectCurrentBox(op).catch((err) => {
+                console.warn('[BoxVolume] selection apply failed', err);
             });
         };
+
+        async function runSelectionRefresh() {
+            if (!active || phase !== 'placed' || !boxAdded) {
+                selectionRefreshQueued = false;
+                return;
+            }
+            if (selectionRefreshInFlight) {
+                selectionRefreshQueued = true;
+                return;
+            }
+
+            selectionRefreshQueued = false;
+            selectionRefreshInFlight = true;
+            try {
+                await selectCurrentBox('set');
+            } catch (err) {
+                console.warn('[BoxVolume] live selection refresh failed', err);
+            } finally {
+                selectionRefreshInFlight = false;
+                if (selectionRefreshQueued && active && phase === 'placed' && boxAdded) {
+                    queueSelectionRefresh();
+                }
+            }
+        }
+
+        function queueSelectionRefresh() {
+            if (!active || phase !== 'placed' || !boxAdded) {
+                return;
+            }
+            selectionRefreshQueued = true;
+            if (selectionRefreshFrame !== null || selectionRefreshInFlight) {
+                return;
+            }
+            selectionRefreshFrame = window.requestAnimationFrame(() => {
+                selectionRefreshFrame = null;
+                runSelectionRefresh().catch((err) => {
+                    console.warn('[BoxVolume] live selection refresh failed', err);
+                });
+            });
+        }
 
         const syncNumericInput = (input: NumericInput, value: number) => {
             if (Math.abs(input.value - value) > 1e-6) {
@@ -306,6 +358,9 @@ class BoxVolumeTool {
             updateVolumeShape();
             updateOverlay();
             updateResizeHandles();
+            if (phase === 'placed') {
+                queueSelectionRefresh();
+            }
             scene.forceRender = true;
         }
 
@@ -957,6 +1012,11 @@ class BoxVolumeTool {
         };
 
         const reset = () => {
+            if (selectionRefreshFrame !== null) {
+                window.cancelAnimationFrame(selectionRefreshFrame);
+                selectionRefreshFrame = null;
+            }
+            selectionRefreshQueued = false;
             phase = 'idle';
             clicked = false;
             clickCandidate = null;
