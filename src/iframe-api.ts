@@ -814,7 +814,12 @@ const cameraStateFromAnnotation = (annotation: SemanticAnnotation): CameraState 
     ortho: annotation.source.camera.ortho
 });
 
-const applyTransformState = (events: Events, transform?: PresetTransform, targetSplat?: any) => {
+const applyTransformState = (
+    events: Events,
+    transform?: PresetTransform,
+    targetSplat?: any,
+    options: { forceRender?: boolean } = {}
+) => {
     if (!transform) {
         return;
     }
@@ -842,19 +847,23 @@ const applyTransformState = (events: Events, transform?: PresetTransform, target
     }
 
     const scene = window.scene as any;
-    if (scene) {
+    if (scene && options.forceRender !== false) {
         scene.forceRender = true;
     }
 };
 
-const applyDocTransformState = (splat: any, docTransform?: Record<string, unknown>) => {
+const applyDocTransformState = (
+    splat: any,
+    docTransform?: Record<string, unknown>,
+    options: { forceRender?: boolean } = {}
+) => {
     if (!docTransform || typeof splat?.docDeserialize !== 'function') {
         return false;
     }
 
     splat.docDeserialize(docTransform);
     const scene = window.scene as any;
-    if (scene) {
+    if (scene && options.forceRender !== false) {
         scene.forceRender = true;
     }
     return true;
@@ -876,7 +885,11 @@ const importSplatFile = async (events: Events, filename: string, data: ArrayBuff
     return splatsAfter?.[beforeCount] ?? splatsAfter?.[splatsAfter.length - 1] ?? null;
 };
 
-const importSceneManifestLayer = async (events: Events, layer: LoadSceneManifestLayer) => {
+const importSceneManifestLayer = async (
+    events: Events,
+    layer: LoadSceneManifestLayer,
+    options: { forceRender?: boolean } = {}
+) => {
     if (!layer.data) {
         throw new Error(`Scene layer '${layer.label ?? layer.id}' did not include data.`);
     }
@@ -886,9 +899,9 @@ const importSceneManifestLayer = async (events: Events, layer: LoadSceneManifest
         throw new Error(`Scene layer '${layer.label ?? layer.id}' did not import.`);
     }
 
-    const usedDocTransform = applyDocTransformState(importedSplat, layer.docTransform);
+    const usedDocTransform = applyDocTransformState(importedSplat, layer.docTransform, options);
     if (!usedDocTransform) {
-        applyTransformState(events, layer.transform, importedSplat);
+        applyTransformState(events, layer.transform, importedSplat, options);
     }
 
     return usedDocTransform;
@@ -1246,7 +1259,7 @@ const registerIframeApi = (events: Events) => {
 
                 stream.pendingLayers.delete(stream.nextLayerIndex);
                 const layerIndex = stream.nextLayerIndex;
-                const usedDocTransform = await importSceneManifestLayer(events, layer);
+                const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
                 stream.importedCount += 1;
                 stream.nextLayerIndex += 1;
                 postDiagnostic(stream.source, stream.origin, 'load-scene-manifest-stream-layer-imported', {
@@ -2240,7 +2253,7 @@ const registerIframeApi = (events: Events) => {
                 activeCollisionMeshSrc = null;
                 let importedCount = 0;
                 for (const [layerIndex, layer] of layers.entries()) {
-                    const usedDocTransform = await importSceneManifestLayer(events, layer);
+                    const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
                     importedCount += 1;
                     postDiagnostic(source, event.origin, 'load-scene-manifest-layer-imported', {
                         id: layer.id,
