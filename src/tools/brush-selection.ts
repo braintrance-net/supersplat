@@ -411,21 +411,19 @@ class BrushSelection {
                 e.stopPropagation();
                 cancelLivePreview();
 
-                await events.invoke(
+                const selectionResult = await events.invoke(
                     'select.byMask',
                     selectionOpFromPointer(e),
                     canvas,
                     context
-                );
+                ) as { selected_after?: number; splat_count?: number } | undefined;
                 const prompt = buildBrushPrompt();
                 if (prompt) {
                     events.fire('boxer.brushPromptCaptured', prompt);
                 }
 
                 dragEnd();
-                if (variant === 'raw') {
-                    events.fire('selection.commit', { source: 'brushSelection', variant });
-                }
+                events.fire('selection.commit', { source: 'brushSelection', variant, result: selectionResult });
             }
         };
 

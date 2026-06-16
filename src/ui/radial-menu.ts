@@ -189,11 +189,15 @@ class RadialMenu extends Container {
         events.on('splat.stateChanged', checkSelection);
 
         events.on('selection.commit', () => {
-            window.setTimeout(() => {
+            let attempts = 0;
+            const showCommittedSelection = () => {
                 if (events.invoke('selection.splats')) {
                     this.showNearSelection(true);
+                } else if (attempts++ < 8) {
+                    window.setTimeout(showCommittedSelection, 80);
                 }
-            }, 80);
+            };
+            showCommittedSelection();
         });
 
         // Show menu immediately at click point when SAM3 starts processing

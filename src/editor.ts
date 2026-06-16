@@ -669,10 +669,20 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     events.function('select.byMask', async (op: 'add'|'remove'|'set', canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
         clearSelectionPreview();
 
+        let splatCount = 0;
+        let selectedAfter = 0;
         for (const splat of selectedSplats()) {
+            splatCount++;
             const hit = await collectMaskHits(splat, op, canvas, context);
             await editHistory.add(new SelectOp(splat, op, hit));
+            selectedAfter += splat.numSelected;
         }
+
+        return {
+            applied: splatCount > 0,
+            splat_count: splatCount,
+            selected_after: selectedAfter
+        };
     });
 
     events.function('select.point', async (op: 'add'|'remove'|'set', point: { x: number, y: number }) => {
