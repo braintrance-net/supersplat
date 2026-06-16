@@ -7004,7 +7004,7 @@ class BoxerSelection {
             }
 
             const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
-                includeImage: false,
+                includeImage: true,
                 includeEncodedDepth: false
             });
             publishBoxerFrameDebug(frame);
