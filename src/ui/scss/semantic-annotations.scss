@@ -254,6 +254,10 @@
     opacity: 0.72;
 }
 
+.multiplayer-avatar-marker.awaiting-3d-avatar {
+    visibility: hidden;
+}
+
 .multiplayer-avatar-marker.has-3d-avatar {
     width: 1px;
     height: 1px;

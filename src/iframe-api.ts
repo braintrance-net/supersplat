@@ -40,6 +40,7 @@ const WALK_INPUT = 'supersplat:walk-input';
 const WALK_SAVE_HEIGHT = 'supersplat:walk-save-height';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
+const MULTIPLAYER_AVATAR_PRELOAD = 'supersplat:multiplayer-avatar-preload';
 const SCREEN_SURFACE = 'supersplat:screen-surface';
 const SCREEN_FRAME = 'supersplat:screen-frame';
 const SCREEN_CLEAR = 'supersplat:screen-clear';
@@ -279,6 +280,11 @@ interface MultiplayerPlayersMessage {
     players: MultiplayerPlayer[];
 }
 
+interface MultiplayerAvatarPreloadMessage {
+    type: typeof MULTIPLAYER_AVATAR_PRELOAD;
+    player: MultiplayerPlayer;
+}
+
 type ScreenCornerPoint = { x: number; y: number; z: number };
 
 interface ScreenSurfaceMessage {
@@ -513,26 +519,37 @@ const isCollisionDebugBundleGetMessage = (data: any): data is CollisionDebugBund
     return data && typeof data === 'object' && data.type === COLLISION_DEBUG_BUNDLE_GET && hasOptionalRequestId(data);
 };
 
+const isMultiplayerPlayer = (player: any): player is MultiplayerPlayer => (
+    player &&
+    typeof player === 'object' &&
+    typeof player.id === 'string' &&
+    typeof player.label === 'string' &&
+    (player.color === undefined || typeof player.color === 'string') &&
+    (player.avatarId === undefined || typeof player.avatarId === 'string') &&
+    (player.avatarName === undefined || typeof player.avatarName === 'string') &&
+    (player.avatarUrl === undefined || typeof player.avatarUrl === 'string') &&
+    isVec3Tuple(player.position) &&
+    (player.target === undefined || isVec3Tuple(player.target)) &&
+    (player.speaking === undefined || typeof player.speaking === 'boolean') &&
+    (player.level === undefined || typeof player.level === 'number')
+);
+
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
     return (
         data &&
         typeof data === 'object' &&
         data.type === MULTIPLAYER_PLAYERS &&
         Array.isArray(data.players) &&
-        data.players.every((player: any) => (
-            player &&
-            typeof player === 'object' &&
-            typeof player.id === 'string' &&
-            typeof player.label === 'string' &&
-            (player.color === undefined || typeof player.color === 'string') &&
-            (player.avatarId === undefined || typeof player.avatarId === 'string') &&
-            (player.avatarName === undefined || typeof player.avatarName === 'string') &&
-            (player.avatarUrl === undefined || typeof player.avatarUrl === 'string') &&
-            isVec3Tuple(player.position) &&
-            (player.target === undefined || isVec3Tuple(player.target)) &&
-            (player.speaking === undefined || typeof player.speaking === 'boolean') &&
-            (player.level === undefined || typeof player.level === 'number')
-        ))
+        data.players.every(isMultiplayerPlayer)
+    );
+};
+
+const isMultiplayerAvatarPreloadMessage = (data: any): data is MultiplayerAvatarPreloadMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === MULTIPLAYER_AVATAR_PRELOAD &&
+        isMultiplayerPlayer(data.player)
     );
 };
 
@@ -859,6 +876,7 @@ const LONG_TASK_REPORT_MS = 5000;
 const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
 const GAME_MODE_ACTIVE_RENDER_IDLE_MS = 320;
+const POINTER_LOOK_ACTIVE_RENDER_MS = 900;
 const ROOM_WARMUP_BACKGROUND_PIXEL_SCALE = 2;
 const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
 
@@ -1308,7 +1326,7 @@ const registerIframeApi = (events: Events) => {
 
         const applyStart = performance.now();
         events.fire('walk.pointerLook', dx, dy);
-        scheduleActiveRender();
+        scheduleActiveRender(POINTER_LOOK_ACTIVE_RENDER_MS);
         const applyMs = performance.now() - applyStart;
         pointerLookStats.totalApplyMs += applyMs;
         pointerLookStats.maxApplyMs = Math.max(pointerLookStats.maxApplyMs, applyMs);
@@ -1590,6 +1608,11 @@ const registerIframeApi = (events: Events) => {
 
         if (isMultiplayerPlayersMessage(event.data)) {
             events.fire('multiplayer.players', event.data.players);
+            return;
+        }
+
+        if (isMultiplayerAvatarPreloadMessage(event.data)) {
+            events.fire('multiplayer.avatarPreload', event.data.player);
             return;
         }
 
