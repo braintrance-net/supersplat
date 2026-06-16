@@ -279,7 +279,7 @@ class RadialMenu extends Container {
         console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);
 
         if (screenPos) {
-            this.showAtPoint(screenPos.x, screenPos.y);
+            this.showAtPoint(screenPos.x, screenPos.y, allowSelectionTool);
         } else {
             // Fallback: center horizontally, near bottom
             this.dom.style.left = '50%';
