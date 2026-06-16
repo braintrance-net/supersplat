@@ -861,8 +861,6 @@ const POSTRENDER_SPIKE_REPORT_MS = 1000;
 const GAME_MODE_ACTIVE_RENDER_IDLE_MS = 320;
 const ROOM_WARMUP_BACKGROUND_PIXEL_SCALE = 2;
 const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
-const MEETING_PERFORMANCE_PIXEL_SCALE = ROOM_WARMUP_BACKGROUND_PIXEL_SCALE;
-const MEETING_PERFORMANCE_MAX_PIXEL_RATIO = ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO;
 
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -909,8 +907,6 @@ const registerIframeApi = (events: Events) => {
     let roomWarmupPreviousPixelScale: number | null = null;
     let roomWarmupPreviousMaxPixelRatio: number | null = null;
     let meetingPerformanceMode = false;
-    let meetingPerformancePreviousPixelScale: number | null = null;
-    let meetingPerformancePreviousMaxPixelRatio: number | null = null;
     let activeRenderTickCount = 0;
     let activeRenderTotalGapMs = 0;
     let activeRenderMaxGapMs = 0;
@@ -1086,7 +1082,7 @@ const registerIframeApi = (events: Events) => {
         const scene = window.scene as any;
         const graphicsDevice = scene?.app?.graphicsDevice;
 
-        if (enabled && !scene?.config?.camera && !graphicsDevice) {
+        if (enabled && !scene) {
             postDiagnostic(source ?? window.parent, origin, 'meeting-performance-mode', {
                 enabled,
                 available: false
@@ -1096,38 +1092,6 @@ const registerIframeApi = (events: Events) => {
 
         const changed = meetingPerformanceMode !== enabled;
         meetingPerformanceMode = enabled;
-
-        if (scene?.config?.camera) {
-            if (enabled) {
-                const currentPixelScale = scene.config.camera.pixelScale;
-                if (meetingPerformancePreviousPixelScale === null && typeof currentPixelScale === 'number') {
-                    meetingPerformancePreviousPixelScale = roomWarmupPreviousPixelScale ?? currentPixelScale;
-                }
-                scene.config.camera.pixelScale = Math.max(
-                    typeof currentPixelScale === 'number' ? currentPixelScale : MEETING_PERFORMANCE_PIXEL_SCALE,
-                    MEETING_PERFORMANCE_PIXEL_SCALE
-                );
-            } else if (meetingPerformancePreviousPixelScale !== null) {
-                scene.config.camera.pixelScale = meetingPerformancePreviousPixelScale;
-                meetingPerformancePreviousPixelScale = null;
-            }
-        }
-
-        if (graphicsDevice) {
-            if (enabled) {
-                const currentMaxPixelRatio = graphicsDevice.maxPixelRatio;
-                if (meetingPerformancePreviousMaxPixelRatio === null && typeof currentMaxPixelRatio === 'number') {
-                    meetingPerformancePreviousMaxPixelRatio = roomWarmupPreviousMaxPixelRatio ?? currentMaxPixelRatio;
-                }
-                graphicsDevice.maxPixelRatio = Math.min(
-                    typeof currentMaxPixelRatio === 'number' ? currentMaxPixelRatio : MEETING_PERFORMANCE_MAX_PIXEL_RATIO,
-                    MEETING_PERFORMANCE_MAX_PIXEL_RATIO
-                );
-            } else if (meetingPerformancePreviousMaxPixelRatio !== null) {
-                graphicsDevice.maxPixelRatio = meetingPerformancePreviousMaxPixelRatio;
-                meetingPerformancePreviousMaxPixelRatio = null;
-            }
-        }
 
         if (scene) {
             scene.forceRender = true;
