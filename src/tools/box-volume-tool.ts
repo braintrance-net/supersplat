@@ -104,14 +104,12 @@ class BoxVolumeTool {
             scene.forceRender = true;
         });
         gizmo.on('transform:move', () => {
-            center.copy(box.pivot.getPosition());
-            box.moved();
-            syncCornerFromCenter();
-            updateVolumeShape();
-            updateOverlay();
-            updateResizeHandles();
+            syncBoxFromPivot();
             queueSelectionRefresh();
-            scene.forceRender = true;
+        });
+        gizmo.on('transform:end', () => {
+            syncBoxFromPivot();
+            queueSelectionRefresh(true);
         });
 
         const overlaySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -174,9 +172,9 @@ class BoxVolumeTool {
             };
         };
 
-        const selectCurrentBox = (op: 'set' | 'add' | 'remove' = 'set') => {
+        const selectCurrentBox = (op: 'set' | 'add' | 'remove' = 'set', live = false) => {
             const obb = currentBox();
-            return events.invoke('select.byOBBNow', op, {
+            return events.invoke(live ? 'select.byOBBLiveNow' : 'select.byOBBNow', op, {
                 center: obb.center,
                 dimensions: obb.dimensions,
                 rotation: obb.rotation
@@ -202,7 +200,7 @@ class BoxVolumeTool {
             selectionRefreshQueued = false;
             selectionRefreshInFlight = true;
             try {
-                await selectCurrentBox('set');
+                await selectCurrentBox('set', true);
             } catch (err) {
                 console.warn('[BoxVolume] live selection refresh failed', err);
             } finally {
@@ -213,11 +211,21 @@ class BoxVolumeTool {
             }
         }
 
-        function queueSelectionRefresh() {
+        function queueSelectionRefresh(immediate = false) {
             if (!active || phase !== 'placed' || !boxAdded) {
                 return;
             }
             selectionRefreshQueued = true;
+            if (immediate) {
+                if (selectionRefreshFrame !== null) {
+                    window.cancelAnimationFrame(selectionRefreshFrame);
+                    selectionRefreshFrame = null;
+                }
+                runSelectionRefresh().catch((err) => {
+                    console.warn('[BoxVolume] live selection refresh failed', err);
+                });
+                return;
+            }
             if (selectionRefreshFrame !== null || selectionRefreshInFlight) {
                 return;
             }
@@ -227,6 +235,16 @@ class BoxVolumeTool {
                     console.warn('[BoxVolume] live selection refresh failed', err);
                 });
             });
+        }
+
+        function syncBoxFromPivot() {
+            center.copy(box.pivot.getPosition());
+            box.moved();
+            syncCornerFromCenter();
+            updateVolumeShape();
+            updateOverlay();
+            updateResizeHandles();
+            scene.forceRender = true;
         }
 
         const syncNumericInput = (input: NumericInput, value: number) => {
@@ -1000,7 +1018,7 @@ class BoxVolumeTool {
                 syncInputs();
                 updateOverlay();
                 updateResizeHandles();
-                applySelection('set');
+                queueSelectionRefresh(true);
             } else {
                 return;
             }

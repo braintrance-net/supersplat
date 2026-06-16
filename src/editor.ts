@@ -319,6 +319,35 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     };
 
+    const intersectCentersLive = async (splat: Splat, op: 'add'|'remove'|'set', options: any) => {
+        const data = await scene.dataProcessor.intersect(options, splat);
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        let changed = false;
+
+        for (let i = 0; i < state.length; ++i) {
+            const selectedByVolume = data[i] === 255;
+            const selected = state[i] === State.selected;
+            let nextState = state[i];
+
+            if (op === 'add' && state[i] === 0 && selectedByVolume) {
+                nextState = state[i] | State.selected;
+            } else if (op === 'remove' && selected && selectedByVolume) {
+                nextState = state[i] & (~State.selected);
+            } else if (op === 'set' && selected !== selectedByVolume) {
+                nextState = state[i] ^ State.selected;
+            }
+
+            if (nextState !== state[i]) {
+                state[i] = nextState;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            await splat.updateState(State.selected);
+        }
+    };
+
     events.on('select.bySphere', async (op: 'add'|'remove'|'set', sphere: number[]) => {
         for (const splat of selectedSplats()) {
             await intersectCenters(splat, op, {
@@ -364,6 +393,39 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     };
 
     events.function('select.byOBBNow', selectByOBB);
+
+    const selectByOBBLive = async (
+        op: 'add'|'remove'|'set',
+        obb: { center: number[], dimensions: number[], rotation: number[][] }
+    ) => {
+        let splatCount = 0;
+        let before = 0;
+        let after = 0;
+        for (const splat of selectedSplats()) {
+            splatCount++;
+            before += splat.numSelected;
+            await intersectCentersLive(splat, op, {
+                obb: {
+                    x: obb.center[0],
+                    y: obb.center[1],
+                    z: obb.center[2],
+                    lenx: obb.dimensions[0],
+                    leny: obb.dimensions[1],
+                    lenz: obb.dimensions[2],
+                    rotation: obb.rotation
+                }
+            });
+            after += splat.numSelected;
+        }
+        const result = { splat_count: splatCount, selected_before: before, selected_after: after, live: true };
+        events.fire('select.byOBB.result', result);
+        if (splatCount > 0) {
+            events.fire('view.setSelectedSplatsOverlay', true);
+        }
+        return result;
+    };
+
+    events.function('select.byOBBLiveNow', selectByOBBLive);
 
     events.on('select.byOBB', (op: 'add'|'remove'|'set', obb: { center: number[], dimensions: number[], rotation: number[][] }) => {
         selectByOBB(op, obb).catch((err) => {
