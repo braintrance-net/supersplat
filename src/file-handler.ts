@@ -16,6 +16,16 @@ type ExportType = 'ply' | 'splat' | 'sog' | 'viewer';
 
 type FileType = 'ply' | 'compressedPly' | 'splat' | 'sog' | 'htmlViewer' | 'packageViewer';
 
+const URL_IMPORT_RETRY_DELAY_MS = 750;
+
+const delay = (ms: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+});
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const shouldRetryUrlImport = (error: unknown) => /network|fetch|failed to load|load failed/i.test(errorMessage(error));
+
 interface SceneExportOptions {
     filename: string;
     splatIdx: 'all' | number;
@@ -283,12 +293,23 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 mainFile.url :
                 mainFile.filename;
 
-            const model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
+            let model;
+            try {
+                model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
+            } catch (error) {
+                if (!mainFile.contents && mainFile.url && shouldRetryUrlImport(error)) {
+                    console.warn(`[Import] retrying URL import after ${errorMessage(error)}`);
+                    await delay(URL_IMPORT_RETRY_DELAY_MS);
+                    model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
+                } else {
+                    throw error;
+                }
+            }
             await scene.add(model);
             return model;
         } catch (error) {
             const displayName = files[0]?.filename ?? 'unknown';
-            await showLoadError(error.message ?? error, displayName);
+            await showLoadError(errorMessage(error), displayName);
         }
     };
 
