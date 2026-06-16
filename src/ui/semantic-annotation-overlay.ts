@@ -166,6 +166,7 @@ const MULTIPLAYER_VRM_MOUTH_MORPH_FALLBACK_INDICES = [0, 1, 2, 3, 4];
 const MULTIPLAYER_VRM_TARGET_HEIGHT = 1.7;
 const MULTIPLAYER_VRM_EYE_HEIGHT = 1.48;
 const MULTIPLAYER_AVATAR_LABEL_CLEARANCE = 0.24;
+const MULTIPLAYER_AVATAR_RETRY_MS = 10_000;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -374,7 +375,7 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerAvatarInstances = new Map<string, MultiplayerAvatarInstance>();
     private readonly multiplayerAvatarAssets = new Map<string, Asset>();
     private readonly multiplayerAvatarLoadingUrls = new Set<string>();
-    private readonly multiplayerAvatarFailedUrls = new Set<string>();
+    private readonly multiplayerAvatarFailedAt = new Map<string, number>();
     private readonly multiplayerAvatarLoadStartedAt = new Map<string, number>();
     private annotations: SemanticAnnotation[] = [];
     private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
@@ -532,13 +533,17 @@ class SemanticAnnotationOverlay {
         player?: MultiplayerOverlayPlayer,
         avatar: MultiplayerAvatarInstance | null = null
     ) {
+        const awaitingAvatar = Boolean(player && this.multiplayerAvatarUrl(player) && !avatar);
         marker.classList.toggle('has-3d-avatar', Boolean(avatar));
-        marker.classList.toggle('awaiting-3d-avatar', false);
+        marker.classList.toggle('awaiting-3d-avatar', awaitingAvatar);
     }
 
     private setRoomWarmupBackground(background?: boolean) {
         this.roomWarmupBackground = background === true;
         if (!this.roomWarmupBackground && this.multiplayerPlayers.length) {
+            for (const player of this.multiplayerPlayers) {
+                this.preloadMultiplayerAvatarAsset(player, { reason: 'warmup-visible', count: this.multiplayerPlayers.length });
+            }
             this.update();
             this.scene.forceRender = true;
         }
@@ -737,7 +742,26 @@ class SemanticAnnotationOverlay {
         if (!url) {
             return;
         }
-        if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url) || this.multiplayerAvatarFailedUrls.has(url)) {
+        if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
+            return;
+        }
+
+        const failedAt = this.multiplayerAvatarFailedAt.get(url);
+        if (failedAt !== undefined) {
+            const retryAgeMs = performance.now() - failedAt;
+            if (retryAgeMs < MULTIPLAYER_AVATAR_RETRY_MS) {
+                return;
+            }
+            this.multiplayerAvatarFailedAt.delete(url);
+            this.emitDiagnostic('multiplayer-avatar-url-retry', {
+                url,
+                reason,
+                retryAgeMs: Number(retryAgeMs.toFixed(1)),
+                ...details
+            });
+        }
+
+        if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
             return;
         }
 
@@ -750,7 +774,7 @@ class SemanticAnnotationOverlay {
             this.multiplayerAvatarLoadingUrls.delete(url);
             this.multiplayerAvatarLoadStartedAt.delete(url);
             if (error || !asset) {
-                this.multiplayerAvatarFailedUrls.add(url);
+                this.multiplayerAvatarFailedAt.set(url, performance.now());
                 this.emitDiagnostic('multiplayer-avatar-url-failed', {
                     url,
                     error: error instanceof Error ? error.message : String(error ?? 'unknown')
@@ -768,6 +792,7 @@ class SemanticAnnotationOverlay {
                 return;
             }
 
+            this.multiplayerAvatarFailedAt.delete(url);
             this.multiplayerAvatarAssets.set(url, asset);
             const resource = asset.resource as MultiplayerAvatarContainer | undefined;
             this.emitDiagnostic('multiplayer-avatar-preload-ready', {
@@ -1044,7 +1069,7 @@ class SemanticAnnotationOverlay {
         const entity = resource.instantiateRenderEntity?.({ castShadows: false, receiveShadows: false }) ??
             resource.instantiateModelEntity?.({ castShadows: false, receiveShadows: false });
         if (!entity) {
-            this.multiplayerAvatarFailedUrls.add(avatarUrl);
+            this.multiplayerAvatarFailedAt.set(avatarUrl, performance.now());
             return null;
         }
 
@@ -2026,13 +2051,9 @@ class SemanticAnnotationOverlay {
                 this.updateMultiplayerAvatar(player, avatar, avatarWorldHeight, nowMs);
             }
             this.updateMultiplayerMarkerAvatarState(marker, player, avatar);
-            marker.hidden = !avatar;
-            if (!avatar) {
-                continue;
-            }
 
-            const renderedAvatarHeight = this.multiplayerAvatarRenderedHeight(avatar, avatarWorldHeight);
-            const avatarEyeHeight = this.multiplayerAvatarEyeHeight(avatar, avatarWorldHeight);
+            const renderedAvatarHeight = avatar ? this.multiplayerAvatarRenderedHeight(avatar, avatarWorldHeight) : avatarWorldHeight;
+            const avatarEyeHeight = avatar ? this.multiplayerAvatarEyeHeight(avatar, avatarWorldHeight) : avatarWorldHeight;
             const avatarFeetY = player.position[1] - avatarEyeHeight;
             this.multiplayerLabelWorld.set(player.position[0], avatarFeetY + renderedAvatarHeight + MULTIPLAYER_AVATAR_LABEL_CLEARANCE, player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerLabelWorld, this.multiplayerLabelScreenPos);
