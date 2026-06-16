@@ -4,7 +4,6 @@ import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { localize } from './localization';
 import assetBrowserSvg from './svg/asset-browser.svg';
-import micSvg from './svg/microphone.svg';
 import redoSvg from './svg/redo.svg';
 import boxVolumeSvg from './svg/select-box-volume.svg';
 import boxerSvg from './svg/select-boxer.svg';
@@ -92,11 +91,6 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
-        const mic = new Button({
-            id: 'bottom-toolbar-mic',
-            class: 'bottom-toolbar-tool'
-        });
-
         const touch = new Button({
             id: 'bottom-toolbar-touch',
             class: 'bottom-toolbar-tool'
@@ -181,7 +175,6 @@ class BottomToolbar extends Container {
         });
 
         normal.dom.appendChild(createSvg(normalSvg));
-        mic.dom.appendChild(createSvg(micSvg));
         touch.dom.appendChild(createSvg(touchSvg));
         boxer.dom.appendChild(createSvg(boxerSvg));
         brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
@@ -196,7 +189,6 @@ class BottomToolbar extends Container {
         simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
         appendSimplified(normal);
-        appendSimplified(mic);
         appendSimplified(touch);
         appendSimplified(boxer);
         appendSimplified(brushBoxerSelect);
@@ -240,11 +232,6 @@ class BottomToolbar extends Container {
         appendSimplified(simplifiedAssetBrowser);
 
         normal.dom.addEventListener('click', () => events.fire('tool.deactivate'));
-        mic.dom.addEventListener('click', () => events.fire('voice.toggle'));
-        mic.dom.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            events.fire('voice.toggleWakeWord');
-        });
         let brushVariant: 'boxer' | 'sam' | 'raw' = 'boxer';
         const activateBrushVariant = (variant: 'boxer' | 'sam' | 'raw') => {
             const activeTool = events.invoke('tool.active');
@@ -281,7 +268,6 @@ class BottomToolbar extends Container {
         simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
         tooltips.register(normal, tooltip('No Tool', 'tool.deactivate'));
-        tooltips.register(mic, 'Voice Control (hold Space, right-click for wake word)');
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
         tooltips.register(brushBoxerSelect, tooltip('Brush Boxer', 'tool.brushSelection.boxer'));
@@ -493,14 +479,6 @@ class BottomToolbar extends Container {
 
         events.on('assetBrowser.visible', (visible: boolean) => {
             simplifiedAssetBrowser.class[visible ? 'add' : 'remove']('active');
-        });
-
-        events.on('voice.active', (active: boolean) => {
-            mic.dom.classList[active ? 'add' : 'remove']('voice-active');
-        });
-
-        events.on('voice.listening', (listening: boolean) => {
-            mic.dom.classList[listening ? 'add' : 'remove']('voice-listening');
         });
 
         const transcriptEl = document.createElement('div');

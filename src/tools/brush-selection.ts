@@ -103,6 +103,10 @@ class BrushSelection {
             'user-select:none'
         ].join(';');
 
+        const setControlsVisible = (visible: boolean) => {
+            controls.classList[visible ? 'remove' : 'add']('hidden');
+        };
+
         const controlHeader = document.createElement('div');
         controlHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px';
 
@@ -485,7 +489,7 @@ class BrushSelection {
             surfaceMissStreak = 0;
             exitSurfaceMode();
             svg.classList.remove('hidden');
-            controls.classList.remove('hidden');
+            setControlsVisible(events.invoke('tool.active') === 'brushSelection');
             parent.style.display = 'block';
             parent.addEventListener('pointerdown', pointerdown);
             parent.addEventListener('pointermove', pointermove);
@@ -501,7 +505,7 @@ class BrushSelection {
                 dragEnd();
             }
             svg.classList.add('hidden');
-            controls.classList.add('hidden');
+            setControlsVisible(false);
             parent.style.display = 'none';
             parent.removeEventListener('pointerdown', pointerdown);
             parent.removeEventListener('pointermove', pointermove);
@@ -522,6 +526,10 @@ class BrushSelection {
         events.on('brushSelection.variant', (value: BrushSelectionVariant) => {
             variant = value === 'sam' || value === 'raw' ? value : 'boxer';
             events.fire('brushSelection.variant.changed', variant);
+        });
+
+        events.on('tool.activated', (toolName: string | null) => {
+            setControlsVisible(toolName === 'brushSelection');
         });
 
         try {
