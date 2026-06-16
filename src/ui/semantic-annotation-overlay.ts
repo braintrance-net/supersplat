@@ -1528,6 +1528,25 @@ class SemanticAnnotationOverlay {
             return existing;
         }
 
+        if (player.avatarId) {
+            const calibration = {
+                height: MULTIPLAYER_DEFAULT_HEIGHT,
+                groundY: undefined
+            } satisfies MultiplayerHeightCalibration;
+            this.multiplayerHeightCalibrations.set(player.id, calibration);
+            this.emitDiagnostic('multiplayer-avatar-height-calibrated', {
+                playerId: player.id,
+                height: Number(calibration.height.toFixed(3)),
+                groundY: null,
+                source: 'meeting-avatar-default',
+                totalCenters: 0,
+                stride: 0,
+                sampled: 0,
+                calibrationMs: 0
+            });
+            return calibration;
+        }
+
         const startedAt = performance.now();
         const head = {
             x: player.position[0],
