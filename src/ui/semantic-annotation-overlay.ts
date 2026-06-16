@@ -388,6 +388,7 @@ class SemanticAnnotationOverlay {
     private lastClickCandidates: Array<Record<string, unknown>> = [];
     private sceneGeometryRevision = 0;
     private hitVolumeRebuildTimer: number | null = null;
+    private roomWarmupBackground = false;
 
     constructor(private readonly events: Events, private readonly scene: Scene, parent: HTMLElement) {
         this.container = document.createElement('div');
@@ -400,6 +401,7 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         events.on('walk.collisionDebug', this.onCollisionDebug, this);
+        events.on('walk.warmupBackground', this.setRoomWarmupBackground, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
         events.on('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         events.on('scene.elementAdded', this.onSceneGeometryChanged, this);
@@ -423,6 +425,7 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         this.events.off('walk.collisionDebug', this.onCollisionDebug, this);
+        this.events.off('walk.warmupBackground', this.setRoomWarmupBackground, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
         this.events.off('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         this.events.off('scene.elementAdded', this.onSceneGeometryChanged, this);
@@ -533,6 +536,14 @@ class SemanticAnnotationOverlay {
         marker.classList.toggle('awaiting-3d-avatar', false);
     }
 
+    private setRoomWarmupBackground(background?: boolean) {
+        this.roomWarmupBackground = background === true;
+        if (!this.roomWarmupBackground && this.multiplayerPlayers.length) {
+            this.update();
+            this.scene.forceRender = true;
+        }
+    }
+
     private setMultiplayerPlayers(players?: MultiplayerOverlayPlayer[]) {
         this.multiplayerPlayers = Array.isArray(players) ? players : [];
         const ids = new Set(this.multiplayerPlayers.map(player => player.id));
@@ -573,6 +584,10 @@ class SemanticAnnotationOverlay {
             const body = marker.querySelector('.multiplayer-avatar-body') as HTMLElement | null;
             if (body) body.style.filter = player.speaking ? 'drop-shadow(0 0 9px #91d9ce) drop-shadow(0 0 4px #91d9ce)' : '';
             this.updateMultiplayerMarkerAvatarState(marker, player);
+        }
+
+        if (this.roomWarmupBackground) {
+            return;
         }
 
         this.update();
@@ -682,7 +697,7 @@ class SemanticAnnotationOverlay {
     }
 
     private onSceneUpdate(deltaTime = 1 / 60) {
-        if (this.multiplayerAvatarInstances.size === 0) {
+        if (this.roomWarmupBackground || this.multiplayerAvatarInstances.size === 0) {
             return;
         }
 
@@ -746,8 +761,10 @@ class SemanticAnnotationOverlay {
                         if (marker) this.updateMultiplayerMarkerAvatarState(marker, player);
                     }
                 }
-                this.update();
-                this.scene.forceRender = true;
+                if (!this.roomWarmupBackground) {
+                    this.update();
+                    this.scene.forceRender = true;
+                }
                 return;
             }
 
@@ -765,8 +782,10 @@ class SemanticAnnotationOverlay {
                     if (marker) this.updateMultiplayerMarkerAvatarState(marker, player);
                 }
             }
-            this.update();
-            this.scene.forceRender = true;
+            if (!this.roomWarmupBackground) {
+                this.update();
+                this.scene.forceRender = true;
+            }
         });
     }
 
@@ -1951,6 +1970,10 @@ class SemanticAnnotationOverlay {
     }
 
     private updateMultiplayerPlayers(clientWidth: number, clientHeight: number) {
+        if (this.roomWarmupBackground) {
+            return;
+        }
+
         const nowMs = performance.now();
         for (const player of this.multiplayerPlayers) {
             const marker = this.multiplayerMarkers.get(player.id);
