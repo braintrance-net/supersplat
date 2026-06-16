@@ -423,6 +423,9 @@ class BrushSelection {
                 }
 
                 dragEnd();
+                if (variant === 'raw') {
+                    events.fire('selection.commit', { source: 'brushSelection', variant });
+                }
             }
         };
 

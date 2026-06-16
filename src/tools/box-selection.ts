@@ -29,7 +29,7 @@ class BoxSelection {
 
         gizmo.on('transform:end', () => {
             box.moved();
-            queueSelectionRefresh(true);
+            queueSelectionRefresh(true, true);
         });
 
         // resize mode: six face handles, each dragging ONLY its own face along
@@ -123,7 +123,11 @@ class BoxSelection {
         };
 
         const apply = (op: 'set' | 'add' | 'remove') => {
-            selectCurrentBox(op).catch((err) => {
+            selectCurrentBox(op)
+            .then(() => {
+                events.fire('selection.commit', { source: 'boxSelection', action: op });
+            })
+            .catch((err) => {
                 console.warn('[BoxSelection] selection apply failed', err);
             });
         };
@@ -148,6 +152,7 @@ class BoxSelection {
         let selectionRefreshQueued = false;
         let selectionRefreshInFlight = false;
         let selectionRefreshFrame: number | null = null;
+        let showRadialAfterSelectionRefresh = false;
         const isActive = () => this.active;
 
         const runSelectionRefresh = async () => {
@@ -170,13 +175,19 @@ class BoxSelection {
                 selectionRefreshInFlight = false;
                 if (selectionRefreshQueued && isActive()) {
                     queueSelectionRefresh();
+                } else if (showRadialAfterSelectionRefresh) {
+                    showRadialAfterSelectionRefresh = false;
+                    events.fire('selection.commit', { source: 'boxSelection', action: 'edit' });
                 }
             }
         };
 
-        function queueSelectionRefresh(immediate = false) {
+        function queueSelectionRefresh(immediate = false, showRadial = false) {
             if (!isActive()) {
                 return;
+            }
+            if (showRadial) {
+                showRadialAfterSelectionRefresh = true;
             }
             selectionRefreshQueued = true;
             if (immediate) {
@@ -206,6 +217,7 @@ class BoxSelection {
                 selectionRefreshFrame = null;
             }
             selectionRefreshQueued = false;
+            showRadialAfterSelectionRefresh = false;
         };
 
         const cancelActiveDrag = () => {
@@ -394,13 +406,13 @@ class BoxSelection {
                 }
                 activeDrag = null;
                 dom.style.cursor = 'grab';
-                queueSelectionRefresh(true);
+                queueSelectionRefresh(true, true);
             };
             const lostPointerCapture = (event: PointerEvent) => {
                 if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
                 activeDrag = null;
                 dom.style.cursor = 'grab';
-                queueSelectionRefresh(true);
+                queueSelectionRefresh(true, true);
             };
             dom.addEventListener('pointerup', endDrag);
             dom.addEventListener('pointercancel', endDrag);

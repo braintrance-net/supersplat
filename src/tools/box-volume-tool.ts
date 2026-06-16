@@ -95,6 +95,7 @@ class BoxVolumeTool {
         let selectionRefreshQueued = false;
         let selectionRefreshInFlight = false;
         let selectionRefreshFrame: number | null = null;
+        let showRadialAfterSelectionRefresh = false;
         const resizeHandles: ResizeHandle[] = [];
 
         const depthAxis = (out: Vec3) => out.set(widthDir.z, 0, -widthDir.x);
@@ -109,7 +110,7 @@ class BoxVolumeTool {
         });
         gizmo.on('transform:end', () => {
             syncBoxFromPivot();
-            queueSelectionRefresh(true);
+            queueSelectionRefresh(true, true);
         });
 
         const overlaySvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -182,7 +183,11 @@ class BoxVolumeTool {
         };
 
         const applySelection = (op: 'set' | 'add' | 'remove') => {
-            selectCurrentBox(op).catch((err) => {
+            selectCurrentBox(op)
+            .then(() => {
+                events.fire('selection.commit', { source: 'boxVolume', action: op });
+            })
+            .catch((err) => {
                 console.warn('[BoxVolume] selection apply failed', err);
             });
         };
@@ -207,13 +212,19 @@ class BoxVolumeTool {
                 selectionRefreshInFlight = false;
                 if (selectionRefreshQueued && active && phase === 'placed' && boxAdded) {
                     queueSelectionRefresh();
+                } else if (showRadialAfterSelectionRefresh) {
+                    showRadialAfterSelectionRefresh = false;
+                    events.fire('selection.commit', { source: 'boxVolume', action: 'edit' });
                 }
             }
         }
 
-        function queueSelectionRefresh(immediate = false) {
+        function queueSelectionRefresh(immediate = false, showRadial = false) {
             if (!active || phase !== 'placed' || !boxAdded) {
                 return;
+            }
+            if (showRadial) {
+                showRadialAfterSelectionRefresh = true;
             }
             selectionRefreshQueued = true;
             if (immediate) {
@@ -811,11 +822,13 @@ class BoxVolumeTool {
                 }
                 activeDrag = null;
                 dom.style.cursor = 'grab';
+                queueSelectionRefresh(true, true);
             };
             const lostPointerCapture = (event: PointerEvent) => {
                 if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
                 activeDrag = null;
                 dom.style.cursor = 'grab';
+                queueSelectionRefresh(true, true);
             };
             dom.addEventListener('pointerup', endDrag);
             dom.addEventListener('pointercancel', endDrag);
@@ -1037,7 +1050,7 @@ class BoxVolumeTool {
                 syncInputs();
                 updateOverlay();
                 updateResizeHandles();
-                queueSelectionRefresh(true);
+                queueSelectionRefresh(true, true);
             } else {
                 return;
             }
@@ -1061,6 +1074,7 @@ class BoxVolumeTool {
                 selectionRefreshFrame = null;
             }
             selectionRefreshQueued = false;
+            showRadialAfterSelectionRefresh = false;
             cancelActiveDrag();
             phase = 'idle';
             clicked = false;

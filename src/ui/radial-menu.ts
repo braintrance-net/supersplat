@@ -188,6 +188,14 @@ class RadialMenu extends Container {
         events.on('selection.changed', checkSelection);
         events.on('splat.stateChanged', checkSelection);
 
+        events.on('selection.commit', () => {
+            window.setTimeout(() => {
+                if (events.invoke('selection.splats')) {
+                    this.showNearSelection(true);
+                }
+            }, 80);
+        });
+
         // Show menu immediately at click point when SAM3 starts processing
         events.on('sam3.clickStarted', (pt: { x: number; y: number }) => {
             if (this.oneShotTool) return;
@@ -240,9 +248,9 @@ class RadialMenu extends Container {
         this.events.fire(`tool.${toolName}`);
     }
 
-    private showAtPoint(x: number, y: number) {
+    private showAtPoint(x: number, y: number, allowSelectionTool = false) {
         if (this.oneShotTool) return;
-        if (this.selectionToolNames.has(this.events.invoke('tool.active') as string)) return;
+        if (!allowSelectionTool && this.selectionToolNames.has(this.events.invoke('tool.active') as string)) return;
 
         const padding = 170;
         const clampedX = Math.max(padding, Math.min(x, window.innerWidth - padding));
@@ -260,9 +268,9 @@ class RadialMenu extends Container {
         });
     }
 
-    private showNearSelection() {
+    private showNearSelection(allowSelectionTool = false) {
         if (this.oneShotTool) return;
-        if (this.selectionToolNames.has(this.events.invoke('tool.active') as string)) {
+        if (!allowSelectionTool && this.selectionToolNames.has(this.events.invoke('tool.active') as string)) {
             this.hide();
             return;
         }
