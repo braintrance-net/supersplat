@@ -390,6 +390,7 @@ class SemanticAnnotationOverlay {
     private sceneGeometryRevision = 0;
     private hitVolumeRebuildTimer: number | null = null;
     private roomWarmupBackground = false;
+    private lastMultiplayerStatsDiagnosticAt = 0;
 
     constructor(private readonly events: Events, private readonly scene: Scene, parent: HTMLElement) {
         this.container = document.createElement('div');
@@ -563,7 +564,9 @@ class SemanticAnnotationOverlay {
         }
 
         for (const player of this.multiplayerPlayers) {
-            this.preloadMultiplayerAvatarAsset(player, { reason: 'players', count: this.multiplayerPlayers.length });
+            if (!player.hidden) {
+                this.preloadMultiplayerAvatarAsset(player, { reason: 'players', count: this.multiplayerPlayers.length });
+            }
             let marker = this.multiplayerMarkers.get(player.id);
             if (!marker) {
                 marker = document.createElement('div');
@@ -590,6 +593,7 @@ class SemanticAnnotationOverlay {
             if (body) body.style.filter = player.speaking ? 'drop-shadow(0 0 9px #91d9ce) drop-shadow(0 0 4px #91d9ce)' : '';
             this.updateMultiplayerMarkerAvatarState(marker, player);
         }
+        this.emitMultiplayerStatsDiagnostic('players');
 
         if (this.roomWarmupBackground) {
             return;
@@ -597,6 +601,35 @@ class SemanticAnnotationOverlay {
 
         this.update();
         this.scene.forceRender = true;
+    }
+
+    private emitMultiplayerStatsDiagnostic(reason: string) {
+        const now = performance.now();
+        if (now - this.lastMultiplayerStatsDiagnosticAt < 2000) {
+            return;
+        }
+
+        const hiddenPlayers = this.multiplayerPlayers.filter(player => player.hidden).length;
+        let visiblePlayers = 0;
+        for (const player of this.multiplayerPlayers) {
+            if (!player.hidden) {
+                visiblePlayers += 1;
+            }
+        }
+
+        this.lastMultiplayerStatsDiagnosticAt = now;
+        this.emitDiagnostic('multiplayer-player-stats', {
+            reason,
+            players: this.multiplayerPlayers.length,
+            visiblePlayers,
+            hiddenPlayers,
+            markers: this.multiplayerMarkers.size,
+            avatarInstances: this.multiplayerAvatarInstances.size,
+            avatarAssets: this.multiplayerAvatarAssets.size,
+            avatarLoading: this.multiplayerAvatarLoadingUrls.size,
+            avatarFailed: this.multiplayerAvatarFailedAt.size,
+            roomWarmupBackground: this.roomWarmupBackground
+        });
     }
 
     private setGameTargets(annotationIds?: string[]) {
