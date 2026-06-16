@@ -9,9 +9,9 @@ type RawBrushMode = 'new' | 'add' | 'remove' | 'intersect';
 const LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED = true;
 const LIVE_GAUSSIAN_PREVIEW_INTERVAL_MS = 90;
 const BRUSH_STROKE_ACTIVE_COLOR = '#2388ff';
+const BRUSH_STROKE_REMOVE_COLOR = '#ff382e';
 const BRUSH_STROKE_FINAL_COLOR = '#16c784';
 const BRUSH_STROKE_FINAL_HOLD_MS = 700;
-const BRUSH_SELECTION_ACTIVE_COLOR = new Color(0.14, 0.53, 1.0, 1);
 const BRUSH_SELECTION_FINAL_COLOR = new Color(0.08, 0.78, 0.52, 1);
 
 const livePreviewEnabledFromUrl = () => {
@@ -99,6 +99,10 @@ class BrushSelection {
 
         const selectionOpNeedsExistingSelection = (op: BrushSelectionOp) => {
             return op !== 'set';
+        };
+
+        const rawModeAllows2DPreview = (op: BrushSelectionOp) => {
+            return op === 'remove' || op === 'intersect';
         };
 
         const isRawBrushVariant = () => {
@@ -400,9 +404,9 @@ class BrushSelection {
             context.globalCompositeOperation = 'copy';
         };
 
-        const holdFinalStroke = () => {
+        const holdFinalStroke = (color = BRUSH_STROKE_FINAL_COLOR) => {
             cancelFinalStrokeHold();
-            repaintMaskStroke(BRUSH_STROKE_FINAL_COLOR);
+            repaintMaskStroke(color);
             canvas.style.display = 'inline';
             finalStrokeTimer = window.setTimeout(() => {
                 canvas.style.display = 'none';
@@ -439,7 +443,7 @@ class BrushSelection {
             if (!livePreviewEnabled || dragId === undefined) {
                 return;
             }
-            if (is2DRawBrush()) {
+            if (is2DRawBrush() && !rawModeAllows2DPreview(op)) {
                 return;
             }
             if (isRawBrushVariant() && selectionOpNeedsExistingSelection(op) && !hasCurrentGaussianSelection()) {
@@ -470,7 +474,9 @@ class BrushSelection {
 
             if (dragId !== undefined) {
                 context.beginPath();
-                context.strokeStyle = is2DRawBrush() ? BRUSH_STROKE_ACTIVE_COLOR : '#f60';
+                context.strokeStyle = is2DRawBrush() && selectionOpFromPointer(e) === 'remove' ?
+                    BRUSH_STROKE_REMOVE_COLOR :
+                    (is2DRawBrush() ? BRUSH_STROKE_ACTIVE_COLOR : '#f60');
                 context.lineCap = 'round';
                 context.lineWidth = radius * 2;
                 context.moveTo(prev.x, prev.y);
@@ -493,9 +499,6 @@ class BrushSelection {
                 if (isRawBrushVariant() && selectionOpNeedsExistingSelection(selectionOp) && !hasCurrentGaussianSelection()) {
                     toastRawModeNeedsSelection();
                     return;
-                }
-                if (is2DRawBrush()) {
-                    events.fire('setSelectedClr', BRUSH_SELECTION_ACTIVE_COLOR);
                 }
                 events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
@@ -581,7 +584,7 @@ class BrushSelection {
                 if (selectionResult && is2DRawBrush()) {
                     events.fire('setSelectedClr', BRUSH_SELECTION_FINAL_COLOR);
                     events.fire('view.setSelectedSplatsOverlay', true);
-                    holdFinalStroke();
+                    holdFinalStroke(selectionOp === 'remove' ? BRUSH_STROKE_REMOVE_COLOR : BRUSH_STROKE_FINAL_COLOR);
                 }
 
                 if (selectionResult) {

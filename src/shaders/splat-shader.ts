@@ -5,11 +5,13 @@ uniform sampler2D splatState;
 
 uniform vec4 selectedClr;
 uniform vec4 lockedClr;
+uniform vec4 selectionRemovePreviewClr;
 
 uniform vec3 clrOffset;
 uniform vec4 clrScale;
 
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
+varying mediump float removePreview;
 varying mediump vec4 color;
 
 #if PICK_PASS
@@ -41,31 +43,33 @@ void main(void) {
     }
 
     // get per-gaussian edit state, discard if deleted
-    uint vertexState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5) & 7u;
+    uint vertexState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5);
+    uint editState = vertexState & 7u;
+    bool isRemovePreview = (vertexState & 8u) != 0u;
 
     #if PICK_PASS
         if (pickOp == 0u) {
             // add: skip deleted, locked and selected splats
-            if (vertexState != 0u) {
+            if (editState != 0u) {
                 gl_Position = discardVec;
                 return;
             }
         } else if (pickOp == 1u) {
             // remove: skip deleted, locked and unselected splats
-            if (vertexState != 1u) {
+            if (editState != 1u) {
                 gl_Position = discardVec;
                 return;
             }
         } else {
             // set: skip deleted and locked splats
-            if ((vertexState & 6u) != 0u) {
+            if ((editState & 6u) != 0u) {
                 gl_Position = discardVec;
                 return;
             }
         }
     #else
         // skip deleted splats
-        if ((vertexState & 4u) != 0u) {
+        if ((editState & 4u) != 0u) {
             gl_Position = discardVec;
             return;
         }
@@ -103,9 +107,10 @@ void main(void) {
     // store texture coord and locked state
     texCoord_flags = vec4(
         corner.uv,
-        (vertexState & 1u) != 0u ? 1.0 : 0.0,       // selected
-        (vertexState & 2u) != 0u ? 1.0 : 0.0        // locked
+        (editState & 1u) != 0u ? 1.0 : 0.0,         // selected
+        (editState & 2u) != 0u ? 1.0 : 0.0          // locked
     );
+    removePreview = isRemovePreview ? 1.0 : 0.0;
 
     #if PICK_PASS
         if (pickMode == 1) {
@@ -151,10 +156,10 @@ void main(void) {
         color = vec4(prepareOutputFromGamma(max(color.xyz, 0.0)), color.w);
 
         // apply locked/selected colors
-        if ((vertexState & 2u) != 0u) {
+        if ((editState & 2u) != 0u) {
             // locked
             color *= lockedClr;
-        } else if ((vertexState & 1u) != 0u) {
+        } else if ((editState & 1u) != 0u) {
             // selected: subtle brighten so splats pop under the glass bubble
             color.xyz *= 1.1;
         }
@@ -164,9 +169,11 @@ void main(void) {
 
 const fragmentShader = /* glsl*/`
 varying mediump vec4 texCoord_flags;
+varying mediump float removePreview;
 varying mediump vec4 color;
 
 uniform vec4 selectedClr;
+uniform vec4 selectionRemovePreviewClr;
 uniform bool outlineMode;
 uniform float selectedSplatOverlay;
 uniform float ringSize;
@@ -217,6 +224,15 @@ void main(void) {
         }
 
         bool selected = texCoord_flags.z != 0.0 && texCoord_flags.w == 0.0;
+        bool removePreviewed = removePreview > 0.5 && selected;
+
+        if (removePreviewed) {
+            mediump float overlayAlpha = max(alpha, norm * max(selectionRemovePreviewClr.a, 0.85));
+            vec3 overlayColor = mix(color.xyz, selectionRemovePreviewClr.xyz, 0.86);
+            pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
+            pcFragColor1 = vec4(selectionRemovePreviewClr.xyz * overlayAlpha, overlayAlpha);
+            return;
+        }
 
         if (selectedSplatOverlay > 0.5 && selected) {
             mediump float overlayAlpha = max(alpha, norm * max(selectedClr.a, 0.85));

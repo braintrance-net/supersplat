@@ -14,6 +14,7 @@ import { vertexShader, fragmentShader } from './shaders/splat-overlay-shader';
 import { Splat } from './splat';
 
 const nullClr = new Color(0, 0, 0, 0);
+const selectionRemovePreviewClr = [1, 0.12, 0.08, 0.95];
 
 class SplatOverlay extends Element {
     entity: Entity;
@@ -151,6 +152,7 @@ class SplatOverlay extends Element {
             material.setParameter('splatSize', splatSize * window.devicePixelRatio);
             material.setParameter('selectedClr', [selectedClr.r, selectedClr.g, selectedClr.b, selectedClr.a]);
             material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
+            material.setParameter('selectionRemovePreviewClr', selectionRemovePreviewClr);
             material.setParameter('useGaussianColor', useGaussianColor);
             material.setParameter('transformPalette', this.splat.transformPalette.texture);
 

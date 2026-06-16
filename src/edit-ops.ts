@@ -122,25 +122,27 @@ class SelectOp extends StateOp {
     name = 'selectOp';
 
     constructor(splat: Splat, op: SelectionOp, filter: (i: number) => boolean) {
+        const selected = (state: number) => (state & State.selected) !== 0;
+        const editable = (state: number) => (state & (State.locked | State.deleted)) === 0;
         const filterFunc = {
-            add: (state: number, index: number) => (state === 0) && filter(index),
-            remove: (state: number, index: number) => (state === State.selected) && filter(index),
-            set: (state: number, index: number) => (state === State.selected) !== filter(index),
-            intersect: (state: number, index: number) => (state === State.selected) && !filter(index)
+            add: (state: number, index: number) => editable(state) && !selected(state) && filter(index),
+            remove: (state: number, index: number) => editable(state) && selected(state) && filter(index),
+            set: (state: number, index: number) => editable(state) && selected(state) !== filter(index),
+            intersect: (state: number, index: number) => editable(state) && selected(state) && !filter(index)
         };
 
         const doIt = {
-            add: (state: number) => state | State.selected,
-            remove: (state: number) => state & (~State.selected),
-            set: (state: number) => state ^ State.selected,
-            intersect: (state: number) => state & (~State.selected)
+            add: (state: number) => (state | State.selected) & (~State.removePreview),
+            remove: (state: number) => state & (~(State.selected | State.removePreview)),
+            set: (state: number) => (state ^ State.selected) & (~State.removePreview),
+            intersect: (state: number) => state & (~(State.selected | State.removePreview))
         };
 
         const undoIt = {
-            add: (state: number) => state & (~State.selected),
-            remove: (state: number) => state | State.selected,
-            set: (state: number) => state ^ State.selected,
-            intersect: (state: number) => state | State.selected
+            add: (state: number) => state & (~(State.selected | State.removePreview)),
+            remove: (state: number) => (state | State.selected) & (~State.removePreview),
+            set: (state: number) => (state ^ State.selected) & (~State.removePreview),
+            intersect: (state: number) => (state | State.selected) & (~State.removePreview)
         };
 
         super(splat, filterFunc[op], doIt[op], undoIt[op]);

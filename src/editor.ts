@@ -583,7 +583,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             const nw = nx1 - nx0;
             const nh = ny1 - ny0;
 
-            scene.camera.pickPrep(splat, op === 'intersect' ? 'set' : op);
+            scene.camera.pickPrep(splat, op === 'intersect' ? 'remove' : op);
             const pick = await scene.camera.pickRect(nx0, ny0, nw, nh);
 
             // Calculate actual pixel dimensions for iteration
@@ -618,12 +618,15 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         for (let i = 0; i < previewState.length; ++i) {
             const selectedByBrush = hit(i);
             const state = baseState[i];
+            const selected = (state & State.selected) !== 0;
+            const editable = (state & (State.locked | State.deleted)) === 0;
 
-            if (
-                (op === 'add' && state === 0 && selectedByBrush) ||
-                (op === 'remove' && state === State.selected && selectedByBrush) ||
-                (op === 'set' && (state === State.selected) !== selectedByBrush) ||
-                (op === 'intersect' && state === State.selected && !selectedByBrush)
+            if (op === 'remove' && editable && selected && selectedByBrush) {
+                previewState[i] = state | State.removePreview;
+            } else if (
+                (op === 'add' && editable && !selected && selectedByBrush) ||
+                (op === 'set' && editable && selected !== selectedByBrush) ||
+                (op === 'intersect' && editable && selected && !selectedByBrush)
             ) {
                 previewState[i] = state ^ State.selected;
             }

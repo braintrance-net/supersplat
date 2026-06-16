@@ -31,6 +31,7 @@ const vertexShader = /* glsl */ `
     uniform float useGaussianColor;                 // 0.0 = use selection colors, 1.0 = use gaussian color
     uniform vec4 selectedClr;
     uniform vec4 unselectedClr;
+    uniform vec4 selectionRemovePreviewClr;
 
     varying vec4 varying_color;
 
@@ -98,6 +99,7 @@ const vertexShader = /* glsl */ `
         ivec2 splatUV = calcSplatUV(splatId, texParams.x);
         uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
         bool isSelected = (splatState & 1u) != 0u;
+        bool isRemovePreview = (splatState & 8u) != 0u;
 
         // check for locked splats (deleted splats are already excluded from order texture)
         if ((splatState & 2u) != 0u) {
@@ -149,8 +151,10 @@ const vertexShader = /* glsl */ `
             }
 
             // choose between selection colors and gaussian color
+            vec3 selectionClr = isRemovePreview ? selectionRemovePreviewClr.xyz : selectedClr.xyz;
+            float selectionMix = isRemovePreview ? selectionRemovePreviewClr.w : (isSelected ? selectedClr.w : 0.0);
             varying_color = vec4(
-                mix(gaussianClr, selectedClr.xyz, isSelected ? selectedClr.w : 0.0),
+                mix(gaussianClr, selectionClr, selectionMix),
                 unselectedClr.w
             );
 
