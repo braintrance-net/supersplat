@@ -5,6 +5,7 @@ import type { SemanticAnnotation, SemanticLayer } from './semantic-annotations';
 
 const IS_SCENE_DIRTY = 'supersplat:is-scene-dirty';
 const LOAD_FILE = 'supersplat:load-file';
+const LOAD_SCENE_MANIFEST = 'supersplat:load-scene-manifest';
 const GET_CAMERA_STATE = 'supersplat:get-camera-state';
 const CAMERA_STATE = 'supersplat:camera-state';
 const GET_PRESET_STATE = 'supersplat:get-preset-state';
@@ -101,6 +102,34 @@ interface LoadFileMessage {
     data?: ArrayBuffer;
     camera?: CameraState;
     transform?: PresetTransform;
+    collisionMeshSrc?: string | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestLayer {
+    id: string;
+    label?: string;
+    filename: string;
+    assetUrl?: string;
+    byteLength?: number;
+    data?: ArrayBuffer;
+    docTransform?: Record<string, unknown>;
+    transform?: PresetTransform;
+}
+
+interface LoadSceneManifestMessage {
+    type: typeof LOAD_SCENE_MANIFEST;
+    manifest: {
+        id: string;
+        title?: string;
+        strategy?: string;
+        backgroundLayerId?: string;
+        sourceBytes?: number;
+        totalBytes?: number;
+        manifestUrl?: string;
+        layers: LoadSceneManifestLayer[];
+    };
+    camera?: CameraState;
     collisionMeshSrc?: string | null;
     requestId?: RequestId;
 }
@@ -347,6 +376,26 @@ const isLoadFileMessage = (data: any): data is LoadFileMessage => {
         data.type === LOAD_FILE &&
         typeof data.filename === 'string' &&
         (data.data === undefined || data.data instanceof ArrayBuffer) &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestMessage = (data: any): data is LoadSceneManifestMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST &&
+        data.manifest &&
+        typeof data.manifest === 'object' &&
+        typeof data.manifest.id === 'string' &&
+        Array.isArray(data.manifest.layers) &&
+        data.manifest.layers.every((layer: any) => (
+            layer &&
+            typeof layer === 'object' &&
+            typeof layer.id === 'string' &&
+            typeof layer.filename === 'string' &&
+            (layer.data === undefined || layer.data instanceof ArrayBuffer)
+        )) &&
         hasOptionalRequestId(data)
     );
 };
@@ -701,13 +750,13 @@ const cameraStateFromAnnotation = (annotation: SemanticAnnotation): CameraState 
     ortho: annotation.source.camera.ortho
 });
 
-const applyTransformState = (events: Events, transform?: PresetTransform) => {
+const applyTransformState = (events: Events, transform?: PresetTransform, targetSplat?: any) => {
     if (!transform) {
         return;
     }
 
     const splats = events.invoke('scene.splats') as Array<any>;
-    const splat = splats?.[0];
+    const splat = targetSplat ?? splats?.[0];
     if (!splat) {
         return;
     }
@@ -732,6 +781,35 @@ const applyTransformState = (events: Events, transform?: PresetTransform) => {
     if (scene) {
         scene.forceRender = true;
     }
+};
+
+const applyDocTransformState = (splat: any, docTransform?: Record<string, unknown>) => {
+    if (!docTransform || typeof splat?.docDeserialize !== 'function') {
+        return false;
+    }
+
+    splat.docDeserialize(docTransform);
+    const scene = window.scene as any;
+    if (scene) {
+        scene.forceRender = true;
+    }
+    return true;
+};
+
+const importSplatFile = async (events: Events, filename: string, data: ArrayBuffer) => {
+    const splatsBefore = events.invoke('scene.splats') as Array<any>;
+    const beforeCount = splatsBefore?.length ?? 0;
+    const file = new File([data], filename);
+    const imported = await events.invoke('import', [{
+        filename: file.name,
+        contents: file
+    }]) as unknown;
+    if (Array.isArray(imported) && imported[0]) {
+        return imported[0];
+    }
+
+    const splatsAfter = events.invoke('scene.splats') as Array<any>;
+    return splatsAfter?.[beforeCount] ?? splatsAfter?.[splatsAfter.length - 1] ?? null;
 };
 
 const collisionMeshAssetVersion = '20260605-raw-mesh-v1';
@@ -1592,7 +1670,8 @@ const registerIframeApi = (events: Events) => {
                     raycast: true,
                     collisionDebugBundle: true,
                     roomWarmupMode: true,
-                    version: 8
+                    sceneManifest: true,
+                    version: 9
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1916,6 +1995,80 @@ const registerIframeApi = (events: Events) => {
             }, event.origin);
         }
 
+        if (isLoadSceneManifestMessage(event.data)) {
+            let error: string | undefined;
+            let rendered = false;
+            resetGameModeState();
+            events.fire('multiplayer.players', []);
+            const layers = event.data.manifest.layers;
+            postDiagnostic(source, event.origin, 'load-scene-manifest-start', {
+                id: event.data.manifest.id,
+                layerCount: layers.length,
+                totalBytes: event.data.manifest.totalBytes ?? layers.reduce((total, layer) => total + (layer.data?.byteLength ?? layer.byteLength ?? 0), 0),
+                strategy: event.data.manifest.strategy ?? null
+            }, event.data.requestId);
+            try {
+                events.fire('scene.clear');
+                activeCollisionMeshSrc = null;
+                let importedCount = 0;
+                for (const [layerIndex, layer] of layers.entries()) {
+                    if (!layer.data) {
+                        throw new Error(`Scene layer '${layer.label ?? layer.id}' did not include data.`);
+                    }
+
+                    const importedSplat = await importSplatFile(events, layer.filename, layer.data);
+                    if (!importedSplat) {
+                        throw new Error(`Scene layer '${layer.label ?? layer.id}' did not import.`);
+                    }
+
+                    const usedDocTransform = applyDocTransformState(importedSplat, layer.docTransform);
+                    if (!usedDocTransform) {
+                        applyTransformState(events, layer.transform, importedSplat);
+                    }
+                    importedCount += 1;
+                    postDiagnostic(source, event.origin, 'load-scene-manifest-layer-imported', {
+                        id: layer.id,
+                        label: layer.label ?? null,
+                        filename: layer.filename,
+                        byteLength: layer.data.byteLength,
+                        layerIndex,
+                        layerCount: layers.length,
+                        usedDocTransform
+                    }, event.data.requestId);
+                }
+
+                postDiagnostic(source, event.origin, 'load-scene-manifest-imported', {
+                    id: event.data.manifest.id,
+                    importedCount,
+                    empty: events.invoke('scene.empty') as boolean
+                }, event.data.requestId);
+
+                events.fire('walk.collisionMeshClear', {
+                    reason: 'manifest-disabled',
+                    requestId: event.data.requestId ?? null
+                });
+                applyCameraState(events, event.data.camera);
+                startRenderWarmup(roomWarmupBackground ? 3 : 8, { allowBackground: true });
+                rendered = await waitForPostRender(events);
+                postDiagnostic(source, event.origin, 'load-scene-manifest-postrender', { rendered }, event.data.requestId);
+            } catch (err) {
+                error = err instanceof Error ? err.message : 'Manifest import failed';
+                console.error('[iframe-api] load-scene-manifest failed:', err);
+                events.fire('toast', error, 'error');
+                postDiagnostic(source, event.origin, 'load-scene-manifest-error', { error }, event.data.requestId);
+            }
+            source.postMessage({
+                type: SCENE_LOADED,
+                result: {
+                    empty: events.invoke('scene.empty') as boolean,
+                    semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer,
+                    error: error ?? (rendered ? undefined : 'Scene imported, but render confirmation timed out')
+                },
+                ...requestIdPayload(event.data.requestId)
+            }, event.origin);
+            return;
+        }
+
         if (isLoadFileMessage(event.data)) {
             let error: string | undefined;
             let rendered = false;
@@ -1929,11 +2082,7 @@ const registerIframeApi = (events: Events) => {
                 const hasSceneData = Boolean(event.data.data);
                 if (hasSceneData && event.data.data) {
                     events.fire('scene.clear');
-                    const file = new File([event.data.data], event.data.filename);
-                    await events.invoke('import', [{
-                        filename: file.name,
-                        contents: file
-                    }]);
+                    await importSplatFile(events, event.data.filename, event.data.data);
                     postDiagnostic(source, event.origin, 'load-file-imported', {
                         filename: event.data.filename,
                         empty: events.invoke('scene.empty') as boolean
