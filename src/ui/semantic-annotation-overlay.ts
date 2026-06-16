@@ -163,8 +163,10 @@ const MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS = 0.045;
 const MULTIPLAYER_AVATAR_MOUTH_RELEASE_SECONDS = 0.11;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
-const MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES = 12;
-const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 88;
+const MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES = 0;
+const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 78;
+const MULTIPLAYER_AVATAR_IDLE_ARM_SWING_DEGREES = 1.5;
+const MULTIPLAYER_AVATAR_RUN_ARM_SWING_DEGREES = 24;
 const MULTIPLAYER_VRM_MOUTH_MORPH_NAMES = [
     'A', 'I', 'U', 'E', 'O',
     'aa', 'ih', 'ou', 'oh',
@@ -1066,16 +1068,18 @@ class SemanticAnnotationOverlay {
         const counterStride = Math.sin(instance.phase + Math.PI);
         const lift = Math.sin(instance.phase * 2);
 
-        // Mixamo VRM avatars rest in a T-pose; rotate the upper arms down to the
-        // sides so they don't stick straight out (Kenney already rests arms-down).
+        // Mixamo VRM avatars rest in a T-pose; rotate the upper arms near the
+        // sides while leaving clavicles neutral so the arms don't fold inward.
         const shoulderDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES : 0;
         const armDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_ARM_DOWN_DEGREES : 0;
+        const runArmSwing = instance.avatarIsVrm ? MULTIPLAYER_AVATAR_RUN_ARM_SWING_DEGREES : 28;
+        const idleArmSwing = instance.avatarIsVrm ? MULTIPLAYER_AVATAR_IDLE_ARM_SWING_DEGREES : 3;
 
         if (running) {
             this.setMultiplayerRigBone(rig.leftShoulder, 0, 0, shoulderDown);
             this.setMultiplayerRigBone(rig.rightShoulder, 0, 0, -shoulderDown);
-            this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5 + armDown);
-            this.setMultiplayerRigBone(rig.rightArm, counterStride * 28, 0, -5 - armDown);
+            this.setMultiplayerRigBone(rig.leftArm, stride * runArmSwing, 0, armDown);
+            this.setMultiplayerRigBone(rig.rightArm, counterStride * runArmSwing, 0, -armDown);
             this.setMultiplayerRigBone(rig.leftLeg, counterStride * 30, 0, 2);
             this.setMultiplayerRigBone(rig.rightLeg, stride * 30, 0, -2);
             this.setMultiplayerRigBone(rig.spine, lift * 2, 0, stride * 5);
@@ -1083,8 +1087,8 @@ class SemanticAnnotationOverlay {
         } else {
             this.setMultiplayerRigBone(rig.leftShoulder, 0, 0, shoulderDown);
             this.setMultiplayerRigBone(rig.rightShoulder, 0, 0, -shoulderDown);
-            this.setMultiplayerRigBone(rig.leftArm, 3 + stride * 3, 0, 2 + armDown);
-            this.setMultiplayerRigBone(rig.rightArm, 3 + counterStride * 3, 0, -2 - armDown);
+            this.setMultiplayerRigBone(rig.leftArm, stride * idleArmSwing, 0, armDown);
+            this.setMultiplayerRigBone(rig.rightArm, counterStride * idleArmSwing, 0, -armDown);
             this.setMultiplayerRigBone(rig.leftLeg);
             this.setMultiplayerRigBone(rig.rightLeg);
             this.setMultiplayerRigBone(rig.spine, lift * 0.7, 0, stride * 1.5);
