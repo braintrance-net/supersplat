@@ -16,6 +16,8 @@ const OBB_COLOR = new Color(0, 0.86, 1, 1); // cyan
 const BOXER_MODEL_HW = 960;
 const BOXER_PATCH_SIZE = 16;
 const MAX_SDP_POINTS = 12000;
+const BOXER_REQUEST_MAX_POINTS = 6000;
+const BOXER_REQUEST_JPEG_QUALITY = 0.72;
 const DEBUG_SDP_PREVIEW_POINTS = 256;
 const PROJECTION_SAMPLE_COUNT = 32;
 const COMPACT_CLICK_BB_AREA_RATIO = 0.015;
@@ -258,6 +260,25 @@ const cropPngBase64 = async (
     const ctx = off.getContext('2d')!;
     ctx.drawImage(img, crop.x, crop.y, crop.size, crop.size, 0, 0, crop.size, crop.size);
     return off.toDataURL('image/png').split(',')[1];
+};
+
+const pngBase64ToJpegBase64 = async (
+    b64: string,
+    width: number,
+    height: number,
+    quality = BOXER_REQUEST_JPEG_QUALITY
+): Promise<string> => {
+    if (!b64) {
+        return '';
+    }
+
+    const img = await loadPng(b64);
+    const off = document.createElement('canvas');
+    off.width = Math.max(1, width);
+    off.height = Math.max(1, height);
+    const ctx = off.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, off.width, off.height);
+    return off.toDataURL('image/jpeg', quality).split(',')[1];
 };
 
 const maskPngToArray = async (b64: string, width: number, height: number): Promise<Uint8Array> => {
@@ -6114,6 +6135,50 @@ const buildEnhancedBoxerRequest = (frame: BoxerFramePayload, prompt: BoxerPrompt
     top_k: 8
 });
 
+const samplePointCloudForRequest = (points: number[][], maxPoints = BOXER_REQUEST_MAX_POINTS) => {
+    if (points.length <= maxPoints) {
+        return points;
+    }
+
+    const sampled: number[][] = [];
+    const stride = points.length / maxPoints;
+    for (let i = 0; i < maxPoints; i++) {
+        sampled.push(points[Math.min(points.length - 1, Math.floor(i * stride))]);
+    }
+    return sampled;
+};
+
+const buildCompactBoxerRequest = async (frame: BoxerFramePayload, prompt: BoxerPromptPayload) => {
+    const requestPoints = samplePointCloudForRequest(
+        frame.sdp_points.length > 0 ? frame.sdp_points : frame.point_cloud
+    );
+    const requestImage = frame.image ?
+        await pngBase64ToJpegBase64(frame.image, frame.image_width, frame.image_height) :
+        '';
+
+    return {
+        ...buildEnhancedBoxerRequest(frame, prompt),
+        image: requestImage,
+        point_cloud: requestPoints,
+        sdp_points: requestPoints,
+        sdp_point_count: requestPoints.length
+    };
+};
+
+const logBoxerRequestSize = (
+    label: string,
+    requestBody: string,
+    frame: BoxerFramePayload,
+    image: string,
+    points: number[][]
+) => {
+    console.log(
+        `[Boxer] ${label} payload=${(requestBody.length / 1024).toFixed(1)}KB` +
+        ` image=${(image.length / 1024).toFixed(1)}KB` +
+        ` points=${points.length}/${frame.sdp_point_count}`
+    );
+};
+
 const postBoxerDetect = async (
     boxerBackendUrl: string,
     frame: BoxerFramePayload,
@@ -6146,8 +6211,9 @@ const postBoxerDirectLift = async (
 ) => {
     const directEndpoint = `${boxerBackendUrl}/api/boxer-lift-bb2d`;
     const legacyEndpoint = `${boxerBackendUrl}/api/boxer-detect`;
+    const compactRequest = await buildCompactBoxerRequest(frame, { detect_all: true });
     const body = {
-        ...buildEnhancedBoxerRequest(frame, { detect_all: true }),
+        ...compactRequest,
         mode: 'lift_bb2d',
         bb2d_format: 'xyxy',
         bb2d_list: proposals.map(proposal => proposal.bb2d),
@@ -6162,10 +6228,12 @@ const postBoxerDirectLift = async (
         delete (body as Record<string, unknown>).depth_width;
         delete (body as Record<string, unknown>).depth_height;
     }
+    const requestBody = JSON.stringify(body);
+    logBoxerRequestSize('direct lift', requestBody, frame, compactRequest.image, compactRequest.sdp_points);
     const send = (endpoint: string) => fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
+        body: requestBody
     });
     let res = await send(directEndpoint);
     if (res.status === 404 || res.status === 405) {
@@ -6278,7 +6346,8 @@ const postBoxerDetectAll = async (
     frame: BoxerFramePayload
 ) => {
     const endpoint = `${boxerBackendUrl}/api/boxer-detect`;
-    const base = buildEnhancedBoxerRequest(frame, { detect_all: true });
+    const base = await buildCompactBoxerRequest(frame, { detect_all: true });
+    const textBase = await buildCompactBoxerRequest(frame, { text: 'all objects' });
     const attempts = [
         {
             label: 'detect_all-flag',
@@ -6301,7 +6370,7 @@ const postBoxerDetectAll = async (
         {
             label: 'empty-text-all',
             body: {
-                ...buildEnhancedBoxerRequest(frame, { text: 'all objects' }),
+                ...textBase,
                 mode: 'detect_all',
                 return_detections: true,
                 top_k: 32
@@ -6320,10 +6389,13 @@ const postBoxerDetectAll = async (
 
     for (const attempt of attempts) {
         try {
+            const requestBody = JSON.stringify(attempt.body);
+            const compactRequest = attempt.label === 'empty-text-all' ? textBase : base;
+            logBoxerRequestSize(`detect all ${attempt.label}`, requestBody, frame, compactRequest.image, compactRequest.sdp_points);
             const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(attempt.body)
+                body: requestBody
             });
             const text = await res.text();
             let body: unknown = text;
