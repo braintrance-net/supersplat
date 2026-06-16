@@ -1,7 +1,8 @@
 import { Events } from '../events';
 
 type BrushSelectionVariant = 'boxer' | 'sam' | 'raw';
-type BrushSelectionOp = 'add' | 'remove' | 'set';
+type BrushSelectionOp = 'add' | 'remove' | 'set' | 'intersect';
+type RawBrushMode = 'new' | 'add' | 'remove' | 'intersect';
 
 const LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED = true;
 const LIVE_GAUSSIAN_PREVIEW_INTERVAL_MS = 90;
@@ -43,6 +44,7 @@ class BrushSelection {
         let points: [number, number][] = [];
         let pointRadii: number[] = [];
         let variant: BrushSelectionVariant = 'boxer';
+        let rawBrushMode: RawBrushMode = 'new';
         let livePreviewEnabled = LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED && livePreviewEnabledFromUrl();
         let livePreviewTimer: number | undefined;
         let livePreviewInFlight = false;
@@ -82,6 +84,67 @@ class BrushSelection {
             return events.invoke('collisionSurface.ringProbe', clientX, clientY, rWorld, 20) as
                 { center: SurfaceProbeHit; ring: [number, number][] } | null | undefined;
         };
+
+        const rawModeToSelectionOp = (mode: RawBrushMode): BrushSelectionOp => {
+            return mode === 'new' ? 'set' : mode;
+        };
+
+        const selectionOpNeedsExistingSelection = (op: BrushSelectionOp) => {
+            return op !== 'set';
+        };
+
+        const hasCurrentGaussianSelection = () => {
+            return events.invoke('selection.splats') === true;
+        };
+
+        const toastRawModeNeedsSelection = () => {
+            events.fire('toast', 'Raw brush Add, Remove, and Intersect need an existing selection', 'warning');
+        };
+
+        const setRawBrushMode = (value: RawBrushMode) => {
+            rawBrushMode = value === 'add' || value === 'remove' || value === 'intersect' ? value : 'new';
+            events.fire('brushSelection.rawMode.changed', rawBrushMode);
+            return rawBrushMode;
+        };
+
+        const isRawBrushActive = () => {
+            return events.invoke('tool.active') === 'brushSelection' && variant === 'raw';
+        };
+
+        const shouldIgnoreRawModeShortcutTarget = (target: EventTarget | null) => {
+            if (!(target instanceof HTMLElement)) {
+                return false;
+            }
+
+            return target.isContentEditable ||
+                target instanceof HTMLInputElement ||
+                target instanceof HTMLTextAreaElement ||
+                target instanceof HTMLSelectElement;
+        };
+
+        const rawModeKeydown = (e: KeyboardEvent) => {
+            if (!isRawBrushActive() || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.repeat || shouldIgnoreRawModeShortcutTarget(e.target)) {
+                return;
+            }
+
+            const key = e.key.toLowerCase();
+            const modeByKey: Record<string, RawBrushMode | undefined> = {
+                n: 'new',
+                a: 'add',
+                r: 'remove',
+                i: 'intersect'
+            };
+            const mode = modeByKey[key];
+            if (!mode) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            setRawBrushMode(mode);
+        };
+
+        document.addEventListener('keydown', rawModeKeydown, true);
 
         const controls = document.createElement('div');
         controls.className = 'brush-selection-controls hidden';
@@ -253,6 +316,7 @@ class BrushSelection {
                     radius: promptRadius,
                     bb2d,
                     points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
+                    ...(variant === 'raw' ? { mode: 'raw' as const, selection_mode: rawBrushMode } : {}),
                     ...(radiusWorld !== null ? { radius_world: radiusWorld } : {}),
                     ...(strokeTrace.length ? { probe_trace: strokeTrace } : {})
                 }
@@ -260,6 +324,9 @@ class BrushSelection {
         };
 
         const selectionOpFromPointer = (e: PointerEvent): BrushSelectionOp => {
+            if (variant === 'raw') {
+                return rawModeToSelectionOp(rawBrushMode);
+            }
             return e.shiftKey ? 'add' : (e.ctrlKey ? 'remove' : 'set');
         };
 
@@ -315,6 +382,9 @@ class BrushSelection {
             if (!livePreviewEnabled || dragId === undefined) {
                 return;
             }
+            if (variant === 'raw' && selectionOpNeedsExistingSelection(op) && !hasCurrentGaussianSelection()) {
+                return;
+            }
 
             livePreviewOp = op;
             livePreviewQueued = true;
@@ -359,6 +429,11 @@ class BrushSelection {
             if (dragId === undefined && (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary)) {
                 e.preventDefault();
                 e.stopPropagation();
+                const selectionOp = selectionOpFromPointer(e);
+                if (variant === 'raw' && selectionOpNeedsExistingSelection(selectionOp) && !hasCurrentGaussianSelection()) {
+                    toastRawModeNeedsSelection();
+                    return;
+                }
                 events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
                 dragId = e.pointerId;
@@ -415,13 +490,19 @@ class BrushSelection {
                 e.preventDefault();
                 e.stopPropagation();
                 cancelLivePreview();
+                const selectionOp = selectionOpFromPointer(e);
+                if (variant === 'raw' && selectionOpNeedsExistingSelection(selectionOp) && !hasCurrentGaussianSelection()) {
+                    toastRawModeNeedsSelection();
+                    dragEnd();
+                    return;
+                }
 
                 let selectionResult: { selected_after?: number; splat_count?: number } | undefined;
                 let prompt: ReturnType<typeof buildBrushPrompt> = null;
                 try {
                     selectionResult = await events.invoke(
                         'select.byMask',
-                        selectionOpFromPointer(e),
+                        selectionOp,
                         canvas,
                         context
                     ) as { selected_after?: number; splat_count?: number } | undefined;
@@ -528,6 +609,10 @@ class BrushSelection {
             events.fire('brushSelection.variant.changed', variant);
         });
 
+        events.on('brushSelection.rawMode', (value: RawBrushMode) => {
+            setRawBrushMode(value);
+        });
+
         events.on('tool.activated', (toolName: string | null) => {
             setControlsVisible(toolName === 'brushSelection');
         });
@@ -539,6 +624,7 @@ class BrushSelection {
                 return radius;
             });
             events.function('brushSelection.getVariant', () => variant);
+            events.function('brushSelection.getRawMode', () => rawBrushMode);
             events.function('brushSelection.getLivePreviewEnabled', () => livePreviewEnabled);
             events.function('brushSelection.setLivePreviewEnabled', (enabled: boolean) => {
                 livePreviewEnabled = enabled === true;

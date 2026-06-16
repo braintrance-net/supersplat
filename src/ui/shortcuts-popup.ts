@@ -86,6 +86,7 @@ const popupConfig: Record<string, CategoryConfig> = {
         ],
         hints: [
             { displayKey: '[ ]', localeKey: 'popup.shortcuts.brush-size' },
+            { displayKey: 'N / A / R / I', localeKey: 'Raw brush: New / Add / Remove / Intersect' },
             { displayKey: 'Space (hold)', localeKey: 'Hold to talk' }
         ]
     },

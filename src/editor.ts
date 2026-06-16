@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp } from './edit-ops';
+import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, type SelectionOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { MappedReadFileSystem } from './io';
@@ -525,7 +525,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     const collectMaskHits = async (
         splat: Splat,
-        op: 'add'|'remove'|'set',
+        op: SelectionOp,
         canvas: HTMLCanvasElement,
         context: CanvasRenderingContext2D
     ): Promise<(i: number) => boolean> => {
@@ -583,7 +583,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             const nw = nx1 - nx0;
             const nh = ny1 - ny0;
 
-            scene.camera.pickPrep(splat, op);
+            scene.camera.pickPrep(splat, op === 'intersect' ? 'set' : op);
             const pick = await scene.camera.pickRect(nx0, ny0, nw, nh);
 
             // Calculate actual pixel dimensions for iteration
@@ -611,7 +611,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     const applySelectionOpToPreview = (
         baseState: Uint8Array,
         hit: (i: number) => boolean,
-        op: 'add'|'remove'|'set'
+        op: SelectionOp
     ) => {
         const previewState = new Uint8Array(baseState);
 
@@ -622,7 +622,8 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             if (
                 (op === 'add' && state === 0 && selectedByBrush) ||
                 (op === 'remove' && state === State.selected && selectedByBrush) ||
-                (op === 'set' && (state === State.selected) !== selectedByBrush)
+                (op === 'set' && (state === State.selected) !== selectedByBrush) ||
+                (op === 'intersect' && state === State.selected && !selectedByBrush)
             ) {
                 previewState[i] = state ^ State.selected;
             }
@@ -631,7 +632,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return previewState;
     };
 
-    events.function('select.previewByMask', async (op: 'add'|'remove'|'set', canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
+    events.function('select.previewByMask', async (op: SelectionOp, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
         const generation = selectionPreviewGeneration;
         const updates: { splat: Splat; state: Uint8Array }[] = [];
 
@@ -666,7 +667,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         };
     });
 
-    events.function('select.byMask', async (op: 'add'|'remove'|'set', canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
+    events.function('select.byMask', async (op: SelectionOp, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
         clearSelectionPreview();
 
         let splatCount = 0;

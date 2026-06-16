@@ -116,26 +116,31 @@ class SelectInvertOp extends StateOp {
     }
 }
 
+type SelectionOp = 'add' | 'remove' | 'set' | 'intersect';
+
 class SelectOp extends StateOp {
     name = 'selectOp';
 
-    constructor(splat: Splat, op: 'add'|'remove'|'set', filter: (i: number) => boolean) {
+    constructor(splat: Splat, op: SelectionOp, filter: (i: number) => boolean) {
         const filterFunc = {
             add: (state: number, index: number) => (state === 0) && filter(index),
             remove: (state: number, index: number) => (state === State.selected) && filter(index),
-            set: (state: number, index: number) => (state === State.selected) !== filter(index)
+            set: (state: number, index: number) => (state === State.selected) !== filter(index),
+            intersect: (state: number, index: number) => (state === State.selected) && !filter(index)
         };
 
         const doIt = {
             add: (state: number) => state | State.selected,
             remove: (state: number) => state & (~State.selected),
-            set: (state: number) => state ^ State.selected
+            set: (state: number) => state ^ State.selected,
+            intersect: (state: number) => state & (~State.selected)
         };
 
         const undoIt = {
             add: (state: number) => state & (~State.selected),
             remove: (state: number) => state | State.selected,
-            set: (state: number) => state ^ State.selected
+            set: (state: number) => state ^ State.selected,
+            intersect: (state: number) => state | State.selected
         };
 
         super(splat, filterFunc[op], doIt[op], undoIt[op]);
@@ -434,6 +439,7 @@ class SplatRenameOp {
 
 export {
     EditOp,
+    type SelectionOp,
     SelectAllOp,
     SelectNoneOp,
     SelectInvertOp,

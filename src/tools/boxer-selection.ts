@@ -530,6 +530,7 @@ type BoxerBrushPrompt = {
     // 'evidence' = normal client brush, but keep full brush_surface evidence
     // for fusion/validation instead of taking the broad fast shortcut
     mode?: 'raw' | 'evidence';
+    selection_mode?: 'new' | 'add' | 'remove' | 'intersect';
     // diagnostic: per-point pointer position (client px) and the collision
     // surface hit under it, recorded by the brush tool for replication
     probe_trace?: { client: [number, number]; world: [number, number, number] | null; distance: number | null }[];
