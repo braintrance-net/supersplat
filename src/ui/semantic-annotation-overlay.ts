@@ -70,7 +70,13 @@ type MultiplayerAvatarInstance = {
     smoothedPlanarSpeed: number;
     phase: number;
     lastPosition: Vec3;
+    renderPosition: Vec3;
+    lastTargetPosition: Vec3;
+    targetVelocity: Vec3;
     lastUpdateMs: number;
+    lastTargetUpdateMs: number;
+    renderInitialized: boolean;
+    renderYawDeg: number | null;
     mouthMorphKeys: Array<{ morph: MultiplayerMorph; keys: Array<number | string> }>;
     speaking: boolean;
     voiceLevel: number;
@@ -148,6 +154,11 @@ const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
 const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
+const MULTIPLAYER_AVATAR_POSITION_SMOOTHING_SECONDS = 0.045;
+const MULTIPLAYER_AVATAR_PREDICTION_SECONDS = 0.08;
+const MULTIPLAYER_AVATAR_MAX_PREDICTION_DISTANCE = 0.28;
+const MULTIPLAYER_AVATAR_SNAP_DISTANCE = 1.2;
+const MULTIPLAYER_AVATAR_YAW_SMOOTHING_SECONDS = 0.055;
 const MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS = 0.045;
 const MULTIPLAYER_AVATAR_MOUTH_RELEASE_SECONDS = 0.11;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
@@ -176,6 +187,10 @@ const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, rejec
 });
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const smoothAngleDegrees = (current: number, target: number, blend: number) => {
+    const delta = ((target - current + 540) % 360) - 180;
+    return current + delta * blend;
+};
 
 const selectedMaskPixels = async (src: string, maxSamples = 256): Promise<MaskPixels> => {
     const image = await loadImage(src);
@@ -1134,7 +1149,13 @@ class SemanticAnnotationOverlay {
             smoothedPlanarSpeed: 0,
             phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
+            renderPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
+            lastTargetPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
+            targetVelocity: new Vec3(),
             lastUpdateMs: performance.now(),
+            lastTargetUpdateMs: performance.now(),
+            renderInitialized: false,
+            renderYawDeg: null as number | null,
             mouthMorphKeys,
             speaking: false,
             voiceLevel: 0,
@@ -1172,6 +1193,17 @@ class SemanticAnnotationOverlay {
         }
     }
 
+    private resetMultiplayerAvatarMotion(instance: MultiplayerAvatarInstance, player: MultiplayerOverlayPlayer, nowMs: number) {
+        instance.renderInitialized = false;
+        instance.renderYawDeg = null;
+        instance.targetVelocity.set(0, 0, 0);
+        instance.renderPosition.set(player.position[0], player.position[1], player.position[2]);
+        instance.lastPosition.set(player.position[0], player.position[1], player.position[2]);
+        instance.lastTargetPosition.set(player.position[0], player.position[1], player.position[2]);
+        instance.lastUpdateMs = nowMs;
+        instance.lastTargetUpdateMs = nowMs;
+    }
+
     private updateMultiplayerAvatar(
         player: MultiplayerOverlayPlayer,
         instance: MultiplayerAvatarInstance,
@@ -1182,9 +1214,54 @@ class SemanticAnnotationOverlay {
         const avatarEyeHeight = this.multiplayerAvatarEyeHeight(instance, avatarWorldHeight);
         const feetY = player.position[1] - avatarEyeHeight;
         const feetZ = player.position[2];
-        const dx = feetX - instance.lastPosition.x;
-        const dz = feetZ - instance.lastPosition.z;
-        const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
+        const dt = Math.max(1 / 120, Math.min(1 / 15, (nowMs - instance.lastUpdateMs) / 1000));
+        const targetDx = feetX - instance.lastTargetPosition.x;
+        const targetDy = feetY - instance.lastTargetPosition.y;
+        const targetDz = feetZ - instance.lastTargetPosition.z;
+        const targetDistanceSq = targetDx * targetDx + targetDy * targetDy + targetDz * targetDz;
+        const shouldSnap = !instance.renderInitialized || targetDistanceSq > MULTIPLAYER_AVATAR_SNAP_DISTANCE * MULTIPLAYER_AVATAR_SNAP_DISTANCE;
+
+        if (shouldSnap) {
+            instance.renderInitialized = true;
+            instance.targetVelocity.set(0, 0, 0);
+            instance.renderPosition.set(feetX, feetY, feetZ);
+            instance.lastPosition.set(feetX, feetY, feetZ);
+            instance.lastTargetPosition.set(feetX, feetY, feetZ);
+            instance.lastTargetUpdateMs = nowMs;
+        } else if (targetDistanceSq > 1e-8) {
+            const targetDt = Math.max(1 / 120, (nowMs - instance.lastTargetUpdateMs) / 1000);
+            instance.targetVelocity.set(targetDx / targetDt, targetDy / targetDt, targetDz / targetDt);
+            instance.lastTargetPosition.set(feetX, feetY, feetZ);
+            instance.lastTargetUpdateMs = nowMs;
+        }
+
+        const targetAgeSeconds = Math.max(0, (nowMs - instance.lastTargetUpdateMs) / 1000);
+        const predictionSeconds = Math.max(0, MULTIPLAYER_AVATAR_PREDICTION_SECONDS - targetAgeSeconds);
+        let predictedX = feetX + instance.targetVelocity.x * predictionSeconds;
+        let predictedY = feetY + instance.targetVelocity.y * predictionSeconds;
+        let predictedZ = feetZ + instance.targetVelocity.z * predictionSeconds;
+        const predictionDx = predictedX - feetX;
+        const predictionDy = predictedY - feetY;
+        const predictionDz = predictedZ - feetZ;
+        const predictionDistance = Math.sqrt(predictionDx * predictionDx + predictionDy * predictionDy + predictionDz * predictionDz);
+        if (predictionDistance > MULTIPLAYER_AVATAR_MAX_PREDICTION_DISTANCE) {
+            const scale = MULTIPLAYER_AVATAR_MAX_PREDICTION_DISTANCE / predictionDistance;
+            predictedX = feetX + predictionDx * scale;
+            predictedY = feetY + predictionDy * scale;
+            predictedZ = feetZ + predictionDz * scale;
+        }
+
+        const previousX = instance.renderPosition.x;
+        const previousY = instance.renderPosition.y;
+        const previousZ = instance.renderPosition.z;
+        const positionBlend = shouldSnap ? 1 : 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_POSITION_SMOOTHING_SECONDS);
+        instance.renderPosition.set(
+            previousX + (predictedX - previousX) * positionBlend,
+            previousY + (predictedY - previousY) * positionBlend,
+            previousZ + (predictedZ - previousZ) * positionBlend
+        );
+        const dx = instance.renderPosition.x - instance.lastPosition.x;
+        const dz = instance.renderPosition.z - instance.lastPosition.z;
         const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
         const speedBlend = 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS);
         instance.smoothedPlanarSpeed += (planarSpeed - instance.smoothedPlanarSpeed) * speedBlend;
@@ -1193,8 +1270,8 @@ class SemanticAnnotationOverlay {
             (instance.smoothedPlanarSpeed > MULTIPLAYER_AVATAR_RUN_START_SPEED ? 'run' : 'idle');
         this.transitionMultiplayerAvatar(instance, nextState);
 
-        let forwardX = dx;
-        let forwardZ = dz;
+        let forwardX = instance.targetVelocity.x || dx;
+        let forwardZ = instance.targetVelocity.z || dz;
         if (player.target) {
             forwardX = player.target[0] - player.position[0];
             forwardZ = player.target[2] - player.position[2];
@@ -1202,7 +1279,9 @@ class SemanticAnnotationOverlay {
         if (forwardX * forwardX + forwardZ * forwardZ > 1e-6) {
             const vrmFlip = instance.avatarIsVrm ? 180 : 0;
             const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES + vrmFlip;
-            instance.entity.setEulerAngles(0, yaw, 0);
+            const yawBlend = instance.renderYawDeg === null ? 1 : 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_YAW_SMOOTHING_SECONDS);
+            instance.renderYawDeg = instance.renderYawDeg === null ? yaw : smoothAngleDegrees(instance.renderYawDeg, yaw, yawBlend);
+            instance.entity.setEulerAngles(0, instance.renderYawDeg, 0);
         }
 
         // VRM models are authored at roughly human metres (~1.6 tall) rather than
@@ -1214,10 +1293,10 @@ class SemanticAnnotationOverlay {
         const scale = targetHeight / sourceHeight;
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
-        instance.entity.setPosition(feetX, feetY, feetZ);
+        instance.entity.setPosition(instance.renderPosition.x, instance.renderPosition.y, instance.renderPosition.z);
         instance.speaking = Boolean(player.speaking);
         instance.voiceLevel = Number.isFinite(player.level) ? clamp01(player.level ?? 0) : 0;
-        instance.lastPosition.set(feetX, feetY, feetZ);
+        instance.lastPosition.copy(instance.renderPosition);
         instance.lastUpdateMs = nowMs;
     }
 
@@ -1529,10 +1608,10 @@ class SemanticAnnotationOverlay {
         }
 
         if (player.avatarId) {
-            const calibration = {
+            const calibration: MultiplayerHeightCalibration = {
                 height: MULTIPLAYER_DEFAULT_HEIGHT,
                 groundY: undefined
-            } satisfies MultiplayerHeightCalibration;
+            };
             this.multiplayerHeightCalibrations.set(player.id, calibration);
             this.emitDiagnostic('multiplayer-avatar-height-calibrated', {
                 playerId: player.id,
@@ -2064,8 +2143,7 @@ class SemanticAnnotationOverlay {
                     avatar.entity.enabled = false;
                     this.transitionMultiplayerAvatar(avatar, 'idle');
                     avatar.smoothedPlanarSpeed = 0;
-                    avatar.lastPosition.set(player.position[0], player.position[1], player.position[2]);
-                    avatar.lastUpdateMs = nowMs;
+                    this.resetMultiplayerAvatarMotion(avatar, player, nowMs);
                 }
                 continue;
             }
@@ -2090,8 +2168,7 @@ class SemanticAnnotationOverlay {
                     avatar.entity.enabled = false;
                     this.transitionMultiplayerAvatar(avatar, 'idle');
                     avatar.smoothedPlanarSpeed = 0;
-                    avatar.lastPosition.set(player.position[0], player.position[1], player.position[2]);
-                    avatar.lastUpdateMs = nowMs;
+                    this.resetMultiplayerAvatarMotion(avatar, player, nowMs);
                 }
                 continue;
             }
