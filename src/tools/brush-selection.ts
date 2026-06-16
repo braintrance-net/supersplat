@@ -355,6 +355,7 @@ class BrushSelection {
             if (dragId === undefined && (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary)) {
                 e.preventDefault();
                 e.stopPropagation();
+                events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
                 dragId = e.pointerId;
                 parent.setPointerCapture(dragId);
