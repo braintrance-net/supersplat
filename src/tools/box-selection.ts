@@ -24,6 +24,12 @@ class BoxSelection {
 
         gizmo.on('transform:move', () => {
             box.moved();
+            queueSelectionRefresh();
+        });
+
+        gizmo.on('transform:end', () => {
+            box.moved();
+            queueSelectionRefresh(true);
         });
 
         // resize mode: six face handles, each dragging ONLY its own face along
@@ -107,9 +113,19 @@ class BoxSelection {
             };
         };
 
+        const selectCurrentBox = (op: 'set' | 'add' | 'remove' = 'set', live = false) => {
+            const selectionBox = currentBox();
+            return events.invoke(live ? 'select.byOBBLiveNow' : 'select.byOBBNow', op, {
+                center: selectionBox.center,
+                dimensions: selectionBox.dimensions,
+                rotation: selectionBox.rotation
+            }) as Promise<unknown>;
+        };
+
         const apply = (op: 'set' | 'add' | 'remove') => {
-            const p = box.pivot.getPosition();
-            events.fire('select.byBox', op, [p.x, p.y, p.z, box.lenX, box.lenY, box.lenZ]);
+            selectCurrentBox(op).catch((err) => {
+                console.warn('[BoxSelection] selection apply failed', err);
+            });
         };
 
         // ---- resize handles: 6 face dots + 12 edge dots ----
@@ -129,6 +145,78 @@ class BoxSelection {
             // direction is clear — never two dimensions at once
             lockedFace: { axis: 0 | 1 | 2; sign: 1 | -1 } | null;
         } | null = null;
+        let selectionRefreshQueued = false;
+        let selectionRefreshInFlight = false;
+        let selectionRefreshFrame: number | null = null;
+        const isActive = () => this.active;
+
+        const runSelectionRefresh = async () => {
+            if (!isActive()) {
+                selectionRefreshQueued = false;
+                return;
+            }
+            if (selectionRefreshInFlight) {
+                selectionRefreshQueued = true;
+                return;
+            }
+
+            selectionRefreshQueued = false;
+            selectionRefreshInFlight = true;
+            try {
+                await selectCurrentBox('set', true);
+            } catch (err) {
+                console.warn('[BoxSelection] live selection refresh failed', err);
+            } finally {
+                selectionRefreshInFlight = false;
+                if (selectionRefreshQueued && isActive()) {
+                    queueSelectionRefresh();
+                }
+            }
+        };
+
+        function queueSelectionRefresh(immediate = false) {
+            if (!isActive()) {
+                return;
+            }
+            selectionRefreshQueued = true;
+            if (immediate) {
+                if (selectionRefreshFrame !== null) {
+                    window.cancelAnimationFrame(selectionRefreshFrame);
+                    selectionRefreshFrame = null;
+                }
+                runSelectionRefresh().catch((err) => {
+                    console.warn('[BoxSelection] live selection refresh failed', err);
+                });
+                return;
+            }
+            if (selectionRefreshFrame !== null || selectionRefreshInFlight) {
+                return;
+            }
+            selectionRefreshFrame = window.requestAnimationFrame(() => {
+                selectionRefreshFrame = null;
+                runSelectionRefresh().catch((err) => {
+                    console.warn('[BoxSelection] live selection refresh failed', err);
+                });
+            });
+        }
+
+        const cancelSelectionRefresh = () => {
+            if (selectionRefreshFrame !== null) {
+                window.cancelAnimationFrame(selectionRefreshFrame);
+                selectionRefreshFrame = null;
+            }
+            selectionRefreshQueued = false;
+        };
+
+        const cancelActiveDrag = () => {
+            if (!activeDrag) return;
+            const { handle, pointerId } = activeDrag;
+            if (handle.dom.hasPointerCapture(pointerId)) {
+                handle.dom.releasePointerCapture(pointerId);
+            }
+            handle.dom.style.cursor = 'grab';
+            activeDrag = null;
+        };
 
         const lenForAxis = (axis: 0 | 1 | 2) => (axis === 0 ? box.lenX : axis === 1 ? box.lenY : box.lenZ);
         const setLenForAxis = (axis: 0 | 1 | 2, value: number) => {
@@ -259,6 +347,7 @@ class BoxSelection {
             box.moved();
             scene.forceRender = true;
             updateResizeHandles();
+            queueSelectionRefresh();
         };
 
         function createResizeHandle(faces: { axis: 0 | 1 | 2; sign: 1 | -1 }[], freeAxis: 0 | 1 | 2) {
@@ -300,12 +389,22 @@ class BoxSelection {
             });
             const endDrag = (event: PointerEvent) => {
                 if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
-                dom.releasePointerCapture(event.pointerId);
+                if (dom.hasPointerCapture(event.pointerId)) {
+                    dom.releasePointerCapture(event.pointerId);
+                }
                 activeDrag = null;
                 dom.style.cursor = 'grab';
+                queueSelectionRefresh(true);
+            };
+            const lostPointerCapture = (event: PointerEvent) => {
+                if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
+                activeDrag = null;
+                dom.style.cursor = 'grab';
+                queueSelectionRefresh(true);
             };
             dom.addEventListener('pointerup', endDrag);
             dom.addEventListener('pointercancel', endDrag);
+            dom.addEventListener('lostpointercapture', lostPointerCapture);
             resizeHandles.push(handle);
             canvasContainer.dom.appendChild(dom);
         }
@@ -388,6 +487,7 @@ class BoxSelection {
             }
             box.moved();
             scene.forceRender = true;
+            queueSelectionRefresh();
         };
 
         lenX.on('change', () => {
@@ -426,6 +526,7 @@ class BoxSelection {
                 box.moved();
                 if (this.active) {
                     attachActiveGizmo();
+                    queueSelectionRefresh(true);
                 }
                 scene.forceRender = true;
                 return currentBox();
@@ -454,6 +555,8 @@ class BoxSelection {
         };
 
         this.deactivate = () => {
+            cancelSelectionRefresh();
+            cancelActiveDrag();
             selectToolbar.hidden = true;
             gizmo.detach();
             scene.remove(box);

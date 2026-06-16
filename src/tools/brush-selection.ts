@@ -391,9 +391,16 @@ class BrushSelection {
             update(e);
         };
 
-        const dragEnd = () => {
-            parent.releasePointerCapture(dragId);
+        const dragEnd = (releaseCapture = true) => {
+            const pointerId = dragId;
             dragId = undefined;
+            if (releaseCapture && pointerId !== undefined && parent.hasPointerCapture(pointerId)) {
+                try {
+                    parent.releasePointerCapture(pointerId);
+                } catch (err) {
+                    console.warn('[BrushSelection] pointer capture release failed', err);
+                }
+            }
             canvas.style.display = 'none';
             clearLivePreview();
         };
@@ -416,6 +423,20 @@ class BrushSelection {
                 }
 
                 dragEnd();
+            }
+        };
+
+        const pointercancel = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                e.preventDefault();
+                e.stopPropagation();
+                dragEnd();
+            }
+        };
+
+        const lostpointercapture = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                dragEnd(false);
             }
         };
 
@@ -457,6 +478,8 @@ class BrushSelection {
             parent.addEventListener('pointerdown', pointerdown);
             parent.addEventListener('pointermove', pointermove);
             parent.addEventListener('pointerup', pointerup);
+            parent.addEventListener('pointercancel', pointercancel);
+            parent.addEventListener('lostpointercapture', lostpointercapture);
             parent.addEventListener('wheel', wheel);
         };
 
@@ -471,6 +494,8 @@ class BrushSelection {
             parent.removeEventListener('pointerdown', pointerdown);
             parent.removeEventListener('pointermove', pointermove);
             parent.removeEventListener('pointerup', pointerup);
+            parent.removeEventListener('pointercancel', pointercancel);
+            parent.removeEventListener('lostpointercapture', lostpointercapture);
             parent.removeEventListener('wheel', wheel);
         };
 

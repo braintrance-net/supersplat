@@ -24,6 +24,16 @@ class RadialMenu extends Container {
     private isVisible = false;
     private oneShotTool: string | null = null;
     private events: Events;
+    private selectionToolNames = new Set([
+        'brushSelection',
+        'boxSelection',
+        'boxVolume',
+        'rectSelection',
+        'lassoSelection',
+        'polygonSelection',
+        'floodSelection',
+        'eyedropperSelection'
+    ]);
 
     constructor(events: Events, args = {}) {
         args = {
@@ -157,6 +167,11 @@ class RadialMenu extends Container {
         });
 
         const checkSelection = () => {
+            if (this.selectionToolNames.has(events.invoke('tool.active') as string)) {
+                this.hide();
+                return;
+            }
+
             const hasSplats = events.invoke('selection.splats');
             console.log('[RadialMenu] checkSelection — hasSplats:', hasSplats, 'oneShotTool:', this.oneShotTool);
             if (hasSplats) {
@@ -186,6 +201,13 @@ class RadialMenu extends Container {
         events.on('splat.positionsChanged', () => {
             if (this.isVisible && !this.oneShotTool) {
                 this.showNearSelection();
+            }
+        });
+
+        events.on('tool.activated', (toolName: string | null) => {
+            if (toolName && this.selectionToolNames.has(toolName)) {
+                this.oneShotTool = null;
+                this.hide();
             }
         });
 
@@ -220,6 +242,7 @@ class RadialMenu extends Container {
 
     private showAtPoint(x: number, y: number) {
         if (this.oneShotTool) return;
+        if (this.selectionToolNames.has(this.events.invoke('tool.active') as string)) return;
 
         const padding = 170;
         const clampedX = Math.max(padding, Math.min(x, window.innerWidth - padding));
@@ -239,6 +262,10 @@ class RadialMenu extends Container {
 
     private showNearSelection() {
         if (this.oneShotTool) return;
+        if (this.selectionToolNames.has(this.events.invoke('tool.active') as string)) {
+            this.hide();
+            return;
+        }
 
         const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
         console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);

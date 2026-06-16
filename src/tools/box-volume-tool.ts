@@ -275,6 +275,15 @@ class BoxVolumeTool {
             updateResizeHandles();
             scene.forceRender = true;
         };
+        const cancelActiveDrag = () => {
+            if (!activeDrag) return;
+            const { handle, pointerId } = activeDrag;
+            if (handle.dom.hasPointerCapture(pointerId)) {
+                handle.dom.releasePointerCapture(pointerId);
+            }
+            handle.dom.style.cursor = 'grab';
+            activeDrag = null;
+        };
         moveModeButton.dom.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
             editMode = 'move';
@@ -797,12 +806,20 @@ class BoxVolumeTool {
             });
             const endDrag = (event: PointerEvent) => {
                 if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
-                dom.releasePointerCapture(event.pointerId);
+                if (dom.hasPointerCapture(event.pointerId)) {
+                    dom.releasePointerCapture(event.pointerId);
+                }
+                activeDrag = null;
+                dom.style.cursor = 'grab';
+            };
+            const lostPointerCapture = (event: PointerEvent) => {
+                if (!activeDrag || activeDrag.pointerId !== event.pointerId) return;
                 activeDrag = null;
                 dom.style.cursor = 'grab';
             };
             dom.addEventListener('pointerup', endDrag);
             dom.addEventListener('pointercancel', endDrag);
+            dom.addEventListener('lostpointercapture', lostPointerCapture);
             resizeHandles.push(handle);
             canvasContainer.dom.appendChild(dom);
         };
@@ -945,6 +962,8 @@ class BoxVolumeTool {
 
         const pointerdown = (e: PointerEvent) => {
             if (!clicked && isPrimary(e)) {
+                e.preventDefault();
+                e.stopPropagation();
                 clicked = true;
                 clickCandidate = {
                     pointerId: e.pointerId,
@@ -1029,12 +1048,20 @@ class BoxVolumeTool {
             e.stopPropagation();
         };
 
+        const pointercancel = (e: PointerEvent) => {
+            if (clickCandidate?.pointerId === e.pointerId) {
+                clicked = false;
+                clickCandidate = null;
+            }
+        };
+
         const reset = () => {
             if (selectionRefreshFrame !== null) {
                 window.cancelAnimationFrame(selectionRefreshFrame);
                 selectionRefreshFrame = null;
             }
             selectionRefreshQueued = false;
+            cancelActiveDrag();
             phase = 'idle';
             clicked = false;
             clickCandidate = null;
@@ -1075,6 +1102,7 @@ class BoxVolumeTool {
             canvasContainer.dom.addEventListener('pointerdown', pointerdown);
             canvasContainer.dom.addEventListener('pointermove', pointermove);
             canvasContainer.dom.addEventListener('pointerup', pointerup, true);
+            canvasContainer.dom.addEventListener('pointercancel', pointercancel, true);
             document.addEventListener('keydown', onKeyDown);
         };
 
@@ -1084,6 +1112,7 @@ class BoxVolumeTool {
             canvasContainer.dom.removeEventListener('pointerdown', pointerdown);
             canvasContainer.dom.removeEventListener('pointermove', pointermove);
             canvasContainer.dom.removeEventListener('pointerup', pointerup, true);
+            canvasContainer.dom.removeEventListener('pointercancel', pointercancel, true);
             document.removeEventListener('keydown', onKeyDown);
         };
     }
