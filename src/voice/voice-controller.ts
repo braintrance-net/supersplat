@@ -6,10 +6,37 @@ const SILENCE_DURATION_MS = 2000;
 const ANALYSIS_INTERVAL_MS = 100;
 const WAKE_WORD = 'computer';
 
+type BrowserSpeechRecognitionResult = {
+    0: { transcript: string };
+    isFinal: boolean;
+};
+
+type BrowserSpeechRecognitionEvent = Event & {
+    resultIndex: number;
+    results: ArrayLike<BrowserSpeechRecognitionResult>;
+};
+
+type BrowserSpeechRecognitionErrorEvent = Event & {
+    error: string;
+};
+
+type BrowserSpeechRecognition = EventTarget & {
+    continuous: boolean;
+    interimResults: boolean;
+    lang: string;
+    onresult: ((event: BrowserSpeechRecognitionEvent) => void) | null;
+    onend: (() => void) | null;
+    onerror: ((event: BrowserSpeechRecognitionErrorEvent) => void) | null;
+    start: () => void;
+    stop: () => void;
+};
+
+type BrowserSpeechRecognitionConstructor = new () => BrowserSpeechRecognition;
+
 declare global {
     interface Window {
-        SpeechRecognition: typeof SpeechRecognition;
-        webkitSpeechRecognition: typeof SpeechRecognition;
+        SpeechRecognition?: BrowserSpeechRecognitionConstructor;
+        webkitSpeechRecognition?: BrowserSpeechRecognitionConstructor;
     }
 }
 
@@ -33,7 +60,7 @@ class VoiceController {
     private hasSpoken = false;
 
     // Wake word listener
-    private recognition: SpeechRecognition | null = null;
+    private recognition: BrowserSpeechRecognition | null = null;
     private listening = false;
     private lastWakeTriggerAt = 0;
 
@@ -95,7 +122,7 @@ class VoiceController {
     }
 
     private startWakeWordListener() {
-        const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+        const SpeechRecognitionClass = window.SpeechRecognition ?? window.webkitSpeechRecognition;
         if (!SpeechRecognitionClass) {
             console.error('[VoiceController] SpeechRecognition not supported — wake word requires Chrome');
             return;
@@ -106,7 +133,7 @@ class VoiceController {
         this.recognition.interimResults = true;
         this.recognition.lang = 'en-US';
 
-        this.recognition.onresult = (event: SpeechRecognitionEvent) => {
+        this.recognition.onresult = (event: BrowserSpeechRecognitionEvent) => {
             // Already recording — ignore any interim results
             if (this.active) return;
 
@@ -149,7 +176,7 @@ class VoiceController {
             }
         };
 
-        this.recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        this.recognition.onerror = (event: BrowserSpeechRecognitionErrorEvent) => {
             // 'no-speech' and 'aborted' are normal — just restart
             if (event.error === 'no-speech' || event.error === 'aborted') return;
             console.warn('[VoiceController] Recognition error:', event.error);

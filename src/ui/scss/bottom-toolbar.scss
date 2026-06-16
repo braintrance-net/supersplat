@@ -122,12 +122,40 @@ body.advanced-ui {
 
 #bottom-toolbar-touch,
 #bottom-toolbar-boxer,
+#bottom-toolbar-brush-boxer,
+#bottom-toolbar-brush-sam,
 #bottom-toolbar-boxer-all,
 #bottom-toolbar-manual-box,
 #bottom-toolbar-semantic-scan {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+.bottom-toolbar-variant-tool {
+    position: relative;
+}
+
+.bottom-toolbar-variant-badge {
+    position: absolute;
+    right: 5px;
+    bottom: 4px;
+    min-width: 11px;
+    height: 11px;
+    padding: 0 2px;
+    border-radius: 2px;
+    background: $bcg-darkest;
+    color: $clr-default;
+    font-size: 8px;
+    font-weight: 700;
+    line-height: 11px;
+    text-align: center;
+    pointer-events: none;
+}
+
+.bottom-toolbar-tool.active .bottom-toolbar-variant-badge {
+    background: $clr-active;
+    color: $clr-hilight;
 }
 
 #sam3-mode-wrap {

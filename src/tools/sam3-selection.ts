@@ -5,19 +5,19 @@ import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
-const DEFAULT_SAM3_BACKEND_URL = 'https://sam3.4dream.app';
+const DEFAULT_SAM3_BACKEND_URL = 'http://3.19.208.185:8000';
 
 const getSam3BackendUrl = () => {
     return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;
 };
 
-const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'include' => {
+const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'omit' => {
     if (!window.supersplatConfig?.sam3BackendUrl?.trim()) {
         return 'same-origin';
     }
 
     try {
-        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'omit';
     } catch {
         return 'same-origin';
     }

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const DEFAULT_PORT = 47824;
-const DEFAULT_TARGET = 'https://sam3.4dream.app';
+const DEFAULT_TARGET = 'http://3.19.208.185:8000';
 const DEFAULT_TIMEOUT_MS = 15000;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const defaultEvalOut = path.join(repoRoot, 'scripts', 'boxer-evals', 'live-brush-evals.jsonl');
@@ -18,7 +18,9 @@ let requestSequence = 0;
 
 const pathAliases = new Map([
     ['/api/sam3d/upload', '/upload'],
-    ['/api/sam3d/segment-point', '/segment_point']
+    ['/api/sam3d/segment-point', '/segment_point'],
+    ['/api/sam3d/segment-points', '/segment_points'],
+    ['/api/sam3d/segment-frame', '/segment_frame']
 ]);
 
 const allowedPaths = new Set([
@@ -27,7 +29,9 @@ const allowedPaths = new Set([
     '/api/sam3/segment-text',
     '/api/boxer-evals/append',
     '/upload',
+    '/segment_frame',
     '/segment_point',
+    '/segment_points',
     ...pathAliases.keys()
 ]);
 

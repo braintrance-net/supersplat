@@ -1,9 +1,9 @@
 import { Container } from '@playcanvas/pcui';
 
 import { Events } from '../events';
-import undoSvg from './svg/undo.svg';
 import placeSvg from './svg/place.svg';
 import trashSvg from './svg/trash.svg';
+import undoSvg from './svg/undo.svg';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));
@@ -35,7 +35,7 @@ class RadialMenu extends Container {
         this.events = events;
 
         // Block pointer events from reaching canvas
-        this.dom.addEventListener('pointerdown', (e) => e.stopPropagation());
+        this.dom.addEventListener('pointerdown', e => e.stopPropagation());
 
         this.menuEl = document.createElement('div');
         this.menuEl.id = 'radial-menu';

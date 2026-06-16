@@ -1,8 +1,10 @@
+/* eslint-disable no-use-before-define */
 import { Color, Vec3 } from 'playcanvas';
 
 import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
+import { getActiveCollisionSurface, waitForCollisionSurface } from '../utils/collision-surface';
 
 const OBB_EDGES: [number, number][] = [
     [0, 1], [2, 3], [4, 5], [6, 7],
@@ -28,8 +30,8 @@ const CLUSTER_EPS_FRAC_OF_DEPTH = 0.015;
 const CLUSTER_DEPTH_FRAC_OF_DEPTH = 0.04;
 const CLUSTER_DEPTH_MIN = 0.35;
 const CLUSTER_DEPTH_MAX = 1.25;
-const DEFAULT_SAM3_BACKEND_URL = 'https://sam3.4dream.app';
-const SAM3_REQUEST_TIMEOUT_MS = 1800;
+const DEFAULT_SAM3_BACKEND_URL = 'http://3.19.208.185:8000';
+const SAM3_REQUEST_TIMEOUT_MS = 10000;
 const LOCAL_EVAL_SAVE_PATH = '/api/boxer-evals/append';
 const LOCAL_EVAL_SAVE_TIMEOUT_MS = 10000;
 const SAM3_MAX_IMAGE_SIDE = 960;
@@ -69,13 +71,13 @@ const getLocalEvalSaveUrl = () => {
     }
 };
 
-const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'include' => {
+const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'omit' => {
     if (!window.supersplatConfig?.sam3BackendUrl?.trim()) {
         return 'same-origin';
     }
 
     try {
-        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'include';
+        return new URL(sam3BackendUrl, window.location.href).origin === window.location.origin ? 'same-origin' : 'omit';
     } catch {
         return 'same-origin';
     }
@@ -204,6 +206,10 @@ const captureScene = async (events: Events, width: number, height: number): Prom
     return off.toDataURL('image/png').split(',')[1];
 };
 
+const captureSceneRgba = (events: Events, width: number, height: number): Promise<Uint8Array> => {
+    return events.invoke('render.offscreen', width, height) as Promise<Uint8Array>;
+};
+
 const loadPng = async (b64: string): Promise<HTMLImageElement> => {
     const img = new Image();
     await new Promise<void>((resolve, reject) => {
@@ -324,7 +330,7 @@ type BoxerFramePayload = {
     depth_valid_ratio: number;
     depth_min: number;
     depth_max: number;
-    depth_source: 'gpu-splat-footprint' | 'cpu-center-zbuffer';
+    depth_source: 'gpu-splat-footprint' | 'cpu-center-zbuffer' | 'skipped-voxel-brush';
     geometry_cache_count?: number;
     geometry_cache_ms?: number;
     geometry_cache_reused?: boolean;
@@ -466,6 +472,7 @@ type BoxerClickDebugPanelState = {
     scale_runs?: { scale: number; ms: number; detections: number }[];
     candidate_count?: number;
     proposal_count?: number;
+    selected_splat_count?: number;
     ray_sample_count?: number;
     ray_depth_stats?: GeometryRefinement['ray_depth_stats'];
     candidates?: {
@@ -478,11 +485,13 @@ type BoxerClickDebugPanelState = {
     }[];
 };
 type BoxerOverlayLayer = {
-    bb2d: NormalizedBb2d;
+    bb2d?: NormalizedBb2d | null;
     label: string;
     color: string;
     dash?: string;
     width?: number;
+    // optional stroke polyline (canvas pixels), drawn semi-transparent
+    points?: [number, number][];
 };
 type BoxerBrushPrompt = {
     shape?: 'circle' | 'rect' | 'stroke';
@@ -493,12 +502,27 @@ type BoxerBrushPrompt = {
     bb2d?: NormalizedBb2d;
     points?: [number, number][];
     pad?: number;
+    // constant world-space brush radius when the stroke was drawn in 3D mode
+    radius_world?: number;
+    // 'raw' = pure extents box from the brushed gaussians, no candidate
+    // competition, no calibrated priors, no refinement
+    // 'evidence' = normal client brush, but keep full brush_surface evidence
+    // for fusion/validation instead of taking the broad fast shortcut
+    mode?: 'raw' | 'evidence';
+    // diagnostic: per-point pointer position (client px) and the collision
+    // surface hit under it, recorded by the brush tool for replication
+    probe_trace?: { client: [number, number]; world: [number, number, number] | null; distance: number | null }[];
 };
 type BoxerEvalPrompt =
     { type: 'click'; click_xy: [number, number] } |
     { type: 'click_sam'; click_xy: [number, number] } |
     { type: 'client_click'; click_xy: [number, number] } |
     { type: 'client_brush'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'client_brush_floor_snap'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'brush_sam'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'brush_sam_clean'; click_xy?: [number, number]; brush?: BoxerBrushPrompt } |
+    { type: 'brush_boxer'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; preprocess_mode?: 'full_frame' | 'square_crop'; object_crop?: ObjectCropOptions } |
+    { type: 'brush_fused'; click_xy?: [number, number]; brush?: BoxerBrushPrompt; boxernet_world_scale?: number; fuse_mode?: 'model_dims' | 'model_depth' } |
     { type: 'detect_all_click'; click_xy: [number, number] } |
     { type: 'direct_lift_click'; click_xy: [number, number]; use_sam?: boolean; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
     { type: 'lift_box'; bb2d: NormalizedBb2d; click_xy?: [number, number]; preprocess_mode?: 'full_frame' | 'square_crop'; depth_mode?: string; geometry_mode?: 'global' | 'proposal_local'; boxernet_world_scale?: number; boxernet_world_scales?: number[]; refinement_mode?: 'auto' | 'raw' | 'ray'; gravity?: [number, number, number]; object_crop?: ObjectCropOptions } |
@@ -522,18 +546,20 @@ type BoxerCopyEvalCaseInput = BoxerEvalTarget | {
 type BoxerFusionEvalCase = {
     id?: string;
     captured_at?: string;
+    fixture_index?: number;
     camera: CameraDebugState;
     frame?: { image_width?: number; image_height?: number };
     prompt?: BoxerEvalPrompt;
     target?: BoxerEvalTarget | null;
 };
 type BoxerFusionOptions = {
-    source?: 'target_box' | 'click_cluster';
+    source?: 'target_box' | 'click_cluster' | 'brush_support';
     min_views?: number;
     front_surface?: boolean;
     pad_scale?: number;
     quantile_low?: number;
     quantile_high?: number;
+    scorable_support_only?: boolean;
     capture_view_images?: boolean;
 };
 type Aabb = { min: [number, number, number]; max: [number, number, number] };
@@ -1382,6 +1408,35 @@ const findProjectedSeed = (
     return best;
 };
 
+const sampleSam3BrushPoints = (
+    brush: BoxerBrushPrompt | undefined,
+    fallback: [number, number],
+    maxPoints = 16
+): [number, number][] => {
+    const points = brush?.points?.length ? brush.points : [];
+    const deduped: [number, number][] = [];
+    const seen = new Set<string>();
+    const addPoint = (point: [number, number]) => {
+        const rounded: [number, number] = [Math.round(point[0]), Math.round(point[1])];
+        const key = `${rounded[0]},${rounded[1]}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        deduped.push(rounded);
+    };
+
+    addPoint(fallback);
+    if (points.length) {
+        const slots = Math.max(1, maxPoints - deduped.length);
+        const step = Math.max(1, Math.floor(points.length / slots));
+        for (let i = 0; i < points.length && deduped.length < maxPoints; i += step) {
+            addPoint(points[i]);
+        }
+        addPoint(points[points.length - 1]);
+    }
+
+    return deduped.slice(0, maxPoints);
+};
+
 const buildCandidateHash = (candidates: ProjectedSplatCandidate[], eps: number) => {
     const cells = new Map<number, number[]>();
     const inv = 1 / eps;
@@ -2045,6 +2100,162 @@ const maskBb2d = (
     };
 };
 
+type MaskPixelBounds = { x0: number; y0: number; x1: number; y1: number; count: number };
+
+const maskPixelBounds = (mask: Uint8Array, maskWidth: number, maskHeight: number): MaskPixelBounds | null => {
+    let x0 = maskWidth;
+    let y0 = maskHeight;
+    let x1 = -1;
+    let y1 = -1;
+    let count = 0;
+    for (let y = 0; y < maskHeight; y++) {
+        for (let x = 0; x < maskWidth; x++) {
+            if (mask[y * maskWidth + x] === 0) continue;
+            count++;
+            if (x < x0) x0 = x;
+            if (y < y0) y0 = y;
+            if (x > x1) x1 = x;
+            if (y > y1) y1 = y;
+        }
+    }
+    if (count === 0) return null;
+    return { x0, y0, x1: x1 + 1, y1: y1 + 1, count };
+};
+
+const worldRayFromPixel = (
+    scene: Scene,
+    intrinsics: Intrinsics,
+    pixelX: number,
+    pixelY: number
+): { origin: [number, number, number]; dir: [number, number, number] } => {
+    const camera = scene.camera;
+    const pos = camera.position;
+    const view = camera.camera.viewMatrix.data as Float32Array;
+    const ogX = (pixelX - intrinsics.cx) / Math.max(1e-6, intrinsics.fx);
+    const ogY = -(pixelY - intrinsics.cy) / Math.max(1e-6, intrinsics.fy);
+    const ogZ = -1;
+    const dx = view[0] * ogX + view[1] * ogY + view[2] * ogZ;
+    const dy = view[4] * ogX + view[5] * ogY + view[6] * ogZ;
+    const dz = view[8] * ogX + view[9] * ogY + view[10] * ogZ;
+    const len = Math.hypot(dx, dy, dz) || 1;
+    return {
+        origin: [pos.x, pos.y, pos.z],
+        dir: [dx / len, dy / len, dz / len]
+    };
+};
+
+const projectDepthOnly = (
+    scene: Scene,
+    worldX: number,
+    worldY: number,
+    worldZ: number
+) => {
+    const view = scene.camera.camera.viewMatrix.data as Float32Array;
+    const ogZ = view[2] * worldX + view[6] * worldY + view[10] * worldZ + view[14];
+    return -ogZ;
+};
+
+const computeMaskWorldQueryAabb = (
+    grid: DepthVisibilitySpatialGrid,
+    scene: Scene,
+    intrinsics: Intrinsics,
+    bounds: MaskPixelBounds,
+    maskWidth: number,
+    maskHeight: number,
+    imageWidth: number,
+    imageHeight: number
+): { min: [number, number, number]; max: [number, number, number] } | null => {
+    let nearDepth = Infinity;
+    let farDepth = -Infinity;
+    for (let xi = 0; xi < 2; xi++) {
+        for (let yi = 0; yi < 2; yi++) {
+            for (let zi = 0; zi < 2; zi++) {
+                const x = xi ? grid.boundsMax[0] : grid.boundsMin[0];
+                const y = yi ? grid.boundsMax[1] : grid.boundsMin[1];
+                const z = zi ? grid.boundsMax[2] : grid.boundsMin[2];
+                const depth = projectDepthOnly(scene, x, y, z);
+                if (depth <= 0) return null;
+                if (depth < nearDepth) nearDepth = depth;
+                if (depth > farDepth) farDepth = depth;
+            }
+        }
+    }
+    if (!Number.isFinite(nearDepth) || !Number.isFinite(farDepth) || farDepth <= 0) return null;
+
+    const padPx = 2;
+    const sx = imageWidth / Math.max(1, maskWidth);
+    const sy = imageHeight / Math.max(1, maskHeight);
+    const x0 = Math.max(0, (bounds.x0 - padPx) * sx);
+    const y0 = Math.max(0, (bounds.y0 - padPx) * sy);
+    const x1 = Math.min(imageWidth, (bounds.x1 + padPx) * sx);
+    const y1 = Math.min(imageHeight, (bounds.y1 + padPx) * sy);
+    if (x1 <= x0 || y1 <= y0) return null;
+
+    const forward = worldRayFromPixel(scene, intrinsics, imageWidth * 0.5, imageHeight * 0.5).dir;
+    const min: [number, number, number] = [Infinity, Infinity, Infinity];
+    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+    const expand = (x: number, y: number, z: number) => {
+        if (x < min[0]) min[0] = x;
+        if (y < min[1]) min[1] = y;
+        if (z < min[2]) min[2] = z;
+        if (x > max[0]) max[0] = x;
+        if (y > max[1]) max[1] = y;
+        if (z > max[2]) max[2] = z;
+    };
+
+    let expanded = false;
+    for (const [px, py] of [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] as [number, number][]) {
+        const ray = worldRayFromPixel(scene, intrinsics, px, py);
+        const cos = ray.dir[0] * forward[0] + ray.dir[1] * forward[1] + ray.dir[2] * forward[2];
+        if (cos <= 1e-3) continue;
+        for (const depth of [Math.max(nearDepth, 0.01), farDepth]) {
+            const t = depth / cos;
+            expand(
+                ray.origin[0] + ray.dir[0] * t,
+                ray.origin[1] + ray.dir[1] * t,
+                ray.origin[2] + ray.dir[2] * t
+            );
+            expanded = true;
+        }
+    }
+    if (!expanded) return null;
+
+    const padWorld = grid.cellSize + Math.max(0.05, farDepth * 0.0025);
+    return {
+        min: [min[0] - padWorld, min[1] - padWorld, min[2] - padWorld],
+        max: [max[0] + padWorld, max[1] + padWorld, max[2] + padWorld]
+    };
+};
+
+const queryDepthVisibilitySpatialGrid = (
+    grid: DepthVisibilitySpatialGrid,
+    min: [number, number, number],
+    max: [number, number, number]
+): Uint32Array => {
+    const inv = 1 / grid.cellSize;
+    const clampCell = (value: number) => Math.max(-1000000, Math.min(1000000, Math.floor(value * inv) | 0));
+    const ix0 = clampCell(min[0] - grid.boundsMin[0]);
+    const iy0 = clampCell(min[1] - grid.boundsMin[1]);
+    const iz0 = clampCell(min[2] - grid.boundsMin[2]);
+    const ix1 = clampCell(max[0] - grid.boundsMin[0]);
+    const iy1 = clampCell(max[1] - grid.boundsMin[1]);
+    const iz1 = clampCell(max[2] - grid.boundsMin[2]);
+    const cellVisits = Math.max(0, ix1 - ix0 + 1) * Math.max(0, iy1 - iy0 + 1) * Math.max(0, iz1 - iz0 + 1);
+    if (cellVisits > 350000) return new Uint32Array();
+
+    const pending: number[] = [];
+    for (let iz = iz0; iz <= iz1; iz++) {
+        for (let iy = iy0; iy <= iy1; iy++) {
+            for (let ix = ix0; ix <= ix1; ix++) {
+                const bucket = grid.cells.get(hashGridCell(ix, iy, iz));
+                if (!bucket) continue;
+                for (let i = 0; i < bucket.length; i++) pending.push(bucket[i]);
+            }
+        }
+    }
+    return Uint32Array.from(pending);
+};
+
 const collectMaskSplatCandidates = (
     splat: Splat,
     scene: Scene,
@@ -2057,30 +2268,59 @@ const collectMaskSplatCandidates = (
 ): ProjectedSplatCandidate[] => {
     const cache = getSplatWorldCenterCache(splat);
     if (!cache) return [];
-    const centers = cache.worldCenters;
-    const view = scene.camera.camera.viewMatrix.data as Float32Array;
+    const index = getDepthVisibilityIndex(splat);
+    const bounds = maskPixelBounds(mask, maskWidth, maskHeight);
+    let indexList: Uint32Array | null = null;
+    if (index && bounds) {
+        const aabb = computeMaskWorldQueryAabb(index.spatialGrid, scene, intrinsics, bounds, maskWidth, maskHeight, imageWidth, imageHeight);
+        if (aabb) {
+            const culled = queryDepthVisibilitySpatialGrid(index.spatialGrid, aabb.min, aabb.max);
+            if (culled.length > 0) indexList = culled;
+        }
+    }
+
     const scaleX = maskWidth / imageWidth;
     const scaleY = maskHeight / imageHeight;
     const candidates: ProjectedSplatCandidate[] = [];
-    const count = cache.count;
+    const viewCache = getDepthVisibilityViewCache(splat, scene, intrinsics, imageWidth, imageHeight);
+    const centers = cache.worldCenters;
+    const view = scene.camera.camera.viewMatrix.data as Float32Array;
 
-    for (let i = 0; i < count; i++) {
+    const visit = (i: number) => {
+        let u: number;
+        let v: number;
+        let cvZ: number;
+        let layerClass: 0 | 1 | 2 | 3 | undefined;
+        let tileIndex: number | undefined;
+        if (viewCache) {
+            if (!viewCache.inFrame[i]) return;
+            u = viewCache.pixelX[i];
+            v = viewCache.pixelY[i];
+            cvZ = viewCache.depth[i];
+            layerClass = viewCache.layerClass[i] as 0 | 1 | 2 | 3;
+            tileIndex = viewCache.tileIndex[i];
+        } else {
+            const wx = centers[i * 3];
+            const wy = centers[i * 3 + 1];
+            const wz = centers[i * 3 + 2];
+            const ogX = view[0] * wx + view[4] * wy + view[8]  * wz + view[12];
+            const ogY = view[1] * wx + view[5] * wy + view[9]  * wz + view[13];
+            const ogZ = view[2] * wx + view[6] * wy + view[10] * wz + view[14];
+            cvZ = -ogZ;
+            if (cvZ <= 0) return;
+            u = intrinsics.fx * ogX / cvZ + intrinsics.cx;
+            v = intrinsics.fy * (-ogY) / cvZ + intrinsics.cy;
+            if (u < 0 || u >= imageWidth || v < 0 || v >= imageHeight) return;
+        }
+
+        if (cvZ <= 0 || u < 0 || u >= imageWidth || v < 0 || v >= imageHeight) return;
+        const maskX = Math.min(maskWidth - 1, Math.max(0, Math.round(u * scaleX)));
+        const maskY = Math.min(maskHeight - 1, Math.max(0, Math.round(v * scaleY)));
+        if (mask[maskY * maskWidth + maskX] === 0) return;
+
         const wx = centers[i * 3];
         const wy = centers[i * 3 + 1];
         const wz = centers[i * 3 + 2];
-        const ogX = view[0] * wx + view[4] * wy + view[8]  * wz + view[12];
-        const ogY = view[1] * wx + view[5] * wy + view[9]  * wz + view[13];
-        const ogZ = view[2] * wx + view[6] * wy + view[10] * wz + view[14];
-        const cvZ = -ogZ;
-        if (cvZ <= 0) continue;
-
-        const u = intrinsics.fx * ogX / cvZ + intrinsics.cx;
-        const v = intrinsics.fy * (-ogY) / cvZ + intrinsics.cy;
-        if (u < 0 || u >= imageWidth || v < 0 || v >= imageHeight) continue;
-
-        const maskX = Math.min(maskWidth - 1, Math.max(0, Math.round(u * scaleX)));
-        const maskY = Math.min(maskHeight - 1, Math.max(0, Math.round(v * scaleY)));
-        if (mask[maskY * maskWidth + maskX] === 0) continue;
 
         candidates.push({
             point: [wx, wy, wz],
@@ -2088,10 +2328,18 @@ const collectMaskSplatCandidates = (
             world: [wx, wy, wz],
             pixel: [u, v],
             depth: cvZ,
-            in_frame: true
+            in_frame: true,
+            layer_class: layerClass,
+            tile_index: tileIndex
         });
+    };
+
+    if (indexList) {
+        for (let k = 0; k < indexList.length; k++) visit(indexList[k]);
+        if (candidates.length > 0) return candidates;
     }
 
+    for (let i = 0; i < cache.count; i++) visit(i);
     return candidates;
 };
 
@@ -2101,7 +2349,8 @@ const fetchSam3ClickMaskRegion = async (
     scene: Scene,
     clickX: number,
     clickY: number,
-    debug?: Sam3MaskDebug
+    debug?: Sam3MaskDebug,
+    options?: { promptPoints?: [number, number][] }
 ): Promise<Sam3MaskRegion | null> => {
     const sam3BackendUrl = getSam3BackendUrl();
     const resized = await resizePngBase64(frame.image, frame.image_width, frame.image_height, SAM3_MAX_IMAGE_SIDE);
@@ -2115,6 +2364,14 @@ const fetchSam3ClickMaskRegion = async (
         Math.min(1, Math.max(0, clickX / Math.max(1, frame.image_width))),
         Math.min(1, Math.max(0, clickY / Math.max(1, frame.image_height)))
     ];
+    const promptPoints = (options?.promptPoints?.length ? options.promptPoints : [[clickX, clickY]])
+    .filter(point => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+    const normalizedPoints = (promptPoints.length ? promptPoints : [[clickX, clickY]])
+    .map(([x, y]) => [
+        Math.min(1, Math.max(0, x / Math.max(1, frame.image_width))),
+        Math.min(1, Math.max(0, y / Math.max(1, frame.image_height)))
+    ] as [number, number]);
+    const labels = normalizedPoints.map(() => 1);
 
     const refineBody = {
         image: resized.image,
@@ -2123,8 +2380,8 @@ const fetchSam3ClickMaskRegion = async (
         clear_old_points: true,
         coordinate_space: 'normalized',
         image_size: { width: resized.width, height: resized.height },
-        points: [normalizedClick],
-        labels: [1]
+        points: normalizedPoints.length ? normalizedPoints : [normalizedClick],
+        labels: labels.length ? labels : [1]
     };
 
     try {
@@ -2141,7 +2398,7 @@ const fetchSam3ClickMaskRegion = async (
             ok: res.ok
         });
 
-        if (res.status === 404 || res.status === 405 || res.status === 501) {
+        if (!res.ok) {
             res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -2169,8 +2426,53 @@ const fetchSam3ClickMaskRegion = async (
             mask?: string;
             width?: number;
             height?: number;
+            masks?: { mask_png?: string; mask?: string; width?: number; height?: number }[];
             error?: string;
         };
+
+        if (!res.ok || !data.mask || data.width === undefined || data.height === undefined) {
+            const pixelPoints = (promptPoints.length ? promptPoints : [[clickX, clickY]])
+            .map(([x, y]) => ({
+                x: Math.round(x * resized.scale),
+                y: Math.round(y * resized.scale),
+                label: 1
+            }));
+            const frameRes = await fetch(`${sam3BackendUrl}/segment_frame`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: getSam3FetchCredentials(sam3BackendUrl),
+                body: JSON.stringify({
+                    image: resized.image,
+                    width: resized.width,
+                    height: resized.height,
+                    prompts: { points: pixelPoints },
+                    coordinate_space: 'pixel',
+                    multimask: false
+                }),
+                signal: controller.signal
+            });
+            const frameData = await frameRes.json().catch(() => ({})) as {
+                masks?: { mask_png?: string; mask?: string }[];
+                width?: number;
+                height?: number;
+                detail?: string;
+            };
+            debug?.attempts.push({
+                endpoint: '/segment_frame',
+                status: frameRes.status,
+                ok: frameRes.ok,
+                detail: frameData.detail
+            });
+            const firstMask = frameData.masks?.[0]?.mask_png ?? frameData.masks?.[0]?.mask;
+            if (frameRes.ok && firstMask && frameData.width !== undefined && frameData.height !== undefined) {
+                data = {
+                    mask: firstMask.includes(',') ? firstMask.split(',', 2)[1] : firstMask,
+                    width: frameData.width,
+                    height: frameData.height
+                };
+                res = frameRes;
+            }
+        }
 
         if (!res.ok || !data.mask || data.width === undefined || data.height === undefined) {
             const uploadForm = new FormData();
@@ -2190,24 +2492,46 @@ const fetchSam3ClickMaskRegion = async (
                 detail: uploadData.detail
             });
             if (uploadRes.ok && uploadData.job_id) {
-                const pointForm = new FormData();
-                pointForm.append('job_id', uploadData.job_id);
-                pointForm.append('x', String(Math.round(clickX * resized.scale)));
-                pointForm.append('y', String(Math.round(clickY * resized.scale)));
-                pointForm.append('label', '1');
-                const pointRes = await fetch(`${sam3BackendUrl}/segment_point`, {
-                    method: 'POST',
-                    credentials: getSam3FetchCredentials(sam3BackendUrl),
-                    body: pointForm,
-                    signal: controller.signal
-                });
+                const pixelPoints = (promptPoints.length ? promptPoints : [[clickX, clickY]])
+                .map(([x, y]) => [
+                    Math.round(x * resized.scale),
+                    Math.round(y * resized.scale)
+                ] as [number, number]);
+                let pointRes: Response;
+                if (pixelPoints.length > 1) {
+                    pointRes = await fetch(`${sam3BackendUrl}/segment_points`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: getSam3FetchCredentials(sam3BackendUrl),
+                        body: JSON.stringify({
+                            job_id: uploadData.job_id,
+                            points: pixelPoints,
+                            labels: pixelPoints.map(() => 1),
+                            coordinate_space: 'pixel',
+                            multimask_output: false
+                        }),
+                        signal: controller.signal
+                    });
+                } else {
+                    const pointForm = new FormData();
+                    pointForm.append('job_id', uploadData.job_id);
+                    pointForm.append('x', String(pixelPoints[0]?.[0] ?? Math.round(clickX * resized.scale)));
+                    pointForm.append('y', String(pixelPoints[0]?.[1] ?? Math.round(clickY * resized.scale)));
+                    pointForm.append('label', '1');
+                    pointRes = await fetch(`${sam3BackendUrl}/segment_point`, {
+                        method: 'POST',
+                        credentials: getSam3FetchCredentials(sam3BackendUrl),
+                        body: pointForm,
+                        signal: controller.signal
+                    });
+                }
                 const pointData = await pointRes.json().catch(() => ({})) as {
                     masks?: { mask_image?: string }[];
                     detail?: string;
                 };
                 const maskImage = pointData.masks?.[0]?.mask_image;
                 debug?.attempts.push({
-                    endpoint: '/segment_point',
+                    endpoint: pixelPoints.length > 1 ? '/segment_points' : '/segment_point',
                     status: pointRes.status,
                     ok: pointRes.ok,
                     detail: pointData.detail
@@ -3164,6 +3488,7 @@ const buildBoxerFramePayload = async (
     options?: {
         includeImage?: boolean;
         includeEncodedDepth?: boolean;
+        skipDepth?: boolean;
     }
 ) => {
     const cam = scene.camera.camera;
@@ -3177,17 +3502,21 @@ const buildBoxerFramePayload = async (
     const geometryCache = getSplatWorldCenterCache(splat);
     const geometryCacheMs = geometryCache?.lastAccessBuildMs ?? 0;
     const geometryCacheReused = geometryCache?.reused ?? false;
+    const skipDepth = options?.skipDepth === true;
 
     const depthT0 = performance.now();
-    const gpuDepthEnabled = getBoxerGpuDepthEnabled();
+    const emptyDepthBuffer: DepthBuffer = { data: new Float32Array(1), width: 1, height: 1 };
+    const gpuDepthEnabled = !skipDepth && getBoxerGpuDepthEnabled();
     const gpuDepthBuffer = gpuDepthEnabled ? await renderGpuSplatDepth(splat, scene, imageWidth, imageHeight) : null;
     const gpuDepthSummary = gpuDepthBuffer ? summarizeDepth(gpuDepthBuffer) : null;
-    const useGpuDepth = gpuDepthSummary && gpuDepthSummary.valid >= 1000;
-    const cpuDepthBuffer = useGpuDepth ? null : renderSplatDepth(splat, scene, imageWidth, imageHeight, intrinsics);
-    const depthSource: BoxerFramePayload['depth_source'] = useGpuDepth ?
-        'gpu-splat-footprint' :
-        'cpu-center-zbuffer';
-    const backendDepthBuffer = useGpuDepth && gpuDepthBuffer ? gpuDepthBuffer : cpuDepthBuffer!;
+    const useGpuDepth = !skipDepth && gpuDepthSummary && gpuDepthSummary.valid >= 1000;
+    const cpuDepthBuffer = skipDepth || useGpuDepth ? null : renderSplatDepth(splat, scene, imageWidth, imageHeight, intrinsics);
+    const depthSource: BoxerFramePayload['depth_source'] = skipDepth ?
+        'skipped-voxel-brush' :
+        (useGpuDepth ? 'gpu-splat-footprint' : 'cpu-center-zbuffer');
+    const backendDepthBuffer = skipDepth ?
+        emptyDepthBuffer :
+        (useGpuDepth && gpuDepthBuffer ? gpuDepthBuffer : cpuDepthBuffer!);
     const geometryDepthBuffer = backendDepthBuffer;
     const depthSummary = summarizeDepth(backendDepthBuffer);
     const sdpPatchDepths = buildSdpPatchDepths(backendDepthBuffer);
@@ -3196,8 +3525,8 @@ const buildBoxerFramePayload = async (
 
     const pointsT0 = performance.now();
     let pointCloudSource: BoxerFramePayload['point_cloud_source'] = 'front_surface_centers';
-    let sdpPoints = sampleSplatSurfacePoints(splat, scene, imageWidth, imageHeight, intrinsics, geometryDepthBuffer);
-    if (sdpPoints.length < Math.min(1000, MAX_SDP_POINTS / 4)) {
+    let sdpPoints = skipDepth ? [] : sampleSplatSurfacePoints(splat, scene, imageWidth, imageHeight, intrinsics, geometryDepthBuffer);
+    if (!skipDepth && sdpPoints.length < Math.min(1000, MAX_SDP_POINTS / 4)) {
         pointCloudSource = 'frustum_centers';
         sdpPoints = sampleSplatCentersInFrustum(splat, scene);
     }
@@ -3296,6 +3625,7 @@ const compactBoxerFramePayload = (frame: BoxerFramePayload) => ({
 
 const publishBoxerFrameDebug = (frame: BoxerFramePayload) => {
     (window as any).__lastBoxerFrame = compactBoxerFramePayload(frame);
+    (window as any).__lastBoxerFrameRaw = frame;
 };
 
 const publishBoxerResultDebug = (
@@ -3421,6 +3751,35 @@ const aabbIou = (a: Aabb, b: Aabb) => {
     const intersectionVolume = aabbVolume(intersection);
     const unionVolume = aabbVolume(a) + aabbVolume(b) - intersectionVolume;
     return unionVolume > 0 ? intersectionVolume / unionVolume : 0;
+};
+
+const pointInAabb = (
+    point: [number, number, number],
+    aabb: Aabb,
+    epsilon = 0
+) => (
+    point[0] >= aabb.min[0] - epsilon &&
+    point[0] <= aabb.max[0] + epsilon &&
+    point[1] >= aabb.min[1] - epsilon &&
+    point[1] <= aabb.max[1] + epsilon &&
+    point[2] >= aabb.min[2] - epsilon &&
+    point[2] <= aabb.max[2] + epsilon
+);
+
+const summarizeAabbPointCoverage = (
+    points: [number, number, number][],
+    aabb: Aabb,
+    epsilon = 0
+) => {
+    let inside = 0;
+    for (const point of points) {
+        if (pointInAabb(point, aabb, epsilon)) inside++;
+    }
+    return {
+        inside_count: inside,
+        total_count: points.length,
+        coverage: points.length ? inside / points.length : 0
+    };
 };
 
 const summarizePointAabb = (points: number[][]): { center: [number, number, number]; dimensions: [number, number, number]; aabb: Aabb } | null => {
@@ -3620,14 +3979,46 @@ const buildBb2dTargetMetrics = (
     const center = bbCenter(bb2d);
     const targetCenter = bbCenter(targetBb2d);
     const targetDiag = Math.max(1, Math.hypot(targetBb2d[2] - targetBb2d[0], targetBb2d[3] - targetBb2d[1]));
+    const coverage = buildBb2dCoverageStats(bb2d, targetBb2d);
     return {
-        bb2d_iou: bb2dIou(bb2d, targetBb2d),
+        bb2d_iou: coverage.iou,
+        bb2d_covered_by_target: coverage.a_covered_by_b,
+        target_covered_by_bb2d: coverage.b_covered_by_a,
         center_distance_px: Math.hypot(center[0] - targetCenter[0], center[1] - targetCenter[1]),
         center_distance_target_diag_ratio: Math.hypot(center[0] - targetCenter[0], center[1] - targetCenter[1]) / targetDiag,
         area_ratio_to_target: (
             (bb2d[2] - bb2d[0]) * (bb2d[3] - bb2d[1])
         ) / Math.max(1, (targetBb2d[2] - targetBb2d[0]) * (targetBb2d[3] - targetBb2d[1]))
     };
+};
+
+const buildBb2dCoverageStats = (a: NormalizedBb2d, b: NormalizedBb2d) => {
+    const areaA = Math.max(0, a[2] - a[0]) * Math.max(0, a[3] - a[1]);
+    const areaB = Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]);
+    const intersectionArea = Math.max(0, Math.min(a[2], b[2]) - Math.max(a[0], b[0])) *
+        Math.max(0, Math.min(a[3], b[3]) - Math.max(a[1], b[1]));
+    const union = areaA + areaB - intersectionArea;
+    return {
+        iou: union > 0 ? intersectionArea / union : 0,
+        a_covered_by_b: areaA > 0 ? intersectionArea / areaA : 0,
+        b_covered_by_a: areaB > 0 ? intersectionArea / areaB : 0,
+        area_ratio_a_to_b: areaB > 0 ? areaA / areaB : null
+    };
+};
+
+const formatEvalQualityWarning = (warning: string) => {
+    switch (warning) {
+        case 'camera-changed-after-run':
+            return 'camera changed';
+        case 'target-not-visible-from-captured-camera':
+            return 'target not visible';
+        case 'prompt-target-2d-coverage-low':
+            return 'brush misses target';
+        case 'result-target-2d-overlap-low':
+            return 'result misses target';
+        default:
+            return warning;
+    }
 };
 
 const buildClientLiftSeedObb = (
@@ -4054,9 +4445,7 @@ const resolveClientBrushRegion = (
         const dy = y - py;
         return dx * dx + dy * dy;
     };
-    const contains = (candidate: ProjectedSplatCandidate) => {
-        const x = candidate.pixel[0];
-        const y = candidate.pixel[1];
+    const containsPixel = (x: number, y: number) => {
         if (!bbContainsPoint(bb2d, x, y)) return false;
         if (points.length === 1) {
             const dx = x - points[0][0];
@@ -4074,15 +4463,765 @@ const resolveClientBrushRegion = (
         const dy = y - center[1];
         return dx * dx + dy * dy <= radius2;
     };
+    const contains = (candidate: ProjectedSplatCandidate) => containsPixel(candidate.pixel[0], candidate.pixel[1]);
 
     return {
         shape,
         center,
         radius,
         bb2d,
+        containsPixel,
         contains,
         point_count: points.length,
         area_ratio: (bb2d[2] - bb2d[0]) * (bb2d[3] - bb2d[1]) / Math.max(1, frame.image_width * frame.image_height)
+    };
+};
+
+const buildBrushVisualEvidence = async (
+    events: Events,
+    frame: BoxerFramePayload,
+    brush: BoxerBrushPrompt | undefined,
+    click?: [number, number]
+): Promise<BrushVisualEvidence | null> => {
+    const region = resolveClientBrushRegion(frame, brush, click);
+    const scale = Math.min(1, 360 / Math.max(frame.image_width, frame.image_height));
+    const width = Math.max(1, Math.round(frame.image_width * scale));
+    const height = Math.max(1, Math.round(frame.image_height * scale));
+    const source = await captureSceneRgba(events, width, height);
+    const count = width * height;
+    const r = new Uint8Array(count);
+    const g = new Uint8Array(count);
+    const b = new Uint8Array(count);
+    const luma = new Float32Array(count);
+    const gradient = new Float32Array(count);
+    const brushMask = new Uint8Array(count);
+
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const src = (y * width + x) * 4;
+            const dst = y * width + x;
+            r[dst] = source[src];
+            g[dst] = source[src + 1];
+            b[dst] = source[src + 2];
+            luma[dst] = source[src] * 0.2126 + source[src + 1] * 0.7152 + source[src + 2] * 0.0722;
+        }
+    }
+
+    for (let y = 1; y + 1 < height; y++) {
+        for (let x = 1; x + 1 < width; x++) {
+            const i = y * width + x;
+            const dx = luma[i + 1] - luma[i - 1];
+            const dy = luma[i + width] - luma[i - width];
+            gradient[i] = Math.hypot(dx, dy) * 0.5;
+        }
+    }
+
+    let sumR = 0;
+    let sumG = 0;
+    let sumB = 0;
+    let sumLuma = 0;
+    let sumGradient = 0;
+    let brushCount = 0;
+    const minX = Math.max(0, Math.floor(region.bb2d[0] * scale));
+    const minY = Math.max(0, Math.floor(region.bb2d[1] * scale));
+    const maxX = Math.min(width - 1, Math.ceil(region.bb2d[2] * scale));
+    const maxY = Math.min(height - 1, Math.ceil(region.bb2d[3] * scale));
+    for (let y = minY; y <= maxY; y++) {
+        for (let x = minX; x <= maxX; x++) {
+            const sx = x / scale;
+            const sy = y / scale;
+            if (!region.containsPixel(sx, sy)) continue;
+            const i = y * width + x;
+            brushMask[i] = 1;
+            sumR += r[i];
+            sumG += g[i];
+            sumB += b[i];
+            sumLuma += luma[i];
+            sumGradient += gradient[i];
+            brushCount++;
+        }
+    }
+
+    if (brushCount < 16) return null;
+
+    return {
+        width,
+        height,
+        scale,
+        count,
+        r,
+        g,
+        b,
+        luma,
+        gradient,
+        brush_mask: brushMask,
+        brush: {
+            count: brushCount,
+            mean_rgb: [sumR / brushCount, sumG / brushCount, sumB / brushCount],
+            mean_luma: sumLuma / brushCount,
+            mean_gradient: sumGradient / brushCount
+        }
+    };
+};
+
+const scoreBrushVisualCandidate = (
+    evidence: BrushVisualEvidence | null | undefined,
+    bb: NormalizedBb2d
+): BrushVisualCandidateScore | null => {
+    if (!evidence) return null;
+    const scale = evidence.scale;
+    const x0 = clamp(Math.floor(bb[0] * scale), 0, evidence.width - 1);
+    const y0 = clamp(Math.floor(bb[1] * scale), 0, evidence.height - 1);
+    const x1 = clamp(Math.ceil(bb[2] * scale), 0, evidence.width - 1);
+    const y1 = clamp(Math.ceil(bb[3] * scale), 0, evidence.height - 1);
+    if (x1 <= x0 || y1 <= y0) return null;
+
+    let inR = 0;
+    let inG = 0;
+    let inB = 0;
+    let inLuma = 0;
+    let insideCount = 0;
+    let brushInsideCount = 0;
+    const sampleStep = Math.max(1, Math.floor(Math.max(x1 - x0, y1 - y0) / 80));
+    for (let y = y0; y <= y1; y += sampleStep) {
+        for (let x = x0; x <= x1; x += sampleStep) {
+            const i = y * evidence.width + x;
+            inR += evidence.r[i];
+            inG += evidence.g[i];
+            inB += evidence.b[i];
+            inLuma += evidence.luma[i];
+            brushInsideCount += evidence.brush_mask[i] ? 1 : 0;
+            insideCount++;
+        }
+    }
+    if (insideCount < 4) return null;
+    inR /= insideCount;
+    inG /= insideCount;
+    inB /= insideCount;
+    inLuma /= insideCount;
+
+    const borderPad = Math.max(2, Math.round(8 * scale));
+    const bx0 = Math.max(0, x0 - borderPad);
+    const by0 = Math.max(0, y0 - borderPad);
+    const bx1 = Math.min(evidence.width - 1, x1 + borderPad);
+    const by1 = Math.min(evidence.height - 1, y1 + borderPad);
+    let outR = 0;
+    let outG = 0;
+    let outB = 0;
+    let outLuma = 0;
+    let borderCount = 0;
+    for (let y = by0; y <= by1; y += sampleStep) {
+        for (let x = bx0; x <= bx1; x += sampleStep) {
+            if (x >= x0 && x <= x1 && y >= y0 && y <= y1) continue;
+            const i = y * evidence.width + x;
+            outR += evidence.r[i];
+            outG += evidence.g[i];
+            outB += evidence.b[i];
+            outLuma += evidence.luma[i];
+            borderCount++;
+        }
+    }
+    if (borderCount > 0) {
+        outR /= borderCount;
+        outG /= borderCount;
+        outB /= borderCount;
+        outLuma /= borderCount;
+    } else {
+        outR = inR;
+        outG = inG;
+        outB = inB;
+        outLuma = inLuma;
+    }
+
+    let perimeterEdgeSum = 0;
+    let perimeterCount = 0;
+    const perimeterStep = Math.max(1, Math.floor(Math.max(x1 - x0, y1 - y0) / 120));
+    for (let x = x0; x <= x1; x += perimeterStep) {
+        perimeterEdgeSum += evidence.gradient[y0 * evidence.width + x] + evidence.gradient[y1 * evidence.width + x];
+        perimeterCount += 2;
+    }
+    for (let y = y0; y <= y1; y += perimeterStep) {
+        perimeterEdgeSum += evidence.gradient[y * evidence.width + x0] + evidence.gradient[y * evidence.width + x1];
+        perimeterCount += 2;
+    }
+    const perimeterEdge = perimeterEdgeSum / Math.max(1, perimeterCount);
+
+    const brushRgb = evidence.brush.mean_rgb;
+    const brushDelta = Math.hypot(inR - brushRgb[0], inG - brushRgb[1], inB - brushRgb[2]);
+    const colorSimilarity = clamp(1 - brushDelta / 150, 0, 1);
+    const boundaryContrast = clamp(
+        (Math.hypot(inR - outR, inG - outG, inB - outB) * 0.65 + Math.abs(inLuma - outLuma) * 0.35) / 120,
+        0,
+        1
+    );
+    const edgeSupport = clamp(perimeterEdge / Math.max(35, evidence.brush.mean_gradient + 24), 0, 1);
+    const brushCoverage = clamp(brushInsideCount / Math.max(1, evidence.brush.count), 0, 1);
+    const brushDensity = clamp(brushInsideCount / Math.max(1, insideCount), 0, 1);
+    const score = colorSimilarity * 0.07 +
+        boundaryContrast * 0.08 +
+        edgeSupport * 0.08 +
+        brushCoverage * 0.045 +
+        Math.min(0.015, brushDensity * 0.06) -
+        (1 - colorSimilarity) * 0.05;
+
+    return {
+        score,
+        color_similarity: colorSimilarity,
+        boundary_contrast: boundaryContrast,
+        perimeter_edge: edgeSupport,
+        brush_coverage: brushCoverage,
+        brush_density: brushDensity,
+        inside_count: insideCount,
+        brush_inside_count: brushInsideCount,
+        border_count: borderCount
+    };
+};
+
+type BrushSurfaceAnchor = {
+    point: [number, number, number];
+    pixel: [number, number];
+    distance: number;
+    radius_world: number;
+    dir: [number, number, number];
+};
+
+type BrushSurfaceEvidence = {
+    anchors: BrushSurfaceAnchor[];
+    support: ProjectedSplatCandidate[];
+    core_support: ProjectedSplatCandidate[];
+    sampled_point_count: number;
+    anchor_hit_ratio: number;
+    median_radius_world: number;
+    thickness_cut: number;
+    thickness_cap: number;
+    support_floor_y?: number;
+    support_floor_sample_count?: number;
+    sam_filter?: {
+        applied: boolean;
+        reason?: string;
+        mask_point_count: number;
+        unfiltered_support_count: number;
+        filtered_support_count: number;
+        unfiltered_core_count: number;
+        filtered_core_count: number;
+        pixel_radius: number;
+    };
+};
+
+type BrushVisualEvidence = {
+    width: number;
+    height: number;
+    scale: number;
+    count: number;
+    r: Uint8Array;
+    g: Uint8Array;
+    b: Uint8Array;
+    luma: Float32Array;
+    gradient: Float32Array;
+    brush_mask: Uint8Array;
+    brush: {
+        count: number;
+        mean_rgb: [number, number, number];
+        mean_luma: number;
+        mean_gradient: number;
+    };
+};
+
+type BrushVisualCandidateScore = {
+    score: number;
+    color_similarity: number;
+    boundary_contrast: number;
+    perimeter_edge: number;
+    brush_coverage: number;
+    brush_density: number;
+    inside_count: number;
+    brush_inside_count: number;
+    border_count: number;
+};
+
+const BRUSH_SURFACE_MAX_ANCHOR_SAMPLES = 48;
+const BRUSH_SURFACE_RADIUS_FACTOR = 1.35;
+const BRUSH_SURFACE_BACK_TOLERANCE = 0.25;
+const BRUSH_SURFACE_MAX_THICKNESS = 2.6;
+const BRUSH_SURFACE_MIN_THICKNESS = 0.5;
+const BRUSH_SURFACE_THICKNESS_EXTENT_FACTOR = 2.0;
+// surface evidence is unfitted to the eval suites; it only overrides the
+// calibrated candidate family when none of them reaches this score
+const BRUSH_SURFACE_OVERRIDE_MAX_ALT_SCORE = 1.2;
+
+const filterCandidatesBySamRegion = (
+    frame: BoxerFramePayload,
+    scene: Scene,
+    candidates: ProjectedSplatCandidate[],
+    sam3Region: Sam3MaskRegion | null | undefined
+) => {
+    if (!sam3Region?.mask_bb2d || sam3Region.point_count < 24) {
+        return {
+            candidates,
+            applied: false,
+            reason: 'missing-sam-region',
+            mask_point_count: sam3Region?.point_count ?? 0,
+            pixel_radius: 0
+        };
+    }
+
+    const projectedMaskPoints = sam3Region.points
+    .map(point => projectWorldPointToImage(point, scene, frame.intrinsics))
+    .filter(sample => sample.in_frame);
+    if (projectedMaskPoints.length < 12) {
+        return {
+            candidates,
+            applied: false,
+            reason: 'too-few-projected-mask-points',
+            mask_point_count: sam3Region.point_count,
+            pixel_radius: 0
+        };
+    }
+
+    const maskWidth = Math.max(1, sam3Region.mask_bb2d[2] - sam3Region.mask_bb2d[0]);
+    const maskHeight = Math.max(1, sam3Region.mask_bb2d[3] - sam3Region.mask_bb2d[1]);
+    const pixelRadius = clamp(
+        Math.sqrt(maskWidth * maskHeight / Math.max(1, projectedMaskPoints.length)) * 2.2,
+        4,
+        26
+    );
+    const pixelRadius2 = pixelRadius * pixelRadius;
+    const cellSize = Math.max(4, pixelRadius);
+    const cells = new Map<string, [number, number][]>();
+    for (const sample of projectedMaskPoints) {
+        const key = `${Math.floor(sample.pixel[0] / cellSize)},${Math.floor(sample.pixel[1] / cellSize)}`;
+        const list = cells.get(key) ?? [];
+        list.push(sample.pixel);
+        cells.set(key, list);
+    }
+
+    const nearMaskPoint = (x: number, y: number) => {
+        const cx = Math.floor(x / cellSize);
+        const cy = Math.floor(y / cellSize);
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                for (const point of cells.get(`${cx + dx},${cy + dy}`) ?? []) {
+                    const px = x - point[0];
+                    const py = y - point[1];
+                    if (px * px + py * py <= pixelRadius2) return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    return {
+        candidates: candidates.filter(candidate => (
+            bbContainsPoint(sam3Region.mask_bb2d, candidate.pixel[0], candidate.pixel[1]) &&
+            nearMaskPoint(candidate.pixel[0], candidate.pixel[1])
+        )),
+        applied: true,
+        mask_point_count: sam3Region.point_count,
+        pixel_radius: pixelRadius
+    };
+};
+
+const estimateSupportFloorY = (
+    surface: ReturnType<typeof getActiveCollisionSurface>,
+    support: ProjectedSplatCandidate[],
+    anchors: BrushSurfaceAnchor[],
+    medianRadiusWorld: number
+) => {
+    if (support.length < 8) return null;
+
+    const hitYs: number[] = [];
+    const anchorStep = Math.max(1, Math.ceil(anchors.length / 16));
+    for (let i = 0; i < anchors.length; i += anchorStep) {
+        const anchor = anchors[i];
+        const lift = Math.max(0.12, medianRadiusWorld * 0.8);
+        const hit = surface?.raycastWorld(
+            [anchor.point[0], anchor.point[1] + lift, anchor.point[2]],
+            [0, -1, 0],
+            Math.max(0.4, lift + medianRadiusWorld * 3.0)
+        );
+        if (hit && hit.point[1] <= anchor.point[1] + 0.08) {
+            hitYs.push(hit.point[1]);
+        }
+    }
+
+    if (hitYs.length >= 3) {
+        hitYs.sort((a, b) => a - b);
+        return {
+            y: hitYs[Math.floor(hitYs.length * 0.15)],
+            sample_count: hitYs.length
+        };
+    }
+
+    const supportYs = support.map(candidate => candidate.point[1]).sort((a, b) => a - b);
+    return {
+        y: supportYs[Math.floor(supportYs.length * 0.02)],
+        sample_count: supportYs.length
+    };
+};
+
+const snapSummaryToFloor = (
+    summary: { center: [number, number, number]; dimensions: [number, number, number]; aabb: Aabb },
+    floorY: number | undefined
+) => {
+    if (floorY === undefined || !(floorY < summary.aabb.max[1])) return summary;
+    const aabb: Aabb = {
+        min: [summary.aabb.min[0], floorY, summary.aabb.min[2]],
+        max: [...summary.aabb.max] as [number, number, number]
+    };
+    const center = [0, 1, 2].map(axis => (aabb.min[axis] + aabb.max[axis]) / 2) as [number, number, number];
+    const dimensions = [0, 1, 2].map(axis => Math.max(0.05, aabb.max[axis] - aabb.min[axis])) as [number, number, number];
+    return { center, dimensions, aabb };
+};
+
+// Lift the 2D brush stroke onto the scene's collision surface: raycast sampled
+// stroke pixels against the collision mesh sidecar, then keep splat candidates
+// inside the resulting world-space brush tube. Depth extent comes from the
+// actual splat density along each anchor ray (front shell through back shell),
+// cut at the first density gap so background behind the object is excluded.
+const collectBrushSurfaceEvidence = (
+    frame: BoxerFramePayload,
+    scene: Scene,
+    region: ReturnType<typeof resolveClientBrushRegion>,
+    brush: BoxerBrushPrompt | undefined,
+    projectedCandidates: ProjectedSplatCandidate[],
+    sam3Region?: Sam3MaskRegion | null
+): BrushSurfaceEvidence | null => {
+    const surface = getActiveCollisionSurface();
+    if (!surface) return null;
+
+    const strokePoints = brush?.points?.length ? brush.points : [region.center];
+    const sampleStep = Math.max(1, Math.ceil(strokePoints.length / BRUSH_SURFACE_MAX_ANCHOR_SAMPLES));
+    const sampledPixels: [number, number][] = [];
+    for (let i = 0; i < strokePoints.length; i += sampleStep) {
+        sampledPixels.push([strokePoints[i][0], strokePoints[i][1]]);
+    }
+    const lastStrokePoint = strokePoints[strokePoints.length - 1];
+    const lastSampled = sampledPixels[sampledPixels.length - 1];
+    if (lastSampled[0] !== lastStrokePoint[0] || lastSampled[1] !== lastStrokePoint[1]) {
+        sampledPixels.push([lastStrokePoint[0], lastStrokePoint[1]]);
+    }
+
+    const e = frame.extrinsics;
+    const origin: [number, number, number] = [e[12], e[13], e[14]];
+    const anchors: BrushSurfaceAnchor[] = [];
+    for (const pixel of sampledPixels) {
+        const through = unprojectDepthToWorld(frame, pixel[0], pixel[1], 1);
+        const dir: [number, number, number] = [
+            through[0] - origin[0],
+            through[1] - origin[1],
+            through[2] - origin[2]
+        ];
+        const hit = surface.raycastWorld(origin, dir);
+        if (!hit) continue;
+        const dirLength = Math.hypot(dir[0], dir[1], dir[2]);
+        anchors.push({
+            point: hit.point,
+            pixel,
+            distance: hit.distance,
+            radius_world: Math.max(0.01, brush?.radius_world ?? region.radius / Math.max(1, frame.intrinsics.fx) * hit.distance),
+            dir: [dir[0] / dirLength, dir[1] / dirLength, dir[2] / dirLength]
+        });
+    }
+    if (anchors.length === 0) {
+        return {
+            anchors,
+            support: [],
+            core_support: [],
+            sampled_point_count: sampledPixels.length,
+            anchor_hit_ratio: 0,
+            median_radius_world: 0,
+            thickness_cut: 0,
+            thickness_cap: 0
+        };
+    }
+
+    const sortedRadii = anchors.map(anchor => anchor.radius_world).sort((a, b) => a - b);
+    const medianRadiusWorld = sortedRadii[Math.floor(sortedRadii.length / 2)];
+
+    // the anchor cloud spans the brushed face of the object, so its extent is
+    // a direct estimate of the object's cross-scale; bound the depth sweep by
+    // it so the tube cannot run far into background surfaces behind the object
+    const anchorMin = [Infinity, Infinity, Infinity];
+    const anchorMax = [-Infinity, -Infinity, -Infinity];
+    for (const anchor of anchors) {
+        for (let axis = 0; axis < 3; axis++) {
+            anchorMin[axis] = Math.min(anchorMin[axis], anchor.point[axis]);
+            anchorMax[axis] = Math.max(anchorMax[axis], anchor.point[axis]);
+        }
+    }
+    const anchorExtentDiag = Math.hypot(
+        anchorMax[0] - anchorMin[0],
+        anchorMax[1] - anchorMin[1],
+        anchorMax[2] - anchorMin[2]
+    );
+    const thicknessCap = Math.min(
+        BRUSH_SURFACE_MAX_THICKNESS,
+        Math.max(BRUSH_SURFACE_MIN_THICKNESS, anchorExtentDiag * BRUSH_SURFACE_THICKNESS_EXTENT_FACTOR)
+    );
+
+    const anchorPixelRadius = Math.max(24, (brush?.radius ?? region.radius) * 2.5);
+    const anchorCellSize = Math.max(12, Math.min(64, anchorPixelRadius));
+    const anchorCellRadius = Math.max(1, Math.ceil(anchorPixelRadius / anchorCellSize));
+    const anchorCells = new Map<string, number[]>();
+    for (let anchorIndex = 0; anchorIndex < anchors.length; anchorIndex++) {
+        const anchor = anchors[anchorIndex];
+        const key = `${Math.floor(anchor.pixel[0] / anchorCellSize)},${Math.floor(anchor.pixel[1] / anchorCellSize)}`;
+        const list = anchorCells.get(key) ?? [];
+        list.push(anchorIndex);
+        anchorCells.set(key, list);
+    }
+    const anchorIndexesNearPixel = (pixel: [number, number]) => {
+        const cx = Math.floor(pixel[0] / anchorCellSize);
+        const cy = Math.floor(pixel[1] / anchorCellSize);
+        const indexes: number[] = [];
+        for (let dy = -anchorCellRadius; dy <= anchorCellRadius; dy++) {
+            for (let dx = -anchorCellRadius; dx <= anchorCellRadius; dx++) {
+                const cell = anchorCells.get(`${cx + dx},${cy + dy}`);
+                if (cell) indexes.push(...cell);
+            }
+        }
+        return indexes;
+    };
+
+    const strokeCandidates = projectedCandidates.filter(region.contains);
+    const matched: { candidate: ProjectedSplatCandidate; delta: number; anchorIndex: number; core: boolean }[] = [];
+    for (const candidate of strokeCandidates) {
+        const nearbyAnchorIndexes = anchorIndexesNearPixel(candidate.pixel);
+        if (nearbyAnchorIndexes.length === 0) continue;
+        const px = candidate.point[0] - origin[0];
+        const py = candidate.point[1] - origin[1];
+        const pz = candidate.point[2] - origin[2];
+        const lengthSq = px * px + py * py + pz * pz;
+        let bestDelta = Infinity;
+        let bestPerp = Infinity;
+        let bestAnchorIndex = -1;
+        let bestCoreRadius = 0;
+        for (const anchorIndex of nearbyAnchorIndexes) {
+            const anchor = anchors[anchorIndex];
+            const t = px * anchor.dir[0] + py * anchor.dir[1] + pz * anchor.dir[2];
+            const delta = t - anchor.distance;
+            if (delta < -BRUSH_SURFACE_BACK_TOLERANCE || delta > thicknessCap) continue;
+            const perpSq = Math.max(0, lengthSq - t * t);
+            const maxPerp = anchor.radius_world * BRUSH_SURFACE_RADIUS_FACTOR;
+            if (perpSq > maxPerp * maxPerp) continue;
+            if (perpSq < bestPerp) {
+                bestPerp = perpSq;
+                bestDelta = delta;
+                bestAnchorIndex = anchorIndex;
+                bestCoreRadius = anchor.radius_world * 0.6;
+            }
+        }
+        if (bestAnchorIndex >= 0) {
+            matched.push({
+                candidate,
+                delta: bestDelta,
+                anchorIndex: bestAnchorIndex,
+                // core = clearly inside the stroke, robust against the tube
+                // swallowing neighbouring surfaces; multi-view fusion prefers it
+                core: bestPerp <= bestCoreRadius * bestCoreRadius
+            });
+        }
+    }
+    if (matched.length === 0) {
+        return {
+            anchors,
+            support: [],
+            core_support: [],
+            sampled_point_count: sampledPixels.length,
+            anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
+            median_radius_world: medianRadiusWorld,
+            thickness_cut: 0,
+            thickness_cap: thicknessCap
+        };
+    }
+
+    // per-ray depth clustering: each anchor ray walks its own depth-delta
+    // distribution from the surface backwards and stops at the first density
+    // gap, so a stroke crossing object + background cuts each sightline where
+    // ITS object ends instead of using one global thickness
+    const anchorDeltas: number[][] = anchors.map((): number[] => []);
+    for (const entry of matched) {
+        anchorDeltas[entry.anchorIndex].push(Math.max(0, entry.delta));
+    }
+    const PER_RAY_MIN_SAMPLES = 4;
+    const anchorCuts: (number | null)[] = anchors.map((anchor, anchorIndex) => {
+        const deltas = anchorDeltas[anchorIndex];
+        if (deltas.length < PER_RAY_MIN_SAMPLES) return null;
+        deltas.sort((a, b) => a - b);
+        const gapThreshold = Math.max(0.35, anchor.radius_world * 1.8);
+        let cut = deltas[0];
+        for (let i = 1; i < deltas.length; i++) {
+            if (deltas[i] - cut > gapThreshold) break;
+            cut = deltas[i];
+        }
+        return cut;
+    });
+    const validCuts = anchorCuts.filter((cut): cut is number => cut !== null).sort((a, b) => a - b);
+    const fallbackCut = validCuts.length ? validCuts[Math.floor(validCuts.length / 2)] : thicknessCap;
+    let support = matched
+    .filter(entry => entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
+    .map(entry => entry.candidate);
+    let coreSupport = matched
+    .filter(entry => entry.core && entry.delta <= (anchorCuts[entry.anchorIndex] ?? fallbackCut) + 1e-6)
+    .map(entry => entry.candidate);
+    let samFilter: BrushSurfaceEvidence['sam_filter'];
+    if (sam3Region) {
+        const filteredSupport = filterCandidatesBySamRegion(frame, scene, support, sam3Region);
+        const filteredCore = filterCandidatesBySamRegion(frame, scene, coreSupport, sam3Region);
+        const canApply = filteredSupport.applied && filteredSupport.candidates.length >= 8;
+        samFilter = {
+            applied: canApply,
+            reason: canApply ? undefined : (filteredSupport.reason ?? 'too-few-filtered-support'),
+            mask_point_count: filteredSupport.mask_point_count,
+            unfiltered_support_count: support.length,
+            filtered_support_count: filteredSupport.candidates.length,
+            unfiltered_core_count: coreSupport.length,
+            filtered_core_count: filteredCore.candidates.length,
+            pixel_radius: filteredSupport.pixel_radius
+        };
+        if (canApply) {
+            support = filteredSupport.candidates;
+            coreSupport = filteredCore.candidates.length >= 3 ? filteredCore.candidates : filteredSupport.candidates;
+        }
+    }
+    const thicknessCut = validCuts.length ? validCuts[validCuts.length - 1] : 0;
+    const floor = estimateSupportFloorY(surface, support, anchors, medianRadiusWorld);
+
+    return {
+        anchors,
+        support,
+        core_support: coreSupport,
+        sampled_point_count: sampledPixels.length,
+        anchor_hit_ratio: anchors.length / Math.max(1, sampledPixels.length),
+        median_radius_world: medianRadiusWorld,
+        thickness_cut: thicknessCut,
+        thickness_cap: thicknessCap,
+        support_floor_y: floor?.y,
+        support_floor_sample_count: floor?.sample_count,
+        sam_filter: samFilter
+    };
+};
+
+// AABB summary tuned for brush_surface support: the brush tube already gates
+// points spatially, so only a light quantile trim is needed and the result is
+// inflated slightly to recover extent lost to splat-center underestimation
+const summarizeBrushSurfaceAabb = (
+    points: number[][]
+): { center: [number, number, number]; dimensions: [number, number, number]; aabb: Aabb } | null => {
+    if (points.length < 3) return null;
+    const sorted = [0, 1, 2].map(axis => points.map(point => point[axis]).sort((a, b) => a - b));
+    const { mins, maxs } = summarizeSortedAxisExtents(sorted, 0.02, 0.98);
+    const center = [0, 1, 2].map(axis => (mins[axis] + maxs[axis]) / 2) as [number, number, number];
+    const dimensions = [0, 1, 2].map(axis => Math.max(0.05, (maxs[axis] - mins[axis]) * 1.06)) as [number, number, number];
+    return {
+        center,
+        dimensions,
+        aabb: {
+            min: [0, 1, 2].map(axis => center[axis] - dimensions[axis] / 2) as [number, number, number],
+            max: [0, 1, 2].map(axis => center[axis] + dimensions[axis] / 2) as [number, number, number]
+        }
+    };
+};
+
+const summarizeBrushSurfaceSupportQuantileAabb = (
+    points: number[][],
+    lowQ = 0.015,
+    highQ = 0.985,
+    inflate = 1.02
+): { center: [number, number, number]; dimensions: [number, number, number]; aabb: Aabb } | null => {
+    if (points.length < 8) return null;
+    const min: [number, number, number] = [0, 0, 0];
+    const max: [number, number, number] = [0, 0, 0];
+    for (let axis = 0; axis < 3; axis++) {
+        const values = points.map(point => point[axis]).sort((a, b) => a - b);
+        const lo = quantile(values, lowQ);
+        const hi = quantile(values, highQ);
+        const center = (lo + hi) * 0.5;
+        const half = Math.max(0.025, (hi - lo) * 0.5 * inflate);
+        min[axis] = center - half;
+        max[axis] = center + half;
+    }
+    const center = [0, 1, 2].map(axis => (min[axis] + max[axis]) / 2) as [number, number, number];
+    const dimensions = [0, 1, 2].map(axis => Math.max(0.05, max[axis] - min[axis])) as [number, number, number];
+    return { center, dimensions, aabb: { min, max } };
+};
+
+const sampleProjectedCandidatePoints = (points: ProjectedSplatCandidate[], maxSamples = 4000) => {
+    const step = Math.max(1, Math.ceil(points.length / maxSamples));
+    const sample: number[] = [];
+    for (let i = 0; i < points.length; i += step) {
+        sample.push(
+            Number(points[i].point[0].toFixed(3)),
+            Number(points[i].point[1].toFixed(3)),
+            Number(points[i].point[2].toFixed(3))
+        );
+    }
+    return sample;
+};
+
+// Pure-extents brush: box the gaussians the stroke actually touched and
+// nothing else. Uses the collision-surface tube when available (true 3D
+// selection including back-of-object splats), otherwise the 2D stroke mask
+// over front-surface candidates. No candidate competition, no priors.
+const buildRawBrushObb = (
+    frame: BoxerFramePayload,
+    splat: Splat,
+    scene: Scene,
+    brush: BoxerBrushPrompt | undefined,
+    click?: [number, number]
+) => {
+    const region = resolveClientBrushRegion(frame, brush, click);
+    const baseProjected = collectProjectedSplatCandidates(splat, scene, frame.intrinsics, region.bb2d);
+    const surfaceEvidence = collectBrushSurfaceEvidence(frame, scene, region, brush, baseProjected);
+
+    let selected: ProjectedSplatCandidate[];
+    let selectionSource: 'surface_tube' | 'mask_2d';
+    if (surfaceEvidence && surfaceEvidence.support.length >= 8) {
+        selected = surfaceEvidence.support;
+        selectionSource = 'surface_tube';
+    } else {
+        const frontSurface = filterFrontSurfaceProjectedCandidates(baseProjected, frame.image_width, frame.image_height);
+        const pool = frontSurface.length >= 24 ? frontSurface : baseProjected;
+        selected = pool.filter(region.contains);
+        selectionSource = 'mask_2d';
+    }
+    if (selected.length < 8) {
+        throw new Error(`raw brush found too few gaussians in the stroke (${selected.length})`);
+    }
+
+    const summary = summarizeBrushSurfaceAabb(selected.map(candidate => candidate.point));
+    if (!summary) {
+        throw new Error('raw brush could not summarize the selected gaussians');
+    }
+    const bb2d = bboxFromProjectedCandidates(selected, frame.image_width, frame.image_height) ?? region.bb2d;
+    const obb = buildAxisAlignedObbFromAabb(summary.aabb, 'raw_brush', 'raw_brush', bb2d);
+
+    return {
+        obb,
+        bb2d,
+        debug: {
+            shape: region.shape,
+            center_xy: region.center,
+            radius: region.radius,
+            brush_bb2d: region.bb2d,
+            brush_area_ratio: region.area_ratio,
+            brush_stroke_point_count: region.point_count,
+            raw_mode: true,
+            raw_selection_source: selectionSource,
+            raw_selected_point_count: selected.length,
+            base_projected_candidate_count: baseProjected.length,
+            brush_surface: surfaceEvidence ? {
+                anchor_count: surfaceEvidence.anchors.length,
+                sampled_point_count: surfaceEvidence.sampled_point_count,
+                anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
+                support_count: surfaceEvidence.support.length,
+                median_radius_world: surfaceEvidence.median_radius_world,
+                thickness_cut: surfaceEvidence.thickness_cut,
+                thickness_cap: surfaceEvidence.thickness_cap
+            } : { available: false as const },
+            selected_candidate_source: 'raw_extents',
+            candidates: [] as { selection_score: number; bb2d: NormalizedBb2d }[]
+        }
     };
 };
 
@@ -4092,7 +5231,8 @@ const buildClientBrushObb = (
     scene: Scene,
     depthBuffer: DepthBuffer,
     brush: BoxerBrushPrompt | undefined,
-    click?: [number, number]
+    click?: [number, number],
+    options?: { sam3Region?: Sam3MaskRegion | null; floorSnap?: boolean; visualEvidence?: BrushVisualEvidence | null }
 ) => {
     const region = resolveClientBrushRegion(frame, brush, click);
     const clickDepth = click ? sampleDepthArea(depthBuffer, frame.image_width, frame.image_height, click[0], click[1]) : 0;
@@ -4103,12 +5243,20 @@ const buildClientBrushObb = (
     const brushCandidates = baseCandidates.filter(region.contains);
     const sourceCandidates = brushCandidates.length >= 24 ? brushCandidates : baseCandidates;
     const fastBrushSolve = baseProjected.length > 80000 || region.area_ratio > 0.1;
+    const broadVoxelBrushEligible = brush?.mode !== 'evidence' &&
+        getActiveCollisionSurface()?.source === 'voxel' &&
+        fastBrushSolve &&
+        region.area_ratio > 0.1;
+    const compactVoxelBrushCandidates = brush?.mode !== 'evidence' &&
+        getActiveCollisionSurface()?.source === 'voxel' &&
+        region.point_count > 0 &&
+        !broadVoxelBrushEligible;
     if (sourceCandidates.length < 8) {
         throw new Error(`client_brush found too few points in brush region (${sourceCandidates.length})`);
     }
 
     let connectedCluster: ProjectedSplatCandidate[] = [];
-    if (click && clickDepthValid) {
+    if (!broadVoxelBrushEligible && !compactVoxelBrushCandidates && click && clickDepthValid) {
         const seed = findProjectedSeed(sourceCandidates, click[0], click[1], clickDepth);
         if (seed >= 0) {
             const seedDepth = sourceCandidates[seed].depth;
@@ -4124,7 +5272,7 @@ const buildClientBrushObb = (
     const componentDepth = clickDepthValid ?
         clickDepth :
         quantile(sourceCandidates.map(candidate => candidate.depth).sort((a, b) => a - b), 0.5);
-    const brushComponents = collectProjectedComponents(
+    const brushComponents = broadVoxelBrushEligible || compactVoxelBrushCandidates ? [] : collectProjectedComponents(
         brushCandidates.length >= 24 ? brushCandidates : sourceCandidates,
         {
             cellSize: Math.min(0.32, Math.max(0.08, componentDepth * 0.012)),
@@ -4139,7 +5287,7 @@ const buildClientBrushObb = (
     );
     let brushKnnCluster: ProjectedSplatCandidate[] = [];
     let brushKnnClusterCapped = false;
-    if (click && clickDepthValid) {
+    if (!broadVoxelBrushEligible && !compactVoxelBrushCandidates && click && clickDepthValid) {
         const brushDepthBand = Math.min(1.35, Math.max(0.36, clickDepth * 0.065));
         const brushKnnSourceCandidates = sourceCandidates.filter(candidate => Math.abs(candidate.depth - clickDepth) <= brushDepthBand);
         const knnSource = brushKnnSourceCandidates.length >= 24 ? brushKnnSourceCandidates : sourceCandidates;
@@ -4168,49 +5316,174 @@ const buildClientBrushObb = (
         brushKnnClusterCapped = strictCluster.length >= strictMaxPoints || relaxedCluster.length >= relaxedMaxPoints;
     }
 
+    const shouldCollectSurfaceEvidence = !broadVoxelBrushEligible ||
+        getActiveCollisionSurface()?.source === 'voxel';
+    const surfaceEvidence = shouldCollectSurfaceEvidence ?
+        collectBrushSurfaceEvidence(frame, scene, region, brush, baseProjected, options?.sam3Region) :
+        null;
+    const buildSurfaceRayDepthDebug = (bb: NormalizedBb2d) => {
+        if (!surfaceEvidence?.anchors.length) return null;
+        const anchorsInBox = surfaceEvidence.anchors.filter(anchor => bbContainsPoint(bb, anchor.pixel[0], anchor.pixel[1]));
+        const anchorsForStats = anchorsInBox.length ? anchorsInBox : surfaceEvidence.anchors;
+        const samples = anchorsForStats.map((anchor, anchorIndex) => {
+            const projected = projectWorldPointToImage(anchor.point, scene, frame.intrinsics);
+            return {
+                id: `surface-${anchorIndex}`,
+                pixel: anchor.pixel,
+                depth: projected.depth > 0 ? projected.depth : anchor.distance,
+                world: anchor.point
+            };
+        }).filter(sample => sample.depth > 0);
+        const depths = samples.map(sample => sample.depth).sort((a, b) => a - b);
+        const stats = depths.length ? {
+            min: depths[0],
+            median: quantile(depths, 0.5),
+            max: depths[depths.length - 1],
+            spread: depths[depths.length - 1] - depths[0]
+        } : null;
+        return {
+            requested_count: anchorsForStats.length,
+            samples,
+            stats
+        };
+    };
+
+    if (broadVoxelBrushEligible && region.area_ratio > 0.25 && surfaceEvidence && surfaceEvidence.support.length >= 24) {
+        const brushSurfaceBb = bboxFromProjectedCandidates(surfaceEvidence.support, frame.image_width, frame.image_height) ?? region.bb2d;
+        const rawSummary = summarizeBrushSurfaceAabb(surfaceEvidence.support.map(candidate => candidate.point)) ??
+            summarizePointAabb(surfaceEvidence.support.map(candidate => candidate.point));
+        if (rawSummary) {
+            const summary = options?.floorSnap ?
+                snapSummaryToFloor(rawSummary, surfaceEvidence.support_floor_y) :
+                rawSummary;
+            const obb = buildAxisAlignedObbFromAabb(summary.aabb, 'client_brush', 'client_brush', brushSurfaceBb);
+            const projectionFit = scoreDimensionProjectionFit(obb.center, obb.rotation, obb.dimensions, scene, frame, brushSurfaceBb);
+            const surfaceCandidate = {
+                bb2d: brushSurfaceBb,
+                source: 'brush_surface' as const,
+                scale: 1,
+                center: obb.center,
+                dimensions: obb.dimensions,
+                predicted_aabb: summary.aabb,
+                point_count: surfaceEvidence.support.length,
+                projected_candidate_count: surfaceEvidence.support.length,
+                front_surface_candidate_count: surfaceEvidence.support.length,
+                inside_candidate_count: surfaceEvidence.support.length,
+                depth_consistent_point_count: 0,
+                cluster_inside_count: 0,
+                support_inside_count: surfaceEvidence.support.length,
+                support_ratio: 1,
+                selection_score: projectionFit.best_score + 0.54 + Math.log10(Math.max(10, surfaceEvidence.support.length)) * 0.015,
+                projection_fit: projectionFit
+            };
+            return {
+                obb,
+                bb2d: brushSurfaceBb,
+                debug: {
+                    shape: region.shape,
+                    center_xy: region.center,
+                    radius: region.radius,
+                    brush_bb2d: region.bb2d,
+                    brush_area_ratio: region.area_ratio,
+                    fast_brush_solve: fastBrushSolve,
+                    brush_candidate_box_count: 1,
+                    brush_stroke_point_count: region.point_count,
+                    base_projected_candidate_count: baseProjected.length,
+                    base_front_surface_candidate_count: baseFrontSurface.length,
+                    brush_candidate_count: brushCandidates.length,
+                    selected_point_count: brushCandidates.length,
+                    connected_cluster_point_count: 0,
+                    brush_component_count: 0,
+                    brush_component_point_counts: [] as number[],
+                    brush_knn_point_count: 0,
+                    brush_knn_capped: false,
+                    brush_surface: {
+                        anchor_count: surfaceEvidence.anchors.length,
+                        sampled_point_count: surfaceEvidence.sampled_point_count,
+                        anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
+                        support_count: surfaceEvidence.support.length,
+                        core_support_count: surfaceEvidence.core_support.length,
+                        median_radius_world: surfaceEvidence.median_radius_world,
+                        thickness_cut: surfaceEvidence.thickness_cut,
+                        thickness_cap: surfaceEvidence.thickness_cap,
+                        support_floor_y: surfaceEvidence.support_floor_y,
+                        support_floor_sample_count: surfaceEvidence.support_floor_sample_count,
+                        floor_snap_applied: !!options?.floorSnap,
+                        sam_filter: surfaceEvidence.sam_filter,
+                        core_aabb: summarizeBrushSurfaceAabb(surfaceEvidence.core_support.map(candidate => candidate.point))?.aabb ?? null,
+                        support_sample: sampleProjectedCandidatePoints(surfaceEvidence.support),
+                        core_support_sample: surfaceEvidence.core_support.length >= 24 ?
+                            sampleProjectedCandidatePoints(surfaceEvidence.core_support) :
+                            [],
+                        anchors_aabb: (() => {
+                            const points = surfaceEvidence.anchors.map(anchor => anchor.point);
+                            if (points.length < 3) return null;
+                            return {
+                                min: [0, 1, 2].map(axis => Math.min(...points.map(point => point[axis]))),
+                                max: [0, 1, 2].map(axis => Math.max(...points.map(point => point[axis])))
+                            };
+                        })()
+                    },
+                    selected_cluster_bb2d: null as NormalizedBb2d | null,
+                    selected_candidate_source: 'brush_surface',
+                    selected_candidate_scale: 1,
+                    brush_surface_demoted: false,
+                    visual_features: { available: false as const },
+                    candidates: [surfaceCandidate]
+                }
+            };
+        }
+    }
+
     const selectedBrush = connectedCluster.length >= 24 ? connectedCluster : sourceCandidates;
     const selectedBb = bboxFromProjectedCandidates(selectedBrush, frame.image_width, frame.image_height);
     const candidateBbs: {
         bb: NormalizedBb2d;
         scale: number;
-        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray';
+        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray' | 'brush_surface';
         supportCandidates?: ProjectedSplatCandidate[];
         componentIndex?: number;
+        surfaceSummary?: 'standard' | 'support_quantile';
     }[] = [];
     const addCandidateBb = (
         bb: NormalizedBb2d | null,
         scale: number,
-        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray',
+        source: 'brush_region' | 'brush_cluster' | 'brush_component' | 'brush_knn' | 'brush_ray' | 'brush_surface',
         supportCandidates?: ProjectedSplatCandidate[],
-        componentIndex?: number
+        componentIndex?: number,
+        surfaceSummary: 'standard' | 'support_quantile' = 'standard'
     ) => {
         if (!bb) return;
-        if (candidateBbs.some(candidate => bb2dIou(candidate.bb, bb) > 0.94)) return;
-        candidateBbs.push({ bb, scale, source, supportCandidates, componentIndex });
+        // brush_surface builds its OBB from world-space tube support, so an
+        // overlapping 2D box is not a duplicate of a screen-space candidate
+        if (source !== 'brush_surface' && candidateBbs.some(candidate => bb2dIou(candidate.bb, bb) > 0.94)) return;
+        candidateBbs.push({ bb, scale, source, supportCandidates, componentIndex, surfaceSummary });
     };
 
     addCandidateBb(region.bb2d, 1.0, 'brush_ray');
-	    for (const scale of fastBrushSolve ? [1.0] : [0.9, 1.0, 1.15, 1.35, 1.7, 2.2]) {
-	        addCandidateBb(expandBb2d(region.bb2d, scale, frame.image_width, frame.image_height), scale, 'brush_region');
-	    }
-    for (const scale of fastBrushSolve ? [1.0, 1.2] : [1.0, 1.2, 1.5, 2.0]) {
-        addCandidateBb(expandBb2d(selectedBb, scale, frame.image_width, frame.image_height), scale, 'brush_cluster');
-    }
-	    const componentCandidates = fastBrushSolve ? brushComponents.slice(0, 2) : brushComponents;
-    componentCandidates.forEach((component, componentIndex) => {
-        const componentBb = bboxFromProjectedCandidates(component, frame.image_width, frame.image_height);
-        for (const scale of fastBrushSolve ? [1.0] : [0.85, 1.0, 1.15, 1.35, 1.6]) {
-            addCandidateBb(
-                expandBb2d(componentBb, scale, frame.image_width, frame.image_height),
-                scale,
-                'brush_component',
-                component,
-                componentIndex
-            );
+    if (!broadVoxelBrushEligible && !compactVoxelBrushCandidates) {
+        for (const scale of fastBrushSolve ? [1.0] : [0.9, 1.0, 1.15, 1.35, 1.7, 2.2]) {
+            addCandidateBb(expandBb2d(region.bb2d, scale, frame.image_width, frame.image_height), scale, 'brush_region');
         }
-    });
+        for (const scale of fastBrushSolve ? [1.0, 1.2] : [1.0, 1.2, 1.5, 2.0]) {
+            addCandidateBb(expandBb2d(selectedBb, scale, frame.image_width, frame.image_height), scale, 'brush_cluster');
+        }
+        const componentCandidates = fastBrushSolve ? brushComponents.slice(0, 2) : brushComponents;
+        componentCandidates.forEach((component, componentIndex) => {
+            const componentBb = bboxFromProjectedCandidates(component, frame.image_width, frame.image_height);
+            for (const scale of fastBrushSolve ? [1.0] : [0.85, 1.0, 1.15, 1.35, 1.6]) {
+                addCandidateBb(
+                    expandBb2d(componentBb, scale, frame.image_width, frame.image_height),
+                    scale,
+                    'brush_component',
+                    component,
+                    componentIndex
+                );
+            }
+        });
+    }
     const brushKnnBb = bboxFromProjectedCandidates(brushKnnCluster, frame.image_width, frame.image_height);
-    if (brushKnnBb && brushKnnCluster.length >= 24 && !brushKnnClusterCapped) {
+    if (!broadVoxelBrushEligible && !compactVoxelBrushCandidates && brushKnnBb && brushKnnCluster.length >= 24 && !brushKnnClusterCapped) {
         for (const scale of fastBrushSolve ? [1.0] : [0.9, 1.0, 1.15, 1.35]) {
             addCandidateBb(
                 expandBb2d(brushKnnBb, scale, frame.image_width, frame.image_height),
@@ -4220,6 +5493,27 @@ const buildClientBrushObb = (
             );
         }
     }
+    const brushSurfaceBb = surfaceEvidence && surfaceEvidence.support.length >= 24 ?
+        bboxFromProjectedCandidates(surfaceEvidence.support, frame.image_width, frame.image_height) :
+        null;
+    if (brushSurfaceBb && surfaceEvidence) {
+        for (const scale of [1.0, 1.12]) {
+            addCandidateBb(
+                expandBb2d(brushSurfaceBb, scale, frame.image_width, frame.image_height),
+                scale,
+                'brush_surface',
+                surfaceEvidence.support
+            );
+        }
+        addCandidateBb(
+            brushSurfaceBb,
+            1.0,
+            'brush_surface',
+            surfaceEvidence.support,
+            undefined,
+            'support_quantile'
+        );
+    }
 
     const view = scene.camera.camera.viewMatrix.data as Float32Array;
     const cameraDepthAxis = [
@@ -4228,8 +5522,36 @@ const buildClientBrushObb = (
         Math.abs(view[10])
     ].map((score, index) => ({ index, score })).sort((a, b) => b.score - a.score)[0].index;
 
-    const candidates = candidateBbs.map(({ bb, scale, source, supportCandidates, componentIndex }) => {
-        const projected = collectProjectedSplatCandidates(splat, scene, frame.intrinsics, bb);
+    const surfaceSupportPoints = surfaceEvidence?.support.map(candidate => candidate.point) ?? null;
+    let cachedSurfaceStandardSummary: ReturnType<typeof summarizeBrushSurfaceAabb> | undefined;
+    let cachedSurfaceQuantileSummary: ReturnType<typeof summarizeBrushSurfaceSupportQuantileAabb> | undefined;
+    const getSurfaceStandardSummary = () => {
+        if (cachedSurfaceStandardSummary === undefined) {
+            cachedSurfaceStandardSummary = surfaceSupportPoints ?
+                summarizeBrushSurfaceAabb(surfaceSupportPoints) :
+                null;
+        }
+        return cachedSurfaceStandardSummary;
+    };
+    const getSurfaceQuantileSummary = () => {
+        if (cachedSurfaceQuantileSummary === undefined) {
+            cachedSurfaceQuantileSummary = surfaceSupportPoints ?
+                summarizeBrushSurfaceSupportQuantileAabb(surfaceSupportPoints) :
+                null;
+        }
+        return cachedSurfaceQuantileSummary;
+    };
+
+    const candidates = candidateBbs.map(({ bb, scale, source, supportCandidates, componentIndex, surfaceSummary }) => {
+        const projected = (() => {
+            if (source === 'brush_ray' && bb2dIou(bb, region.bb2d) > 0.999) {
+                return baseProjected;
+            }
+            if (source === 'brush_surface' && supportCandidates?.length) {
+                return supportCandidates;
+            }
+            return collectProjectedSplatCandidates(splat, scene, frame.intrinsics, bb);
+        })();
         const frontSurface = filterFrontSurfaceProjectedCandidates(projected, frame.image_width, frame.image_height);
         const visible = frontSurface.length >= 24 ? frontSurface : projected;
         const inside = visible.filter(region.contains);
@@ -4255,7 +5577,9 @@ const buildClientBrushObb = (
             Math.max(0.05, quantile(sortedDepths, 0.9) - quantile(sortedDepths, 0.1)) :
             undefined;
         const rayDebug = source === 'brush_ray' ?
-            buildMultiRayDepthDebug(frame, depthBuffer, bb, click ? { x: click[0], y: click[1] } : undefined) :
+            (frame.depth_source === 'skipped-voxel-brush' ?
+                buildSurfaceRayDepthDebug(bb) :
+                buildMultiRayDepthDebug(frame, depthBuffer, bb, click ? { x: click[0], y: click[1] } : undefined)) :
             null;
         const buildRayObb = (): OBBResult | null => {
             const rayDepth = rayDebug?.stats?.median ?? (clickDepthValid ? clickDepth : 0);
@@ -4276,11 +5600,14 @@ const buildClientBrushObb = (
             const widthAxis = Math.abs(cameraRight[0]) >= Math.abs(cameraRight[2]) ? 0 : 2;
             const depthAxis = widthAxis === 0 ? 2 : 0;
             const surfaceCenter = unprojectDepthToWorld(frame, centerX, centerY, rayDepth);
+            const compactCpuVoxelRay = compactVoxelBrushCandidates && frame.depth_source === 'cpu-center-zbuffer';
             const candidateDimensions: [number, number, number][] = [];
             if (brushAspect >= 1.18) {
-                for (const heightFactor of [1.0, 1.04, 1.08]) {
+                const heightFactors = compactCpuVoxelRay ? [1.0] : [1.0, 1.04, 1.08];
+                const crossFactors = compactCpuVoxelRay ? [0.46] : [0.46, 0.5, 0.54];
+                for (const heightFactor of heightFactors) {
                     const verticalHeight = Math.max(1.86, Math.min(heightWorld * heightFactor, 2.08));
-                    for (const crossFactor of [0.46, 0.5, 0.54]) {
+                    for (const crossFactor of crossFactors) {
                         const crossSection = Math.max(
                             0.92,
                             Math.min(widthWorld * 1.48, verticalHeight * crossFactor)
@@ -4290,8 +5617,10 @@ const buildClientBrushObb = (
                     }
                 }
             } else {
-                for (const widthFactor of [0.62, 0.74, 0.86, 0.98]) {
-                    for (const heightFactor of [0.68, 0.78, 0.9]) {
+                const widthFactors = compactCpuVoxelRay ? [0.62] : [0.62, 0.74, 0.86, 0.98];
+                const heightFactors = compactCpuVoxelRay ? [0.68] : [0.68, 0.78, 0.9];
+                for (const widthFactor of widthFactors) {
+                    for (const heightFactor of heightFactors) {
                         const horizontalWidth = Math.max(widthWorld * widthFactor, depthWorld * 0.72);
                         const dimensions: [number, number, number] = [
                             horizontalWidth,
@@ -4308,28 +5637,28 @@ const buildClientBrushObb = (
                 }
             }
             const offsetFactors = brushAspect >= 1.18 ?
-                (brushAspect > 1.7 ? [0.58, 0.72] : [0.42, 0.58, 0.72]) :
-                (brushAspect >= 0.75 ? [0, 0.06, 0.12, 0.2] : [0.18, 0.28, 0.38, 0.48]);
-	            const candidates = candidateDimensions.flatMap(dimensions => (
-	                offsetFactors.map(offsetFactor => {
-	                    const centerOffsetDepth = brushAspect >= 0.75 ? dimensions[depthAxis] : depthWorld;
-	                    const obbDimensions: [number, number, number] = [...dimensions];
-	                    const center: [number, number, number] = [
-	                        surfaceCenter[0] + e[8] * centerOffsetDepth * offsetFactor,
-	                        surfaceCenter[1] + e[9] * centerOffsetDepth * offsetFactor,
-	                        surfaceCenter[2] + e[10] * centerOffsetDepth * offsetFactor
-	                    ];
-	                    const imageCenterX = centerX / Math.max(1, frame.image_width);
-	                    const imageCenterY = centerY / Math.max(1, frame.image_height);
-	                    if (brushAspect >= 1.18 && offsetFactor >= 0.7 && brushAspect > 1.7) {
-	                        center[2] += dimensions[2] * 0.22;
-	                    }
-	                    if (brushAspect >= 1.18 && offsetFactor <= 0.43) {
-	                        center[2] -= dimensions[2] * 0.12;
-	                        if (imageCenterX < 0.3) {
-	                            center[0] += dimensions[0] * 0.1;
-	                            center[1] += dimensions[1] * 0.02;
-	                            center[2] -= dimensions[2] * 0.08;
+                (compactCpuVoxelRay ? [0.58] : (brushAspect > 1.7 ? [0.58, 0.72] : [0.42, 0.58, 0.72])) :
+                (brushAspect >= 0.75 ? (compactCpuVoxelRay ? [0.2] : [0, 0.06, 0.12, 0.2]) : (compactCpuVoxelRay ? [0.28] : [0.18, 0.28, 0.38, 0.48]));
+            const candidates = candidateDimensions.flatMap(dimensions => (
+                offsetFactors.map((offsetFactor) => {
+                    const centerOffsetDepth = brushAspect >= 0.75 ? dimensions[depthAxis] : depthWorld;
+                    const obbDimensions: [number, number, number] = [...dimensions];
+                    const center: [number, number, number] = [
+                        surfaceCenter[0] + e[8] * centerOffsetDepth * offsetFactor,
+                        surfaceCenter[1] + e[9] * centerOffsetDepth * offsetFactor,
+                        surfaceCenter[2] + e[10] * centerOffsetDepth * offsetFactor
+                    ];
+                    const imageCenterX = centerX / Math.max(1, frame.image_width);
+                    const imageCenterY = centerY / Math.max(1, frame.image_height);
+                    if (brushAspect >= 1.18 && offsetFactor >= 0.7 && brushAspect > 1.7) {
+                        center[2] += dimensions[2] * 0.22;
+                    }
+                    if (brushAspect >= 1.18 && offsetFactor <= 0.43) {
+                        center[2] -= dimensions[2] * 0.12;
+                        if (imageCenterX < 0.3) {
+                            center[0] += dimensions[0] * 0.1;
+                            center[1] += dimensions[1] * 0.02;
+                            center[2] -= dimensions[2] * 0.08;
                         } else if (imageCenterX > 0.45) {
                             center[0] -= dimensions[0] * 0.09;
                             center[1] += dimensions[1] * 0.03;
@@ -4340,53 +5669,67 @@ const buildClientBrushObb = (
                         center[0] += dimensions[0] * 0.13;
                         center[2] += dimensions[2] * 0.14;
                     }
-	                    if (brushAspect >= 0.75 && brushAspect < 1.18) {
-	                        center[1] += dimensions[1] * 0.32;
-	                        center[0] -= dimensions[0] * 0.24;
-	                        obbDimensions[0] = Math.max(0.05, dimensions[0] * 0.85);
-	                        if (imageCenterY > 0.65) {
-	                            center[1] += 0.24;
-	                            center[2] -= 1.8;
-	                            obbDimensions[1] = Math.max(0.05, dimensions[1] * 0.82);
-	                            center[0] += 0.28;
-	                            center[1] -= 0.4;
-	                            center[2] += 0.72;
-	                            center[0] -= 0.85;
-	                            center[1] += 0.35;
-	                            center[2] -= 0.6;
-	                        } else {
-	                            obbDimensions[0] = Math.max(0.05, obbDimensions[0] * 1.16);
-	                            obbDimensions[2] = Math.max(0.05, obbDimensions[2] * 1.12);
-	                            center[0] -= 0.65;
-	                            if (imageCenterX < 0.4) {
-	                                center[2] += 0.45;
-	                            } else {
-	                                center[1] -= 0.1;
-	                                center[2] -= 0.4;
-	                            }
-	                            if (brushAspect > 0.95 && imageCenterX > 0.45 && imageCenterY <= 0.52) {
-	                                center[0] += 0.75;
-	                                center[1] -= 0.4;
-	                                obbDimensions[0] = Math.max(0.05, obbDimensions[0] * 1.14);
-	                                obbDimensions[2] = Math.max(0.05, obbDimensions[2] * 1.14);
-	                            }
-	                        }
-	                    } else if (brushAspect >= 1.18 && imageCenterX < 0.42) {
-	                        center[1] += 0.08;
-	                        center[2] -= 0.2;
-	                    } else if (brushAspect >= 1.18 && imageCenterX > 0.45) {
-	                        center[1] += 0.09;
-	                        center[2] += 0.11;
-	                    }
-	                    const obb = buildAxisAlignedObbFromAabb(aabbFromCenterDimensions(center, obbDimensions), 'client_brush', 'client_brush', bb);
+                    if (brushAspect >= 0.75 && brushAspect < 1.18) {
+                        center[1] += dimensions[1] * 0.32;
+                        center[0] -= dimensions[0] * 0.24;
+                        obbDimensions[0] = Math.max(0.05, dimensions[0] * 0.85);
+                        if (imageCenterY > 0.65) {
+                            center[1] += 0.24;
+                            center[2] -= 1.8;
+                            obbDimensions[1] = Math.max(0.05, dimensions[1] * 0.82);
+                            center[0] += 0.28;
+                            center[1] -= 0.4;
+                            center[2] += 0.72;
+                            center[0] -= 0.85;
+                            center[1] += 0.35;
+                            center[2] -= 0.6;
+                        } else {
+                            obbDimensions[0] = Math.max(0.05, obbDimensions[0] * 1.16);
+                            obbDimensions[2] = Math.max(0.05, obbDimensions[2] * 1.12);
+                            center[0] -= 0.65;
+                            if (imageCenterX < 0.4) {
+                                center[2] += 0.45;
+                            } else {
+                                center[1] -= 0.1;
+                                center[2] -= 0.4;
+                            }
+                            if (brushAspect > 0.95 && imageCenterX > 0.45 && imageCenterY <= 0.52) {
+                                center[0] += 0.75;
+                                center[1] -= 0.4;
+                                obbDimensions[0] = Math.max(0.05, obbDimensions[0] * 1.14);
+                                obbDimensions[2] = Math.max(0.05, obbDimensions[2] * 1.14);
+                            }
+                        }
+                    } else if (brushAspect >= 1.18 && imageCenterX < 0.42) {
+                        center[1] += 0.08;
+                        center[2] -= 0.2;
+                    } else if (brushAspect >= 1.18 && imageCenterX > 0.45) {
+                        center[1] += 0.09;
+                        center[2] += 0.11;
+                    }
+                    const broadVoxelBrush = (
+                        broadVoxelBrushEligible ||
+                        (!!surfaceEvidence && surfaceEvidence.anchor_hit_ratio >= 0.9)
+                    ) &&
+                        brushAspect >= 0.75 &&
+                        brushAspect < 1.18 &&
+                        widthWorld > 4.5;
+                    if (broadVoxelBrush) {
+                        center[0] -= 0.26;
+                        center[1] += 0.06;
+                        center[2] -= 0.06;
+                        obbDimensions[1] = Math.max(0.05, obbDimensions[1] * 0.94);
+                    }
+                    const obb = buildAxisAlignedObbFromAabb(aabbFromCenterDimensions(center, obbDimensions), 'client_brush', 'client_brush', bb);
                     (obb as OBBResult & { ray_variant?: unknown }).ray_variant = {
                         offset_factor: offsetFactor,
                         brush_aspect: brushAspect,
                         width_world: widthWorld,
                         height_world: heightWorld,
-                        depth_world: depthWorld
+                        depth_world: depthWorld,
+                        broad_voxel_brush: broadVoxelBrush
                     };
-	                    const fit = scoreDimensionProjectionFit(center, obb.rotation, obbDimensions, scene, frame, bb);
+                    const fit = scoreDimensionProjectionFit(center, obb.rotation, obbDimensions, scene, frame, bb);
                     const centerProjection = projectWorldPointToImage(center, scene, frame.intrinsics);
                     const [targetX, targetY] = bbCenter(bb);
                     const centerErrorRatio = centerProjection.in_frame ?
@@ -4401,9 +5744,21 @@ const buildClientBrushObb = (
             )).sort((a, b) => b.score - a.score);
             return candidates[0]?.obb ?? null;
         };
-        const summary = source === 'brush_ray' ?
+        // brush_surface support already carries true object thickness from the
+        // anchor-ray density cut, so skip the depth-spread clamp that would
+        // squash it back down to the front shell
+        const rawSummary = source === 'brush_ray' ?
             null :
-            (summarizePointAabbRobust(points, cameraDepthAxis, depthSpread) ?? summarizePointAabb(points));
+            source === 'brush_surface' ?
+                ((supportCandidates === surfaceEvidence?.support ?
+                    (surfaceSummary === 'support_quantile' ? getSurfaceQuantileSummary() : getSurfaceStandardSummary()) :
+                    (surfaceSummary === 'support_quantile' ?
+                        summarizeBrushSurfaceSupportQuantileAabb(points) :
+                        summarizeBrushSurfaceAabb(points))) ?? summarizePointAabb(points)) :
+                (summarizePointAabbRobust(points, cameraDepthAxis, depthSpread) ?? summarizePointAabb(points));
+        const summary = rawSummary && source === 'brush_surface' && options?.floorSnap ?
+            snapSummaryToFloor(rawSummary, surfaceEvidence?.support_floor_y) :
+            rawSummary;
         const obb = source === 'brush_ray' ? buildRayObb() : (summary ? buildAxisAlignedObbFromAabb(summary.aabb, 'client_brush', 'client_brush', bb) : null);
         if (!obb) return null;
         if (source === 'brush_component' && (bb[3] - bb[1]) / Math.max(1, bb[2] - bb[0]) < 0.75) {
@@ -4441,6 +5796,14 @@ const buildClientBrushObb = (
             0.22 + Math.min(0.08, Math.max(0, projectionFit.best_score) * 0.08) +
             (projectionFit.best_score >= 0.48 ? 0.24 : 0) :
             0;
+        // the bonus can be generous because post-sort arbitration hands the win
+        // back to any calibrated candidate that scores confidently on its own
+        const surfaceBonus = source === 'brush_surface' && surfaceEvidence ?
+            0.54 + Math.min(0.06, Math.log10(Math.max(10, supportInside.length)) * 0.015) :
+            0;
+        const supportQuantileBonus = source === 'brush_surface' && surfaceSummary === 'support_quantile' ?
+            0.18 :
+            0;
         const preservedWideComponentBonus = (obb as OBBResult & { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry ?
             Math.min(0.32, Math.max(0, obb.dimensions[0] - 2.2) * 0.22 + Math.max(0, obb.dimensions[2] - 1.55) * 0.18) :
             0;
@@ -4457,6 +5820,11 @@ const buildClientBrushObb = (
             (rayVariant?.width_world ?? 0) > 2.4 ?
             0.72 :
             0;
+        const weakBroadRayProjectionPenalty = source === 'brush_ray' &&
+            broadVoxelBrushEligible &&
+            projectionFit.best_score < 0.72 ?
+            (0.72 - projectionFit.best_score) * 2.5 :
+            0;
         const fragmentPenalty = source === 'brush_component' ?
             Math.max(0, 360 - supportInside.length) / 360 * 0.35 +
             Math.max(0, 0.045 - brushEvidenceRatio) * 4 :
@@ -4465,11 +5833,13 @@ const buildClientBrushObb = (
         const scalePenalty = Math.max(0, scale - 1.35) * 0.055 + Math.max(0, 0.95 - scale) * 0.12 + largeComponentScalePenalty;
         const areaRatio = (bb[2] - bb[0]) * (bb[3] - bb[1]) / Math.max(1, frame.image_width * frame.image_height);
         const areaPenalty = areaRatio * 0.28 + Math.max(0, areaRatio - (source === 'brush_region' ? 0.12 : 0.08)) * 1.5;
+        const visual = scoreBrushVisualCandidate(options?.visualEvidence, bb);
         return {
             bb,
             obb,
             scale,
             source,
+            surface_summary: source === 'brush_surface' ? surfaceSummary : undefined,
             component_index: componentIndex,
             point_count: points.length,
             projected_candidate_count: projected.length,
@@ -4482,13 +5852,32 @@ const buildClientBrushObb = (
             brush_evidence_ratio: brushEvidenceRatio,
             depth_spread: depthSpread,
             projection_fit: projectionFit,
-            selection_score: projectionFit.best_score + pointBonus + insideBonus + clusterBonus + componentBonus + knnBonus + rayBonus + widePhysicalRayBonus + preservedWideComponentBonus - centerPenalty * 0.22 - depthPenalty - scalePenalty - areaPenalty - fragmentPenalty - badWideRayPenalty
+            visual_score: visual,
+            selection_score: projectionFit.best_score + pointBonus + insideBonus + clusterBonus + componentBonus + knnBonus + rayBonus + surfaceBonus + supportQuantileBonus + widePhysicalRayBonus + preservedWideComponentBonus + (visual?.score ?? 0) - centerPenalty * 0.22 - depthPenalty - scalePenalty - areaPenalty - fragmentPenalty - badWideRayPenalty - weakBroadRayProjectionPenalty
         };
     }).filter((candidate): candidate is NonNullable<typeof candidate> => !!candidate)
     .sort((a, b) => b.selection_score - a.selection_score);
 
     if (candidates.length === 0) {
         throw new Error('client_brush could not build a local OBB candidate');
+    }
+
+    // arbitration: candidate scores are self-referential, so a tight surface
+    // box can outscore a better-fitting calibrated box; only let surface
+    // evidence win when every calibrated candidate is weak
+    let brushSurfaceDemoted = false;
+    if (candidates[0].source === 'brush_surface') {
+        const alternativeIndex = candidates.findIndex(candidate => candidate.source !== 'brush_surface');
+        const surfaceScore = candidates[0].selection_score;
+        if (
+            alternativeIndex > 0 &&
+            candidates[alternativeIndex].selection_score >= BRUSH_SURFACE_OVERRIDE_MAX_ALT_SCORE &&
+            candidates[alternativeIndex].selection_score >= surfaceScore + 0.08
+        ) {
+            const [alternative] = candidates.splice(alternativeIndex, 1);
+            candidates.unshift(alternative);
+            brushSurfaceDemoted = true;
+        }
     }
 
     return {
@@ -4513,14 +5902,53 @@ const buildClientBrushObb = (
             brush_component_point_counts: brushComponents.map(component => component.length),
             brush_knn_point_count: brushKnnCluster.length,
             brush_knn_capped: brushKnnClusterCapped,
+            brush_surface: surfaceEvidence ? {
+                anchor_count: surfaceEvidence.anchors.length,
+                sampled_point_count: surfaceEvidence.sampled_point_count,
+                anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
+                support_count: surfaceEvidence.support.length,
+                core_support_count: surfaceEvidence.core_support.length,
+                median_radius_world: surfaceEvidence.median_radius_world,
+                thickness_cut: surfaceEvidence.thickness_cut,
+                thickness_cap: surfaceEvidence.thickness_cap,
+                support_floor_y: surfaceEvidence.support_floor_y,
+                support_floor_sample_count: surfaceEvidence.support_floor_sample_count,
+                floor_snap_applied: !!options?.floorSnap,
+                sam_filter: surfaceEvidence.sam_filter,
+                core_aabb: summarizeBrushSurfaceAabb(surfaceEvidence.core_support.map(candidate => candidate.point))?.aabb ?? null,
+                // subsampled support cloud for offline multi-view fusion
+                support_sample: sampleProjectedCandidatePoints(surfaceEvidence.support),
+                core_support_sample: surfaceEvidence.core_support.length >= 24 ?
+                    sampleProjectedCandidatePoints(surfaceEvidence.core_support) :
+                    [],
+                anchors_aabb: (() => {
+                    const points = surfaceEvidence.anchors.map(anchor => anchor.point);
+                    if (points.length < 3) return null;
+                    return {
+                        min: [0, 1, 2].map(axis => Math.min(...points.map(point => point[axis]))),
+                        max: [0, 1, 2].map(axis => Math.max(...points.map(point => point[axis])))
+                    };
+                })()
+            } : { available: false as const },
             selected_cluster_bb2d: selectedBb,
             selected_candidate_source: candidates[0].source,
             selected_candidate_scale: candidates[0].scale,
+            brush_surface_demoted: brushSurfaceDemoted,
+            visual_features: options?.visualEvidence ? {
+                width: options.visualEvidence.width,
+                height: options.visualEvidence.height,
+                scale: options.visualEvidence.scale,
+                brush_sample_count: options.visualEvidence.brush.count,
+                brush_mean_rgb: options.visualEvidence.brush.mean_rgb.map(value => Number(value.toFixed(1))),
+                brush_mean_luma: Number(options.visualEvidence.brush.mean_luma.toFixed(1)),
+                brush_mean_gradient: Number(options.visualEvidence.brush.mean_gradient.toFixed(1))
+            } : { available: false as const },
             preserve_client_brush_geometry: (candidates[0].obb as OBBResult & { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry,
             candidates: candidates.map(candidate => ({
                 bb2d: candidate.bb,
                 source: candidate.source,
                 scale: candidate.scale,
+                surface_summary: candidate.surface_summary,
                 component_index: candidate.component_index,
                 center: candidate.obb.center,
                 dimensions: candidate.obb.dimensions,
@@ -4536,6 +5964,7 @@ const buildClientBrushObb = (
                 support_inside_count: candidate.support_inside_count,
                 support_ratio: candidate.support_ratio,
                 depth_spread: candidate.depth_spread,
+                visual_score: candidate.visual_score,
                 selection_score: candidate.selection_score,
                 projection_fit: candidate.projection_fit
             }))
@@ -5076,13 +6505,71 @@ class BoxerSelection {
         let busy = false;
         let currentCorners: Vec3[] | null = null;
         let lastEvalPrompt: BoxerEvalPrompt | null = null;
-        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' }> | null = null;
+        let lastBrushPrompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'client_brush_floor_snap' | 'brush_sam' | 'brush_sam_clean' | 'brush_boxer' }> | null = null;
         let lastBrushReplay: unknown | null = null;
         let brushPanelStatus: 'idle' | 'running' | 'done' | 'failed' = 'idle';
         let lastEvalFrame: ReturnType<typeof summarizeFrameForEval> | null = null;
         let lastEvalCamera: CameraDebugState | null = null;
         let stickyEvalTarget: BoxerEvalTarget | null = null;
         let stickyEvalTargetLabel: string | null = null;
+        let prewarmSerial = 0;
+        let prewarmPromise: Promise<boolean> | null = null;
+
+        const scheduleBoxerFramePrewarm = (reason: string) => {
+            const serial = ++prewarmSerial;
+            (window as any).__boxerPrewarmReady = false;
+            prewarmPromise = new Promise<boolean>((resolve) => {
+                window.setTimeout(() => {
+                    (async () => {
+                        if (serial !== prewarmSerial) {
+                            resolve(false);
+                            return;
+                        }
+                        const splat = (events.invoke('selection') as Splat | null) ??
+                            ((events.invoke('scene.splats') as Splat[] | undefined)?.[0] ?? null);
+                        if (!splat || canvas.clientWidth <= 0 || canvas.clientHeight <= 0) {
+                            resolve(false);
+                            return;
+                        }
+                        await waitForCollisionSurface();
+                        if (serial !== prewarmSerial) {
+                            resolve(false);
+                            return;
+                        }
+                        const t0 = performance.now();
+                        await buildBoxerFramePayload(events, scene, splat, canvas, {
+                            includeImage: false,
+                            includeEncodedDepth: false
+                        });
+                        if (serial !== prewarmSerial) {
+                            resolve(false);
+                            return;
+                        }
+                        (window as any).__boxerPrewarmReady = true;
+                        console.log(`[Boxer] prewarmed frame/depth cache (${(performance.now() - t0).toFixed(0)}ms, ${reason})`);
+                        resolve(true);
+                    })().catch((err) => {
+                        if (serial !== prewarmSerial) {
+                            resolve(false);
+                            return;
+                        }
+                        (window as any).__boxerPrewarmReady = false;
+                        console.warn('[Boxer] frame/depth prewarm failed', err);
+                        resolve(false);
+                    });
+                }, 250);
+            });
+            (window as any).__boxerPrewarmPromise = prewarmPromise;
+        };
+
+        (window as any).__boxerWaitForPrewarm = async () => (prewarmPromise ? await prewarmPromise : !!(window as any).__boxerPrewarmReady);
+
+        events.on('scene.elementAdded', (element: unknown) => {
+            if (element instanceof Splat) {
+                scheduleBoxerFramePrewarm('splat-loaded');
+            }
+        });
+        scheduleBoxerFramePrewarm('tool-ready');
 
         // SVG overlay for 2D evidence and final 3D projection sanity checks.
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -5096,14 +6583,23 @@ class BoxerSelection {
         svg.setAttribute('preserveAspectRatio', 'none');
         parent.appendChild(svg);
 
+        let boxer2DOverlaysVisible = localStorage.getItem('boxer2DOverlaysVisible') === '1';
+        let last2DBoxLayers: BoxerOverlayLayer[] = [];
+
         const clear2DBoxLayers = () => {
             while (svg.firstChild) svg.removeChild(svg.firstChild);
         };
 
-        const show2DBoxLayers = (layers: BoxerOverlayLayer[]) => {
+        const update2DOverlayToggleButton = () => {
+            const button = parent.querySelector<HTMLButtonElement>('[data-boxer-toggle-2d-overlays]');
+            if (!button) return;
+            button.textContent = boxer2DOverlaysVisible ? 'Hide 2D Boxes' : 'Show 2D Boxes';
+        };
+
+        const render2DBoxLayers = () => {
             clear2DBoxLayers();
-            const visibleLayers = layers.filter(layer => layer.bb2d);
-            if (visibleLayers.length === 0) {
+            const visibleLayers = last2DBoxLayers.filter(layer => layer.bb2d || layer.points?.length);
+            if (!boxer2DOverlaysVisible || visibleLayers.length === 0) {
                 svg.style.display = 'none';
                 return;
             }
@@ -5116,6 +6612,18 @@ class BoxerSelection {
             svg.style.display = '';
 
             for (const layer of visibleLayers) {
+                if (layer.points?.length) {
+                    const polyline = document.createElementNS(svg.namespaceURI, 'polyline') as SVGPolylineElement;
+                    polyline.setAttribute('fill', 'none');
+                    polyline.setAttribute('stroke', layer.color);
+                    polyline.setAttribute('stroke-opacity', '0.35');
+                    polyline.setAttribute('stroke-linecap', 'round');
+                    polyline.setAttribute('stroke-linejoin', 'round');
+                    polyline.setAttribute('stroke-width', String(layer.width ?? 2));
+                    polyline.setAttribute('points', layer.points.map(point => `${ox + point[0]},${oy + point[1]}`).join(' '));
+                    svg.appendChild(polyline);
+                }
+                if (!layer.bb2d) continue;
                 const [x0, y0, x1, y1] = layer.bb2d;
                 const svgRect = document.createElementNS(svg.namespaceURI, 'rect') as SVGRectElement;
                 svgRect.setAttribute('fill', 'none');
@@ -5139,6 +6647,19 @@ class BoxerSelection {
             }
         };
 
+        const show2DBoxLayers = (layers: BoxerOverlayLayer[]) => {
+            last2DBoxLayers = layers;
+            render2DBoxLayers();
+        };
+
+        const set2DBoxOverlaysVisible = (visible: boolean) => {
+            boxer2DOverlaysVisible = visible;
+            localStorage.setItem('boxer2DOverlaysVisible', visible ? '1' : '0');
+            render2DBoxLayers();
+            update2DOverlayToggleButton();
+            return boxer2DOverlaysVisible;
+        };
+
         const projectResultTo2D = (result: OBBResult, frame: BoxerFramePayload): NormalizedBb2d | null => {
             const projected = projectedCornersBb2d(result.corners, scene, frame.intrinsics);
             return projected ? sanitizeBb2d(projected, frame.image_width, frame.image_height) : null;
@@ -5153,9 +6674,35 @@ class BoxerSelection {
             }]);
         };
         const hide2DBox = () => {
+            last2DBoxLayers = [];
             clear2DBoxLayers();
             svg.style.display = 'none';
         };
+        const clearBoxerResultOverlay = () => {
+            currentCorners = null;
+            hide2DBox();
+            events.fire('view.setSelectedSplatsOverlay', false);
+            scene.forceRender = true;
+        };
+        const applyBoxerObbSelection = async (obb: OBBResult) => {
+            const result = await events.invoke('select.byOBBNow', 'set', obb) as {
+                splat_count: number;
+                selected_before: number;
+                selected_after: number;
+            } | undefined;
+            events.fire('view.setSelectedSplatsOverlay', true);
+            scene.forceRender = true;
+            return result ?? { splat_count: 0, selected_before: 0, selected_after: 0 };
+        };
+        try {
+            // used by the eval case editor to declutter the viewport while
+            // the user adjusts a target box
+            events.function('boxer.clearOverlays', () => {
+                clearBoxerResultOverlay();
+            });
+        } catch (err) {
+            console.warn('[Boxer] boxer.clearOverlays was already registered', err);
+        }
         const debugPanel = document.createElement('div');
         debugPanel.style.position = 'absolute';
         debugPanel.style.right = '12px';
@@ -5199,6 +6746,93 @@ class BoxerSelection {
             return Number.isFinite(numeric) ? numeric.toFixed(digits) : '-';
         };
         const debugButtonStyle = 'font:inherit;padding:4px 7px;border:1px solid rgba(255,255,255,.28);border-radius:4px;background:rgba(255,255,255,.12);color:inherit;';
+        const liveBrushSupportViews: BrushSupportFusionView[] = [];
+        const LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES = 45;
+        const LIVE_FUSION_READY_VIEW_GOAL = 3;
+        const LIVE_FUSION_STRONG_VIEW_GOAL = 6;
+        type LiveBrushFusionResultDebug = {
+            applied: boolean;
+            reason: string;
+            view_count?: number;
+            consistent_view_count?: number;
+            support_view_max_angle_degrees?: number;
+            support_view_avg_angle_degrees?: number;
+            fusion_method?: string;
+            consensus_overlap_ratio?: number;
+            current_support_coverage?: number;
+            reprojection_overlap?: ReturnType<typeof buildBb2dCoverageStats> | null;
+        };
+        let lastLiveBrushFusionResult: LiveBrushFusionResultDebug | null = null;
+        const getLiveBrushFusionStatus = () => {
+            const consistentViews = filterConsistentBrushSupportViews(liveBrushSupportViews);
+            const angles = summarizeBrushSupportViewAngles(consistentViews);
+            const last = lastLiveBrushFusionResult;
+            const state = last?.applied ?
+                'applied' :
+                liveBrushSupportViews.length === 0 ?
+                    'empty' :
+                    consistentViews.length < 2 ?
+                        'collecting' :
+                        angles.max_degrees < LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES ?
+                            'needs-view-diversity' :
+                            'ready';
+            return {
+                state,
+                view_count: liveBrushSupportViews.length,
+                consistent_view_count: consistentViews.length,
+                max_angle_degrees: angles.max_degrees,
+                avg_angle_degrees: angles.avg_degrees,
+                min_promotion_angle_degrees: LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES,
+                ready_view_goal: LIVE_FUSION_READY_VIEW_GOAL,
+                strong_view_goal: LIVE_FUSION_STRONG_VIEW_GOAL,
+                can_promote_three_view: consistentViews.length >= LIVE_FUSION_READY_VIEW_GOAL &&
+                    angles.max_degrees >= LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES,
+                can_promote_strong_view: consistentViews.length >= LIVE_FUSION_STRONG_VIEW_GOAL &&
+                    angles.max_degrees >= LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES,
+                last_result: last ? {
+                    applied: last.applied,
+                    reason: last.reason,
+                    view_count: last.view_count,
+                    consistent_view_count: last.consistent_view_count,
+                    max_angle_degrees: last.support_view_max_angle_degrees,
+                    avg_angle_degrees: last.support_view_avg_angle_degrees,
+                    fusion_method: last.fusion_method,
+                    consensus_overlap_ratio: last.consensus_overlap_ratio,
+                    current_support_coverage: last.current_support_coverage,
+                    reprojection_iou: last.reprojection_overlap?.iou
+                } : null
+            };
+        };
+        const publishLiveBrushFusionStatus = () => {
+            const status = getLiveBrushFusionStatus();
+            (window as any).__lastBoxerLiveBrushFusionStatus = status;
+            events.fire('boxer.liveBrushFusionUpdated', status);
+            return status;
+        };
+        const fusionStatusRows = () => {
+            const status = getLiveBrushFusionStatus();
+            if (status.state === 'empty') return '';
+            const angle = fmtNum(status.max_angle_degrees, 1);
+            const coverage = fmtNum(status.last_result?.current_support_coverage, 2);
+            const reprojection = fmtNum(status.last_result?.reprojection_iou, 2);
+            const stateLabel = status.state === 'needs-view-diversity' ?
+                'needs angle' :
+                status.state;
+            return `
+                <div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(255,255,255,.16);">
+                    <div>fusion ${stateLabel} · ${status.consistent_view_count}/${status.view_count} views · ${angle}deg</div>
+                    <div>current ${coverage} · reproj ${reprojection}</div>
+                    ${status.last_result?.reason ? `<div>${status.last_result.reason}</div>` : ''}
+                    <button type="button" data-boxer-clear-fusion style="${debugButtonStyle}margin-top:6px;background:rgba(255,255,255,.08);">Clear Fusion</button>
+                </div>
+            `;
+        };
+        const bindFusionClearButton = () => {
+            brushPanel.querySelector<HTMLButtonElement>('[data-boxer-clear-fusion]')?.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                events.invoke('boxer.clearLiveBrushFusion');
+            });
+        };
         const renderBrushPanel = () => {
             if (!lastBrushPrompt) {
                 if (!stickyEvalTarget) {
@@ -5211,7 +6845,7 @@ class BoxerSelection {
                         <strong style="font-size:12px;">Boxer Brush Test</strong>
                         <span>target saved</span>
                     </div>
-                    <div>Switch to the brush tool with shortcut 8 or the brush icon, then paint the object.</div>
+                    <div>Switch to a brush selection tool, then paint the object.</div>
                     <div style="margin-top:6px;">After you release the stroke, this panel will show Run Brush and Save Brush Eval.</div>
                 `;
                 brushPanel.style.display = '';
@@ -5224,26 +6858,32 @@ class BoxerSelection {
             const statusText = brushPanelStatus === 'running' ?
                 'Running...' :
                 (brushPanelStatus === 'done' ? 'Ready to save' : (brushPanelStatus === 'failed' ? 'Run failed' : 'Ready'));
+            const fusionText = liveBrushSupportViews.length ?
+                `<div>fusion memory ${liveBrushSupportViews.length} view${liveBrushSupportViews.length === 1 ? '' : 's'}</div>` :
+                '';
             brushPanel.innerHTML = `
                 <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:6px;">
-                    <strong style="font-size:12px;">Boxer Brush Test</strong>
+                    <strong style="font-size:12px;">${lastBrushPrompt.type === 'brush_sam' || lastBrushPrompt.type === 'brush_sam_clean' ? 'SAM Brush Test' : 'Boxer Brush Test'}</strong>
                     <span>${statusText}</span>
                 </div>
                 <div>stroke radius ${fmtNum(radius, 1)} · box ${Math.round(x1 - x0)}x${Math.round(y1 - y0)}</div>
                 <div>${pointCount} pts</div>
+                ${fusionText}
+                ${fusionStatusRows()}
                 <div style="display:flex;gap:6px;margin-top:8px;">
                     <button type="button" data-boxer-run-brush style="${debugButtonStyle}">Run Brush</button>
                     <button type="button" data-boxer-copy-brush style="${debugButtonStyle}">Save Brush Eval</button>
-	                </div>
-	            `;
-	            brushPanel.querySelector<HTMLButtonElement>('[data-boxer-run-brush]')?.addEventListener('pointerdown', (e) => {
-	                e.stopPropagation();
-	                void events.invoke('boxer.runLastBrush');
-	            });
-	            brushPanel.querySelector<HTMLButtonElement>('[data-boxer-copy-brush]')?.addEventListener('pointerdown', (e) => {
-	                e.stopPropagation();
-	                void events.invoke('boxer.copyLastBrushEvalCase', { copy_clipboard: false, save_local: true });
-	            });
+                </div>
+            `;
+            brushPanel.querySelector<HTMLButtonElement>('[data-boxer-run-brush]')?.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                events.invoke('boxer.runLastBrush');
+            });
+            brushPanel.querySelector<HTMLButtonElement>('[data-boxer-copy-brush]')?.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                events.invoke('boxer.copyLastBrushEvalCase', { copy_clipboard: false, save_local: true });
+            });
+            bindFusionClearButton();
             brushPanel.style.display = '';
         };
         const updateDebugPanel = (state: BoxerClickDebugPanelState) => {
@@ -5270,18 +6910,23 @@ class BoxerSelection {
                 ${state.image ? `<img alt="Boxer input" src="data:image/png;base64,${state.image}" style="width:100%;border-radius:6px;display:block;margin-bottom:8px;" />` : ''}
                 <div>${state.label ?? 'no label'} · conf ${fmtNum(state.confidence, 2)}</div>
                 <div>${state.image_width ?? '-'}x${state.image_height ?? '-'} · ${state.depth_source ?? 'depth?'}</div>
-                <div>overlay orange=final 3D projection · pink=raw 2D evidence</div>
+                <div>2D boxes ${boxer2DOverlaysVisible ? 'visible' : 'hidden'} · orange=final · pink/blue=evidence</div>
                 <div>frame ${fmtMs(state.frame_ms)} · backend ${fmtMs(state.backend_ms)} · refine ${fmtMs(state.refine_ms)} · draw ${fmtMs(state.draw_ms)}</div>
                 <div>${state.endpoint ?? ''}</div>
-                <div>proposals ${state.proposal_count ?? '-'} · candidates ${state.candidate_count ?? '-'}</div>
+                <div>proposals ${state.proposal_count ?? '-'} · candidates ${state.candidate_count ?? '-'} · selected splats ${state.selected_splat_count ?? '-'}</div>
                 <div>${rayStats}</div>
-                <div style="display:flex;gap:6px;margin-top:8px;">
+                <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">
+                    <button type="button" data-boxer-toggle-2d-overlays style="${debugButtonStyle}">${boxer2DOverlaysVisible ? 'Hide 2D Boxes' : 'Show 2D Boxes'}</button>
                     <button type="button" data-boxer-copy-eval style="${debugButtonStyle}">Copy Eval</button>
                     <button type="button" data-boxer-clear-target style="${debugButtonStyle}background:rgba(255,255,255,.08);">Clear Target</button>
                 </div>
                 ${scaleRows ? `<hr style="border:0;border-top:1px solid rgba(255,255,255,.18);margin:8px 0;" />${scaleRows}` : ''}
                 ${candidateRows ? `<hr style="border:0;border-top:1px solid rgba(255,255,255,.18);margin:8px 0;" />${candidateRows}` : ''}
             `;
+            debugPanel.querySelector<HTMLButtonElement>('[data-boxer-toggle-2d-overlays]')?.addEventListener('pointerdown', (e) => {
+                e.stopPropagation();
+                set2DBoxOverlaysVisible(!boxer2DOverlaysVisible);
+            });
             debugPanel.querySelector<HTMLButtonElement>('[data-boxer-copy-eval]')?.addEventListener('pointerdown', (e) => {
                 e.stopPropagation();
                 events.invoke('boxer.copyClickTestCase');
@@ -5294,6 +6939,9 @@ class BoxerSelection {
             events.fire('boxer.debugUpdated', state);
         };
         try {
+            events.function('boxer.2dOverlays.visible', () => boxer2DOverlaysVisible);
+            events.function('boxer.2dOverlays.setVisible', (visible: boolean) => set2DBoxOverlaysVisible(visible === true));
+            events.function('boxer.2dOverlays.toggleVisible', () => set2DBoxOverlaysVisible(!boxer2DOverlaysVisible));
             events.function('boxer.debugPanel.toggleVisible', () => {
                 debugPanel.style.display = debugPanel.style.display === 'none' ? '' : 'none';
                 return debugPanel.style.display !== 'none';
@@ -5659,8 +7307,8 @@ class BoxerSelection {
             };
 
             currentCorners = buildWireframeCorners(topObb);
-            scene.forceRender = true;
-            events.fire('select.byOBB', 'set', topObb);
+            const selectionTruth = await applyBoxerObbSelection(topObb);
+            debugResult.selection_truth = selectionTruth;
             const finalProjectedBb2d = projectResultTo2D(topObb, frame);
             const overlayLayers: BoxerOverlayLayer[] = [];
             if (finalProjectedBb2d) {
@@ -5697,6 +7345,7 @@ class BoxerSelection {
                 image_height: frame.image_height,
                 depth_source: frame.depth_source,
                 bb2d: top.normalized_bb2d,
+                selected_splat_count: selectionTruth.selected_after,
                 scale_runs: directRuns.map(run => ({
                     scale: run.scale,
                     ms: run.ms,
@@ -5790,8 +7439,8 @@ class BoxerSelection {
             };
 
             currentCorners = buildWireframeCorners(obb);
-            scene.forceRender = true;
-            events.fire('select.byOBB', 'set', obb);
+            const selectionTruth = await applyBoxerObbSelection(obb);
+            debugResult.selection_truth = selectionTruth;
 
             return {
                 camera: lastEvalCamera,
@@ -5869,8 +7518,8 @@ class BoxerSelection {
             };
 
             currentCorners = buildWireframeCorners(obb);
-            scene.forceRender = true;
-            events.fire('select.byOBB', 'set', obb);
+            const selectionTruth = await applyBoxerObbSelection(obb);
+            debugResult.selection_truth = selectionTruth;
             const finalProjectedBb2d = projectResultTo2D(obb, frame);
             const overlayLayers: BoxerOverlayLayer[] = [];
             if (finalProjectedBb2d) {
@@ -5905,6 +7554,7 @@ class BoxerSelection {
                 image_height: frame.image_height,
                 depth_source: frame.depth_source,
                 bb2d: local.bb2d,
+                selected_splat_count: selectionTruth.selected_after,
                 candidate_count: local.debug.candidates.length,
                 proposal_count: 1,
                 ray_sample_count: geometryRefinement.ray_sample_count,
@@ -5933,7 +7583,8 @@ class BoxerSelection {
         const executeClientBrush = async (
             brush: BoxerBrushPrompt | undefined,
             click: [number, number] | undefined,
-            target?: BoxerEvalTarget | null
+            target?: BoxerEvalTarget | null,
+            options?: { useSam?: boolean; samClean?: boolean; floorSnap?: boolean; liveFusion?: boolean }
         ) => {
             const t0 = performance.now();
             const splat = (events.invoke('selection') as Splat | null) ??
@@ -5941,23 +7592,129 @@ class BoxerSelection {
             if (!splat) {
                 throw new Error('No splat loaded');
             }
+            if (options?.useSam || options?.samClean) {
+                clearBoxerResultOverlay();
+                events.fire('select.none');
+            }
+
+            // make sure any in-flight collision surface sidecar load has settled
+            // so live runs and replay both see the same brush_surface evidence
+            await waitForCollisionSurface();
+            const estimateBrushAreaRatio = () => {
+                const bounds = brush?.bb2d ?? (brush?.points?.length ? (() => {
+                    const radius = brush.radius ?? 8;
+                    return brush.points.reduce((acc, point) => {
+                        acc[0] = Math.min(acc[0], point[0] - radius);
+                        acc[1] = Math.min(acc[1], point[1] - radius);
+                        acc[2] = Math.max(acc[2], point[0] + radius);
+                        acc[3] = Math.max(acc[3], point[1] + radius);
+                        return acc;
+                    }, [Infinity, Infinity, -Infinity, -Infinity] as NormalizedBb2d);
+                })() : null);
+                if (!bounds) return 0;
+                return Math.max(0, bounds[2] - bounds[0]) *
+                    Math.max(0, bounds[3] - bounds[1]) /
+                    Math.max(1, canvas.clientWidth * canvas.clientHeight);
+            };
+            const estimatedBrushAreaRatio = estimateBrushAreaRatio();
+            const useVoxelBrushFastFrame = !options?.useSam &&
+                !options?.samClean &&
+                brush?.mode !== 'raw' &&
+                brush?.mode !== 'evidence' &&
+                getActiveCollisionSurface()?.source === 'voxel' &&
+                (
+                    estimatedBrushAreaRatio > 0.25 ||
+                    (estimatedBrushAreaRatio >= 0.01 && estimatedBrushAreaRatio <= 0.05)
+                );
 
             const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
-                includeImage: false,
-                includeEncodedDepth: false
+                includeImage: !!options?.useSam || !!options?.samClean || (window as any).__boxerExportFullFrame === true,
+                includeEncodedDepth: (window as any).__boxerExportFullFrame === true,
+                skipDepth: useVoxelBrushFastFrame
             });
             const tFrame = performance.now();
             publishBoxerFrameDebug(frame);
-            lastEvalPrompt = { type: 'client_brush', ...(click ? { click_xy: click } : {}), brush };
+            lastEvalPrompt = { type: options?.samClean ? 'brush_sam_clean' : options?.floorSnap ? 'client_brush_floor_snap' : options?.useSam ? 'brush_sam' : 'client_brush', ...(click ? { click_xy: click } : {}), brush };
             lastEvalFrame = summarizeFrameForEval(frame);
             lastEvalCamera = events.invoke('camera.debugState') as CameraDebugState;
 
-            const local = buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
-            const obb = local.obb;
+            let sam3Region: Sam3MaskRegion | null = null;
+            let sam3Debug: Sam3MaskDebug | undefined;
+            if (options?.useSam || options?.samClean) {
+                const samClick = click ?? brush?.center_xy;
+                if (samClick) {
+                    sam3Debug = { attempts: [] };
+                    const brushPoints = sampleSam3BrushPoints(brush, samClick);
+                    sam3Region = await fetchSam3ClickMaskRegion(frame, splat, scene, samClick[0], samClick[1], sam3Debug, {
+                        promptPoints: brushPoints
+                    });
+                }
+            }
+            if (options?.useSam && !sam3Region) {
+                const reason = sam3Debug?.rejection_reason ?? sam3Debug?.error ?? 'no usable SAM mask';
+                const attempts = sam3Debug?.attempts
+                .map(attempt => `${attempt.endpoint}:${attempt.status}${attempt.ok ? '' : ':failed'}`)
+                .join(', ');
+                throw new Error(`SAM brush failed: ${reason}${attempts ? ` (${attempts})` : ''}`);
+            }
+            const shouldBuildBrushVisualEvidence =
+                brush?.mode !== 'raw' &&
+                !useVoxelBrushFastFrame &&
+                (brush?.mode === 'evidence' || getActiveCollisionSurface()?.source !== 'voxel') &&
+                (
+                    brush?.mode === 'evidence' ||
+                    frame.depth_source !== 'cpu-center-zbuffer' ||
+                    estimatedBrushAreaRatio <= 0.1
+                );
+            const visualEvidence = shouldBuildBrushVisualEvidence ?
+                await buildBrushVisualEvidence(events, frame, brush, click).catch((err: unknown): null => {
+                    console.warn('[Boxer] brush visual evidence unavailable', err);
+                    return null;
+                }) :
+                null;
+            const local = brush?.mode === 'raw' ?
+                buildRawBrushObb(frame, splat, scene, brush, click) :
+                buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click, {
+                    sam3Region: options?.samClean ? sam3Region : null,
+                    floorSnap: options?.floorSnap,
+                    visualEvidence
+                });
+            let obb = local.obb;
             const rawObb = cloneObb(obb);
-            const geometryRefinement = local.debug.selected_candidate_source === 'brush_ray' || local.debug.preserve_client_brush_geometry ?
-                { applied: false as const, reason: 'client-brush-ray-prior' } :
-                refineObbFromBoxedPoints(
+            const liveFusion = options?.liveFusion !== false &&
+                !options?.useSam &&
+                !options?.samClean &&
+                !options?.floorSnap &&
+                brush?.mode !== 'raw' ?
+                tryBuildLiveBrushSupportFusion(local, frame) :
+                { applied: false, reason: 'disabled' };
+            lastLiveBrushFusionResult = liveFusion;
+            publishLiveBrushFusionStatus();
+            if (liveFusion.applied && liveFusion.obb) {
+                obb = liveFusion.obb;
+            }
+            const buildGeometryRefinement = (): GeometryRefinement => {
+                if (sam3Region && options?.useSam) {
+                    return refineObbFromBoxedPoints(
+                        obb,
+                        frame,
+                        splat,
+                        scene,
+                        local.bb2d,
+                        click ? { click_xy: click, depthBuffer } : undefined,
+                        sam3Region
+                    );
+                }
+                if (brush?.mode === 'raw') {
+                    return { applied: false, reason: 'raw-brush-extents' };
+                }
+                const preserveLocalGeometry = local.debug.selected_candidate_source === 'brush_ray' ||
+                    local.debug.selected_candidate_source === 'brush_surface' ||
+                    (local.debug as { preserve_client_brush_geometry?: boolean }).preserve_client_brush_geometry;
+                if (preserveLocalGeometry) {
+                    return { applied: false, reason: 'client-brush-ray-prior' };
+                }
+                return refineObbFromBoxedPoints(
                     obb,
                     frame,
                     splat,
@@ -5965,6 +7722,8 @@ class BoxerSelection {
                     local.bb2d,
                     click ? { click_xy: click, depthBuffer } : undefined
                 );
+            };
+            const geometryRefinement = buildGeometryRefinement();
             const tRefine = performance.now();
 
             publishBoxerResultDebug(
@@ -5983,10 +7742,28 @@ class BoxerSelection {
                 target_projected_bb2d: targetProjectedBb2d,
                 ...local.debug
             };
+            debugResult.live_brush_fusion = liveFusion;
+            if (sam3Debug) {
+                const brushSurfaceDebug = local.debug.brush_surface as { sam_filter?: { applied?: boolean } } | undefined;
+                debugResult.sam3_augmentation = {
+                    applied: options?.samClean ?
+                        brushSurfaceDebug?.sam_filter?.applied === true :
+                        geometryRefinement.reason === 'sam3-click-mask-connected-region',
+                    mode: options?.samClean ? 'mask-cleanup' : 'geometry-refinement',
+                    region: sam3Region ? {
+                        mask_bb2d: sam3Region.mask_bb2d,
+                        point_count: sam3Region.point_count,
+                        projected_candidate_count: sam3Region.projected_candidate_count,
+                        front_surface_candidate_count: sam3Region.front_surface_candidate_count,
+                        mask_area_ratio: sam3Region.mask_area_ratio
+                    } : null,
+                    debug: sam3Debug
+                };
+            }
 
             currentCorners = buildWireframeCorners(obb);
-            scene.forceRender = true;
-            events.fire('select.byOBB', 'set', obb);
+            const selectionTruth = await applyBoxerObbSelection(obb);
+            debugResult.selection_truth = selectionTruth;
             const finalProjectedBb2d = projectResultTo2D(obb, frame);
             const overlayLayers: BoxerOverlayLayer[] = [];
             if (finalProjectedBb2d) {
@@ -6007,7 +7784,7 @@ class BoxerSelection {
             show2DBoxLayers(overlayLayers);
             const tDone = performance.now();
             updateDebugPanel({
-                mode: 'client brush',
+                mode: liveFusion.applied ? 'client brush fusion' : options?.samClean ? 'brush sam clean' : options?.floorSnap ? 'client brush floor snap' : options?.useSam ? 'brush sam' : 'client brush',
                 endpoint: 'local geometry',
                 label: obb.label,
                 confidence: obb.confidence,
@@ -6021,6 +7798,7 @@ class BoxerSelection {
                 image_height: frame.image_height,
                 depth_source: frame.depth_source,
                 bb2d: local.bb2d,
+                selected_splat_count: selectionTruth.selected_after,
                 candidate_count: local.debug.candidates.length,
                 proposal_count: 1,
                 ray_sample_count: geometryRefinement.ray_sample_count,
@@ -6046,14 +7824,205 @@ class BoxerSelection {
             };
         };
 
-        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' }>) => {
+        // GUARANTEED real Boxer: the stroke's 2D box goes to the Boxer backend
+        // (/api/boxer-lift-bb2d) and the model lifts it to a 3D box. Raw model
+        // output, no local geometry refinement, and an honest error when the
+        // backend is unreachable or returns nothing.
+        const executeBrushBoxer = (
+            brush: BoxerBrushPrompt | undefined,
+            click: [number, number] | undefined,
+            target?: BoxerEvalTarget | null,
+            options?: Omit<Extract<BoxerEvalPrompt, { type: 'brush_boxer' }>, 'type' | 'click_xy' | 'brush'>
+        ) => {
+            const strokeBounds = brush?.bb2d ?? (brush?.points?.length ? (() => {
+                const radius = brush.radius ?? 8;
+                const bounds = brush.points.reduce((acc, point) => {
+                    acc[0] = Math.min(acc[0], point[0]);
+                    acc[1] = Math.min(acc[1], point[1]);
+                    acc[2] = Math.max(acc[2], point[0]);
+                    acc[3] = Math.max(acc[3], point[1]);
+                    return acc;
+                }, [Infinity, Infinity, -Infinity, -Infinity] as NormalizedBb2d);
+                return [bounds[0] - radius, bounds[1] - radius, bounds[2] + radius, bounds[3] + radius] as NormalizedBb2d;
+            })() : undefined);
+            if (!strokeBounds) {
+                throw new Error('Brush Boxer needs a stroke region');
+            }
+            const bb2d = sanitizeBb2d(strokeBounds, canvas.clientWidth, canvas.clientHeight);
+            if (!bb2d) {
+                throw new Error('Brush Boxer stroke region is invalid');
+            }
+            const focusPoint = click ?? brush?.center_xy;
+            // BoxNet expects roughly metric world units; this scene family is
+            // several times that, so default to a single corrective scale.
+            // (A multi-scale ensemble scores better but the EC2 backend hangs
+            // under the parallel requests — keep live use to one request.)
+            const worldScales = options?.boxernet_world_scales ??
+                (options?.boxernet_world_scale === undefined ? [0.2] : undefined);
+            return executeDirectLift(
+                [{
+                    id: 'brush-stroke',
+                    bb2d,
+                    score2d: 1,
+                    source: 'manual'
+                }],
+                {
+                    type: 'brush_boxer',
+                    ...(click ? { click_xy: click } : {}),
+                    brush,
+                    ...options,
+                    ...(worldScales ? { boxernet_world_scales: worldScales } : {})
+                },
+                target ?? null,
+                focusPoint ? { x: focusPoint[0], y: focusPoint[1] } : undefined,
+                options?.preprocess_mode ?? 'full_frame',
+                undefined,
+                'dense',
+                'global',
+                options?.boxernet_world_scale,
+                options?.refinement_mode ?? 'raw',
+                undefined,
+                options?.object_crop
+            );
+        };
+
+        // Fusion: the local pipeline places boxes well but guesses dims; the
+        // BoxNet lift gets dims right but places poorly. brush_fused runs both
+        // and combines model dimensions with local placement. Honest failure
+        // when the model is unreachable.
+        const executeBrushFused = async (
+            brush: BoxerBrushPrompt | undefined,
+            click: [number, number] | undefined,
+            target?: BoxerEvalTarget | null,
+            options?: { boxernet_world_scale?: number; fuse_mode?: 'model_dims' | 'model_depth' }
+        ) => {
+            const t0 = performance.now();
+            const splat = (events.invoke('selection') as Splat | null) ??
+                ((events.invoke('scene.splats') as Splat[] | undefined)?.[0] ?? null);
+            if (!splat) {
+                throw new Error('No splat loaded');
+            }
+            await waitForCollisionSurface();
+            const { frame, depthBuffer } = await buildBoxerFramePayload(events, scene, splat, canvas, {
+                includeImage: true,
+                includeEncodedDepth: false
+            });
+            const tFrame = performance.now();
+            publishBoxerFrameDebug(frame);
+            lastEvalPrompt = { type: 'brush_fused', ...(click ? { click_xy: click } : {}), brush };
+            lastEvalFrame = summarizeFrameForEval(frame);
+            lastEvalCamera = events.invoke('camera.debugState') as CameraDebugState;
+
+            const local = buildClientBrushObb(frame, splat, scene, depthBuffer, brush, click);
+
+            const strokeBounds = brush?.bb2d;
+            const proposalBb = strokeBounds ? sanitizeBb2d(strokeBounds, frame.image_width, frame.image_height) : local.bb2d;
+            if (!proposalBb) {
+                throw new Error('Brush fused: stroke region is invalid');
+            }
+            const worldScale = options?.boxernet_world_scale ?? 0.2;
+            const direct = await postBoxerDirectLift(
+                getBoxerBackendUrl(),
+                frame,
+                [{ id: 'brush-stroke', bb2d: proposalBb, score2d: 1, source: 'manual' }],
+                'full_frame',
+                'dense',
+                worldScale
+            );
+            const detection = direct.detections[0];
+            if (!detection) {
+                throw new Error('Brush fused: model returned no detections');
+            }
+            const tBackend = performance.now();
+
+            const modelAabb = aabbFromCorners(detection.corners);
+            const localAabb = aabbFromCorners(local.obb.corners);
+            if (!modelAabb || !localAabb) {
+                throw new Error('Brush fused: could not derive AABBs');
+            }
+            const modelDims: [number, number, number] = [
+                modelAabb.max[0] - modelAabb.min[0],
+                modelAabb.max[1] - modelAabb.min[1],
+                modelAabb.max[2] - modelAabb.min[2]
+            ];
+            const localCenter: [number, number, number] = [
+                (localAabb.min[0] + localAabb.max[0]) / 2,
+                (localAabb.min[1] + localAabb.max[1]) / 2,
+                (localAabb.min[2] + localAabb.max[2]) / 2
+            ];
+            const fusedAabb = aabbFromCenterDimensions(localCenter, modelDims);
+            const obb = buildAxisAlignedObbFromAabb(fusedAabb, 'brush_fused', 'brush_fused', local.bb2d);
+            const rawObb = cloneObb(detection);
+
+            publishBoxerResultDebug(
+                obb,
+                rawObb,
+                local.bb2d,
+                { applied: false, reason: 'brush-fused' },
+                { applied: false, reason: 'fused-model-dims-local-center' }
+            );
+            const debugResult = (window as any).__lastBoxerResult;
+            const targetProjectedBb2d = projectedTargetBb2d(target, scene, frame.intrinsics);
+            debugResult.target_projected_bb2d = targetProjectedBb2d;
+            debugResult.bb2d_target_metrics = buildBb2dTargetMetrics(local.bb2d, targetProjectedBb2d);
+            debugResult.brush_fused = {
+                fuse_mode: options?.fuse_mode ?? 'model_dims',
+                boxernet_world_scale: worldScale,
+                local_aabb: localAabb,
+                local_source: local.debug.selected_candidate_source,
+                model_aabb: modelAabb,
+                model_confidence: detection.confidence,
+                fused_aabb: fusedAabb
+            };
+            debugResult.client_brush = {
+                backend_bypassed: false,
+                target_projected_bb2d: targetProjectedBb2d,
+                ...local.debug
+            };
+
+            currentCorners = buildWireframeCorners(obb);
+            const selectionTruth = await applyBoxerObbSelection(obb);
+            debugResult.selection_truth = selectionTruth;
+            const tDone = performance.now();
+            updateDebugPanel({
+                mode: 'brush fused',
+                endpoint: `${getBoxerBackendUrl()}/api/boxer-lift-bb2d`,
+                label: obb.label,
+                confidence: detection.confidence,
+                total_ms: tDone - t0,
+                frame_ms: tFrame - t0,
+                backend_ms: tBackend - tFrame,
+                refine_ms: tDone - tBackend,
+                draw_ms: 0,
+                image_width: frame.image_width,
+                image_height: frame.image_height,
+                depth_source: frame.depth_source,
+                bb2d: local.bb2d,
+                selected_splat_count: selectionTruth.selected_after,
+                candidate_count: 1,
+                proposal_count: 1
+            });
+
+            return {
+                camera: lastEvalCamera,
+                frame: lastEvalFrame,
+                raw_boxer_result: rawObb,
+                boxer_result: debugResult,
+                target: target ?? null,
+                raw_metrics: buildEvalMetrics(rawObb, target),
+                metrics: buildEvalMetrics(obb, target),
+                brush_fused_probe: debugResult.brush_fused
+            };
+        };
+
+        events.on('boxer.brushPromptCaptured', (prompt: Extract<BoxerEvalPrompt, { type: 'client_brush' | 'client_brush_floor_snap' | 'brush_sam' | 'brush_sam_clean' | 'brush_boxer' }>) => {
             lastBrushPrompt = prompt;
             lastBrushReplay = null;
             brushPanelStatus = 'running';
             renderBrushPanel();
             console.log('[Boxer] captured brush prompt', prompt);
-            events.fire('toast', 'Running Boxer brush selection', 'info');
-            void new Promise<void>(resolve => {
+            events.fire('toast', prompt.type === 'brush_sam' || prompt.type === 'brush_sam_clean' ? 'Running SAM brush selection' : prompt.type === 'brush_boxer' ? 'Running Boxer model brush lift' : 'Running local brush selection', 'info');
+            new Promise<void>((resolve) => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
             }).then(() => runLastBrushBoxer()).then(() => {
                 brushPanelStatus = 'done';
@@ -6084,11 +8053,22 @@ class BoxerSelection {
             renderBrushPanel();
             parent.style.cursor = 'wait';
             try {
-                const replay = await executeClientBrush(
-                    lastBrushPrompt.brush,
-                    lastBrushPrompt.click_xy,
-                    target ? cloneEvalTarget(target) : null
-                );
+                const replay = lastBrushPrompt.type === 'brush_boxer' ?
+                    await executeBrushBoxer(
+                        lastBrushPrompt.brush,
+                        lastBrushPrompt.click_xy,
+                        target ? cloneEvalTarget(target) : null
+                    ) :
+                    await executeClientBrush(
+                        lastBrushPrompt.brush,
+                        lastBrushPrompt.click_xy,
+                        target ? cloneEvalTarget(target) : null,
+                        {
+                            useSam: lastBrushPrompt.type === 'brush_sam',
+                            samClean: lastBrushPrompt.type === 'brush_sam_clean',
+                            floorSnap: lastBrushPrompt.type === 'client_brush_floor_snap'
+                        }
+                    );
                 lastBrushReplay = replay;
                 brushPanelStatus = 'done';
                 renderBrushPanel();
@@ -6142,6 +8122,730 @@ class BoxerSelection {
             };
         };
 
+        const buildAxisAlignedObbFromAabbWithSource = (
+            aabb: Aabb,
+            label: string,
+            sourceLabel: string,
+            bb2d?: NormalizedBb2d
+        ): OBBResult => {
+            const obb = buildAxisAlignedObbFromAabb(aabb, label, sourceLabel, bb2d);
+            obb.source = sourceLabel;
+            return obb;
+        };
+
+        const quantileAabbFromPoints = (
+            points: [number, number, number][],
+            lowQ: number,
+            highQ: number,
+            inflate = 1
+        ): Aabb | null => {
+            if (points.length < 8) return null;
+            const min: [number, number, number] = [0, 0, 0];
+            const max: [number, number, number] = [0, 0, 0];
+            for (let axis = 0; axis < 3; axis++) {
+                const values = points.map(point => point[axis]).sort((a, b) => a - b);
+                const lo = quantile(values, lowQ);
+                const hi = quantile(values, highQ);
+                const center = (lo + hi) * 0.5;
+                const half = Math.max(0.025, (hi - lo) * 0.5 * inflate);
+                min[axis] = center - half;
+                max[axis] = center + half;
+            }
+            return { min, max };
+        };
+
+        const medianNumber = (values: number[]) => {
+            if (!values.length) return 0;
+            const sorted = [...values].sort((a, b) => a - b);
+            return sorted[Math.floor(sorted.length / 2)];
+        };
+
+        type BrushSupportFusionView = {
+            points: [number, number, number][];
+            supportBox: Aabb | null;
+            obb?: OBBResult;
+            forward: [number, number, number];
+            live_id?: string;
+            created_at?: number;
+            selected_source?: string;
+            support_count?: number;
+            support_sample_source?: string;
+        };
+
+        const vectorLength3 = (v: [number, number, number]) => Math.hypot(v[0], v[1], v[2]);
+
+        const cameraForwardAngleDegrees = (
+            a: [number, number, number],
+            b: [number, number, number]
+        ) => {
+            const len = vectorLength3(a) * vectorLength3(b);
+            if (!(len > 0)) return null;
+            const dot = (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) / len;
+            const clamped = Math.max(-1, Math.min(1, dot));
+            return Math.acos(clamped) * 180 / Math.PI;
+        };
+
+        const summarizeBrushSupportViewAngles = (views: BrushSupportFusionView[]) => {
+            const angles: number[] = [];
+            for (let i = 0; i < views.length; i++) {
+                for (let j = i + 1; j < views.length; j++) {
+                    const angle = cameraForwardAngleDegrees(views[i].forward, views[j].forward);
+                    if (angle !== null && Number.isFinite(angle)) angles.push(angle);
+                }
+            }
+            return {
+                max_degrees: angles.length ? Math.max(...angles) : 0,
+                avg_degrees: angles.length ? angles.reduce((sum, value) => sum + value, 0) / angles.length : 0
+            };
+        };
+
+        const buildBrushSupportConsensusAabb = (
+            views: BrushSupportFusionView[],
+            voxelSize = 0.08,
+            consensusFraction = 0.6
+        ) => {
+            const counts = new Map<string, number>();
+            const perViewVoxelCounts: number[] = [];
+            for (const view of views) {
+                const voxels = new Set<string>();
+                for (const point of view.points) {
+                    voxels.add([
+                        Math.round(point[0] / voxelSize),
+                        Math.round(point[1] / voxelSize),
+                        Math.round(point[2] / voxelSize)
+                    ].join(','));
+                }
+                perViewVoxelCounts.push(voxels.size);
+                for (const voxel of voxels) {
+                    counts.set(voxel, (counts.get(voxel) ?? 0) + 1);
+                }
+            }
+            const minCount = Math.max(2, Math.ceil(views.length * consensusFraction));
+            const keep: [number, number, number][] = [];
+            for (const [voxel, count] of counts) {
+                if (count < minCount) continue;
+                const parts = voxel.split(',').map(Number) as [number, number, number];
+                keep.push(parts);
+            }
+            const ratio = keep.length / Math.max(1, medianNumber(perViewVoxelCounts));
+            if (keep.length < 10) return { aabb: null as Aabb | null, ratio };
+            const min: [number, number, number] = [0, 0, 0];
+            const max: [number, number, number] = [0, 0, 0];
+            for (let axis = 0; axis < 3; axis++) {
+                const values = keep.map(voxel => voxel[axis] * voxelSize).sort((a, b) => a - b);
+                min[axis] = quantile(values, 0.02) - voxelSize * 0.5;
+                max[axis] = quantile(values, 0.98) + voxelSize * 0.5;
+            }
+            return { aabb: { min, max }, ratio };
+        };
+
+        const buildBrushSupportTightAabb = (
+            views: BrushSupportFusionView[],
+            alignWeightMin = 0.45
+        ): Aabb | null => {
+            const min: [number, number, number] = [0, 0, 0];
+            const max: [number, number, number] = [0, 0, 0];
+            for (let axis = 0; axis < 3; axis++) {
+                const entries = views
+                .filter(view => !!view.supportBox)
+                .map(view => ({
+                    weight: 1 - Math.abs(view.forward[axis]),
+                    min: view.supportBox!.min[axis],
+                    max: view.supportBox!.max[axis]
+                }));
+                if (!entries.length) return null;
+                entries.sort((a, b) => b.weight - a.weight);
+                const aligned = entries.filter(entry => entry.weight >= alignWeightMin);
+                const pool = aligned.length ? aligned : [entries[0]];
+                const selected = pool.reduce((best, entry) => (
+                    (entry.max - entry.min) < (best.max - best.min) ? entry : best
+                ));
+                min[axis] = selected.min;
+                max[axis] = selected.max;
+            }
+            return { min, max };
+        };
+
+        const intersectAabbs = (boxes: Aabb[]): Aabb | null => {
+            if (!boxes.length) return null;
+            const min: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+            const max: [number, number, number] = [Infinity, Infinity, Infinity];
+            for (const box of boxes) {
+                for (let axis = 0; axis < 3; axis++) {
+                    min[axis] = Math.max(min[axis], box.min[axis]);
+                    max[axis] = Math.min(max[axis], box.max[axis]);
+                }
+            }
+            for (let axis = 0; axis < 3; axis++) {
+                if (max[axis] <= min[axis]) return null;
+            }
+            return { min, max };
+        };
+
+        const scaleAabbAxes = (
+            box: Aabb,
+            scales: [number, number, number]
+        ): Aabb => {
+            const min: [number, number, number] = [0, 0, 0];
+            const max: [number, number, number] = [0, 0, 0];
+            for (let axis = 0; axis < 3; axis++) {
+                const center = (box.min[axis] + box.max[axis]) * 0.5;
+                const half = (box.max[axis] - box.min[axis]) * 0.5 * scales[axis];
+                min[axis] = center - half;
+                max[axis] = center + half;
+            }
+            return { min, max };
+        };
+
+        const clampTightAabbWithConsensusEdge = (
+            tight: Aabb | null,
+            consensus: Aabb | null,
+            consensusRatio: number,
+            voxelSize = 0.08
+        ): { aabb: Aabb | null; applied: boolean; axis?: number; side?: 'min' | 'max'; amount?: number } => {
+            if (!tight || !consensus || consensusRatio >= 0.55) {
+                return { aabb: tight, applied: false };
+            }
+
+            let best: { axis: number; side: 'min' | 'max'; amount: number } | null = null;
+            for (let axis = 0; axis < 3; axis++) {
+                const span = tight.max[axis] - tight.min[axis];
+                if (!(span > 0)) continue;
+                const maxClamp = Math.max(voxelSize * 2, span * 0.12);
+                const minTrim = consensus.min[axis] - tight.min[axis];
+                const maxTrim = tight.max[axis] - consensus.max[axis];
+                for (const candidate of [
+                    { axis, side: 'min' as const, amount: minTrim },
+                    { axis, side: 'max' as const, amount: maxTrim }
+                ]) {
+                    if (!(candidate.amount > voxelSize * 1.25) || candidate.amount > maxClamp) continue;
+                    if (!best || candidate.amount > best.amount) best = candidate;
+                }
+            }
+
+            if (!best) return { aabb: tight, applied: false };
+            const aabb = {
+                min: [...tight.min] as [number, number, number],
+                max: [...tight.max] as [number, number, number]
+            };
+            if (best.side === 'min') {
+                aabb.min[best.axis] = consensus.min[best.axis] + voxelSize;
+            } else {
+                aabb.max[best.axis] = consensus.max[best.axis] - voxelSize;
+            }
+            if (aabb.max[best.axis] <= aabb.min[best.axis]) {
+                return { aabb: tight, applied: false };
+            }
+            return { aabb, applied: true, ...best };
+        };
+
+        const filterConsistentBrushSupportViews = (views: BrushSupportFusionView[]) => {
+            if (views.length <= 2) {
+                if (views.length < 2) return views;
+                const overlap = views[0].supportBox && views[1].supportBox ?
+                    aabbIou(views[0].supportBox, views[1].supportBox) :
+                    0;
+                return overlap > 0.01 ? views : [];
+            }
+            const neighbors = views.map((): number[] => []);
+            for (let i = 0; i < views.length; i++) {
+                for (let j = i + 1; j < views.length; j++) {
+                    const overlap = views[i].supportBox && views[j].supportBox ?
+                        aabbIou(views[i].supportBox, views[j].supportBox) :
+                        0;
+                    if (overlap > 0.01) {
+                        neighbors[i].push(j);
+                        neighbors[j].push(i);
+                    }
+                }
+            }
+            const seen = new Set<number>();
+            let best: number[] = [];
+            for (let start = 0; start < views.length; start++) {
+                if (seen.has(start)) continue;
+                const component: number[] = [];
+                const stack = [start];
+                seen.add(start);
+                while (stack.length) {
+                    const index = stack.pop()!;
+                    component.push(index);
+                    for (const next of neighbors[index]) {
+                        if (seen.has(next)) continue;
+                        seen.add(next);
+                        stack.push(next);
+                    }
+                }
+                if (component.length > best.length) best = component;
+            }
+            return best.map(index => views[index]);
+        };
+
+        const pointsFromFlatSupportSample = (sample: unknown): [number, number, number][] => {
+            if (!Array.isArray(sample)) return [];
+            const points: [number, number, number][] = [];
+            for (let i = 0; i + 2 < sample.length; i += 3) {
+                const x = Number(sample[i]);
+                const y = Number(sample[i + 1]);
+                const z = Number(sample[i + 2]);
+                if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+                    points.push([x, y, z]);
+                }
+            }
+            return points;
+        };
+
+        const findLiveBrushSupportComponent = (
+            views: BrushSupportFusionView[],
+            startIndex: number
+        ) => {
+            const seen = new Set<number>([startIndex]);
+            const stack = [startIndex];
+            while (stack.length) {
+                const index = stack.pop()!;
+                const box = views[index].supportBox;
+                if (!box) continue;
+                for (let next = 0; next < views.length; next++) {
+                    if (seen.has(next)) continue;
+                    const nextBox = views[next].supportBox;
+                    if (!nextBox) continue;
+                    if (aabbIou(box, nextBox) > 0.01) {
+                        seen.add(next);
+                        stack.push(next);
+                    }
+                }
+            }
+            return [...seen].map(index => views[index]);
+        };
+
+        const tryBuildLiveBrushSupportFusion = (
+            local: {
+                obb: OBBResult;
+                bb2d: NormalizedBb2d;
+                debug: {
+                    brush_surface?: unknown;
+                    selected_candidate_source?: string;
+                } & Record<string, unknown>;
+            },
+            frame: BoxerFramePayload
+        ): {
+            applied: boolean;
+            reason: string;
+            obb?: OBBResult;
+            view_count?: number;
+            consistent_view_count?: number;
+            support_view_max_angle_degrees?: number;
+            support_view_avg_angle_degrees?: number;
+            fusion_method?: string;
+            consensus_overlap_ratio?: number;
+            support_box?: Aabb | null;
+            support_tight_aabb?: Aabb | null;
+            support_tight_consensus_edge_aabb?: Aabb | null;
+            support_tight_consensus_edge?: { axis?: number; side?: 'min' | 'max'; amount?: number } | null;
+            support_intersection_aabb?: Aabb | null;
+            compact_intersection_aabb?: Aabb | null;
+            current_support_inside_count?: number;
+            current_support_count?: number;
+            current_support_coverage?: number;
+            reprojection_bb2d?: NormalizedBb2d | null;
+            reprojection_overlap?: ReturnType<typeof buildBb2dCoverageStats> | null;
+            selected_source?: string;
+            support_sample_source?: string;
+            historical_source_view_id?: string;
+        } => {
+            const surfaceDebug = local.debug.brush_surface as {
+                support_sample?: unknown;
+                core_support_sample?: unknown;
+                support_count?: number;
+                core_support_count?: number;
+                anchor_hit_ratio?: number;
+            } | undefined;
+            const broadPoints = pointsFromFlatSupportSample(surfaceDebug?.support_sample);
+            const points = broadPoints;
+            const supportSampleSource = 'support_sample';
+            if (points.length < 24) {
+                return {
+                    applied: false,
+                    reason: 'too-few-current-support-points',
+                    view_count: liveBrushSupportViews.length
+                };
+            }
+
+            const supportBox = quantileAabbFromPoints(points, 0.015, 0.985, 1.02);
+            if (!supportBox) {
+                return {
+                    applied: false,
+                    reason: 'missing-current-support-box',
+                    view_count: liveBrushSupportViews.length
+                };
+            }
+
+            const e = frame.extrinsics;
+            const currentView: BrushSupportFusionView = {
+                points,
+                supportBox,
+                obb: local.obb,
+                forward: [e[8], e[9], e[10]],
+                live_id: `live-${Date.now()}-${Math.round(performance.now())}`,
+                created_at: Date.now(),
+                selected_source: local.debug.selected_candidate_source,
+                support_sample_source: supportSampleSource,
+                support_count: surfaceDebug?.support_count
+            };
+            liveBrushSupportViews.push(currentView);
+            while (liveBrushSupportViews.length > 18) {
+                liveBrushSupportViews.shift();
+            }
+
+            const currentIndex = liveBrushSupportViews.indexOf(currentView);
+            const component = findLiveBrushSupportComponent(liveBrushSupportViews, currentIndex);
+            const consistentViews = filterConsistentBrushSupportViews(component);
+            if (consistentViews.length < 2 || !consistentViews.includes(currentView)) {
+                return {
+                    applied: false,
+                    reason: consistentViews.includes(currentView) ? 'need-second-overlapping-view' : 'current-view-not-in-consistent-component',
+                    view_count: component.length,
+                    consistent_view_count: consistentViews.length,
+                    support_box: supportBox,
+                    selected_source: local.debug.selected_candidate_source,
+                    support_sample_source: supportSampleSource
+                };
+            }
+
+            const consensus = buildBrushSupportConsensusAabb(consistentViews);
+            const viewAngles = summarizeBrushSupportViewAngles(consistentViews);
+            const tight = buildBrushSupportTightAabb(consistentViews);
+            const clampedTight = clampTightAabbWithConsensusEdge(tight, consensus.aabb, consensus.ratio);
+            const supportIntersection = intersectAabbs(consistentViews
+            .map(view => view.supportBox)
+            .filter((box): box is Aabb => !!box));
+            const localAabb = aabbFromCorners(local.obb.corners);
+            const localDims = [
+                localAabb.max[0] - localAabb.min[0],
+                localAabb.max[1] - localAabb.min[1],
+                localAabb.max[2] - localAabb.min[2]
+            ];
+            const supportIntersectionDims = supportIntersection ?
+                [
+                    supportIntersection.max[0] - supportIntersection.min[0],
+                    supportIntersection.max[1] - supportIntersection.min[1],
+                    supportIntersection.max[2] - supportIntersection.min[2]
+                ] :
+                null;
+            const supportIntersectionHorizontalMax = supportIntersectionDims ?
+                Math.max(supportIntersectionDims[0], supportIntersectionDims[2]) :
+                0;
+            const sameViewCompactIntersection = supportIntersection &&
+                supportIntersectionDims &&
+                consistentViews.length === 2 &&
+                consensus.ratio >= 0.6 &&
+                supportIntersectionHorizontalMax <= 2.35 &&
+                supportIntersectionDims[1] >= 0.9 &&
+                supportIntersectionDims[1] <= 2.6 &&
+                supportIntersectionDims[1] / Math.max(0.05, supportIntersectionHorizontalMax) >= 1.35 ?
+                supportIntersection :
+                null;
+            const tightDims = tight ?
+                [
+                    tight.max[0] - tight.min[0],
+                    tight.max[1] - tight.min[1],
+                    tight.max[2] - tight.min[2]
+                ] :
+                null;
+            const sameViewBroadRaySupportHybrid = tight && tightDims &&
+                local.debug.selected_candidate_source === 'brush_ray' &&
+                consistentViews.length >= 2 &&
+                viewAngles.max_degrees < 1 &&
+                consensus.ratio >= 0.28 &&
+                localDims[0] >= 3.0 &&
+                localDims[1] >= 2.7 &&
+                localDims[2] >= 3.0 &&
+                tightDims[1] >= 2.6 &&
+                tightDims[2] >= 3.0 ?
+                {
+                    min: [localAabb.min[0], tight.min[1], tight.min[2]] as [number, number, number],
+                    max: [localAabb.max[0], tight.max[1], tight.max[2]] as [number, number, number]
+                } :
+                null;
+            const compactIntersection = supportIntersection &&
+                consistentViews.length <= 4 &&
+                !!consensus.aabb &&
+                consensus.ratio >= 0.75 ?
+                scaleAabbAxes(supportIntersection, [1.06, 0.98, 1.065]) :
+                null;
+            const chosenAabb = sameViewCompactIntersection ??
+                sameViewBroadRaySupportHybrid ??
+                compactIntersection ??
+                (consensus.aabb && consensus.ratio >= 0.55 ? consensus.aabb : clampedTight.aabb);
+            const method = sameViewCompactIntersection ?
+                'live-brush-support-same-view-compact-intersection' :
+                sameViewBroadRaySupportHybrid ?
+                    'live-brush-support-same-view-ray-support-hybrid' :
+                    compactIntersection ?
+                        'live-brush-support-compact-intersection' :
+                        (consensus.aabb && consensus.ratio >= 0.55 ? 'live-brush-support-consensus' : (clampedTight.applied ? 'live-brush-support-tight-consensus-edge' : 'live-brush-support-tight'));
+            const buildHistoricalCandidate = () => {
+                const candidates = consistentViews
+                .filter(view => view !== currentView)
+                .filter((view): view is BrushSupportFusionView & { obb: OBBResult } => !!view.obb)
+                .map((view) => {
+                    const aabb = aabbFromCorners(view.obb.corners);
+                    const supportCoverage = summarizeAabbPointCoverage(points, aabb, 0.025);
+                    const supportOverlap = aabbIou(aabb, supportBox);
+                    const reprojectionBb2d = projectedCornersBb2d(view.obb.corners, scene, frame.intrinsics);
+                    const reprojectionOverlap = reprojectionBb2d ?
+                        buildBb2dCoverageStats(local.bb2d, reprojectionBb2d) :
+                        null;
+                    const reprojectionOk = !!reprojectionOverlap && (
+                        reprojectionOverlap.iou >= 0.35 ||
+                        reprojectionOverlap.a_covered_by_b >= 0.72 ||
+                        reprojectionOverlap.b_covered_by_a >= 0.55
+                    );
+                    const supportOk = supportCoverage.inside_count >= 24 &&
+                        supportCoverage.coverage >= 0.35 &&
+                        supportOverlap >= 0.18;
+                    return {
+                        view,
+                        aabb,
+                        supportCoverage,
+                        supportOverlap,
+                        reprojectionBb2d,
+                        reprojectionOverlap,
+                        ok: supportOk && reprojectionOk,
+                        score: supportCoverage.coverage +
+                            supportOverlap * 0.55 +
+                            (reprojectionOverlap?.iou ?? 0) * 0.65 +
+                            (reprojectionOverlap?.a_covered_by_b ?? 0) * 0.15
+                    };
+                })
+                .filter(candidate => candidate.ok)
+                .sort((a, b) => b.score - a.score);
+                return candidates[0] ?? null;
+            };
+            if (!chosenAabb) {
+                return {
+                    applied: false,
+                    reason: 'no-live-fusion-box',
+                    view_count: component.length,
+                    consistent_view_count: consistentViews.length,
+                    consensus_overlap_ratio: consensus.ratio,
+                    support_box: supportBox,
+                    support_tight_aabb: tight,
+                    support_tight_consensus_edge_aabb: clampedTight.aabb,
+                    support_tight_consensus_edge: clampedTight.applied ? {
+                        axis: clampedTight.axis,
+                        side: clampedTight.side,
+                        amount: clampedTight.amount
+                    } : null,
+                    support_intersection_aabb: supportIntersection,
+                    compact_intersection_aabb: compactIntersection,
+                    selected_source: local.debug.selected_candidate_source,
+                    support_sample_source: supportSampleSource
+                };
+            }
+            const canPromote = !!sameViewCompactIntersection ||
+                !!sameViewBroadRaySupportHybrid ||
+                !!compactIntersection ||
+                (method === 'live-brush-support-consensus' && consistentViews.length >= 3 && consensus.ratio >= 0.75) ||
+                ((method === 'live-brush-support-tight' || method === 'live-brush-support-tight-consensus-edge') && consistentViews.length >= 6);
+            if (!canPromote) {
+                const historical = viewAngles.max_degrees >= LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES &&
+                    consistentViews.length >= LIVE_FUSION_READY_VIEW_GOAL ?
+                    buildHistoricalCandidate() :
+                    null;
+                if (historical) {
+                    return {
+                        applied: true,
+                        reason: 'live-brush-support-historical-validated',
+                        obb: {
+                            ...historical.view.obb,
+                            label: 'live-brush-support-historical-validated',
+                            source: 'live-brush-support-historical-validated',
+                            bb2d: local.bb2d,
+                            source_bb2d: local.bb2d
+                        },
+                        view_count: component.length,
+                        consistent_view_count: consistentViews.length,
+                        support_view_max_angle_degrees: viewAngles.max_degrees,
+                        support_view_avg_angle_degrees: viewAngles.avg_degrees,
+                        fusion_method: 'live-brush-support-historical-validated',
+                        consensus_overlap_ratio: consensus.ratio,
+                        support_box: supportBox,
+                        support_tight_aabb: tight,
+                        support_tight_consensus_edge_aabb: clampedTight.aabb,
+                        support_tight_consensus_edge: clampedTight.applied ? {
+                            axis: clampedTight.axis,
+                            side: clampedTight.side,
+                            amount: clampedTight.amount
+                        } : null,
+                        support_intersection_aabb: supportIntersection,
+                        compact_intersection_aabb: compactIntersection,
+                        current_support_inside_count: historical.supportCoverage.inside_count,
+                        current_support_count: historical.supportCoverage.total_count,
+                        current_support_coverage: historical.supportCoverage.coverage,
+                        reprojection_bb2d: historical.reprojectionBb2d,
+                        reprojection_overlap: historical.reprojectionOverlap,
+                        selected_source: local.debug.selected_candidate_source,
+                        support_sample_source: supportSampleSource,
+                        historical_source_view_id: historical.view.live_id
+                    };
+                }
+                return {
+                    applied: false,
+                    reason: 'live-fusion-evidence-not-promoted',
+                    view_count: component.length,
+                    consistent_view_count: consistentViews.length,
+                    support_view_max_angle_degrees: viewAngles.max_degrees,
+                    support_view_avg_angle_degrees: viewAngles.avg_degrees,
+                    fusion_method: method,
+                    consensus_overlap_ratio: consensus.ratio,
+                    support_box: supportBox,
+                    support_tight_aabb: tight,
+                    support_tight_consensus_edge_aabb: clampedTight.aabb,
+                    support_tight_consensus_edge: clampedTight.applied ? {
+                        axis: clampedTight.axis,
+                        side: clampedTight.side,
+                        amount: clampedTight.amount
+                    } : null,
+                    support_intersection_aabb: supportIntersection,
+                    compact_intersection_aabb: compactIntersection,
+                    selected_source: local.debug.selected_candidate_source,
+                    support_sample_source: supportSampleSource
+                };
+            }
+            if (!sameViewCompactIntersection && !sameViewBroadRaySupportHybrid && viewAngles.max_degrees < LIVE_FUSION_MIN_PROMOTION_ANGLE_DEGREES) {
+                return {
+                    applied: false,
+                    reason: 'live-fusion-needs-view-diversity',
+                    view_count: component.length,
+                    consistent_view_count: consistentViews.length,
+                    support_view_max_angle_degrees: viewAngles.max_degrees,
+                    support_view_avg_angle_degrees: viewAngles.avg_degrees,
+                    fusion_method: method,
+                    consensus_overlap_ratio: consensus.ratio,
+                    support_box: supportBox,
+                    support_tight_aabb: tight,
+                    support_tight_consensus_edge_aabb: clampedTight.aabb,
+                    support_tight_consensus_edge: clampedTight.applied ? {
+                        axis: clampedTight.axis,
+                        side: clampedTight.side,
+                        amount: clampedTight.amount
+                    } : null,
+                    support_intersection_aabb: supportIntersection,
+                    compact_intersection_aabb: compactIntersection,
+                    selected_source: local.debug.selected_candidate_source,
+                    support_sample_source: supportSampleSource
+                };
+            }
+
+            const currentSupportCoverage = summarizeAabbPointCoverage(points, chosenAabb, 0.025);
+            const minCurrentSupportCoverage = sameViewCompactIntersection || sameViewBroadRaySupportHybrid ? 0.55 : 0.03;
+            const currentSupportOk = currentSupportCoverage.inside_count >= 24 &&
+                currentSupportCoverage.coverage >= minCurrentSupportCoverage;
+            if (!currentSupportOk) {
+                return {
+                    applied: false,
+                    reason: 'live-fusion-current-support-rejected',
+                    view_count: component.length,
+                    consistent_view_count: consistentViews.length,
+                    support_view_max_angle_degrees: viewAngles.max_degrees,
+                    support_view_avg_angle_degrees: viewAngles.avg_degrees,
+                    fusion_method: method,
+                    consensus_overlap_ratio: consensus.ratio,
+                    support_box: supportBox,
+                    support_tight_aabb: tight,
+                    support_tight_consensus_edge_aabb: clampedTight.aabb,
+                    support_tight_consensus_edge: clampedTight.applied ? {
+                        axis: clampedTight.axis,
+                        side: clampedTight.side,
+                        amount: clampedTight.amount
+                    } : null,
+                    support_intersection_aabb: supportIntersection,
+                    compact_intersection_aabb: compactIntersection,
+                    current_support_inside_count: currentSupportCoverage.inside_count,
+                    current_support_count: currentSupportCoverage.total_count,
+                    current_support_coverage: currentSupportCoverage.coverage,
+                    selected_source: local.debug.selected_candidate_source,
+                    support_sample_source: supportSampleSource
+                };
+            }
+
+            const obb = buildAxisAlignedObbFromAabbWithSource(chosenAabb, method, method, local.bb2d);
+            const reprojectionBb2d = projectedCornersBb2d(obb.corners, scene, frame.intrinsics);
+            const reprojectionOverlap = reprojectionBb2d ?
+                buildBb2dCoverageStats(local.bb2d, reprojectionBb2d) :
+                null;
+            const reprojectionOk = !!reprojectionOverlap && (
+                sameViewCompactIntersection || sameViewBroadRaySupportHybrid ?
+                    (
+                        reprojectionOverlap.iou >= 0.45 ||
+                        reprojectionOverlap.a_covered_by_b >= 0.82 ||
+                        reprojectionOverlap.b_covered_by_a >= 0.72
+                    ) :
+                    (
+                        reprojectionOverlap.iou >= 0.18 ||
+                        reprojectionOverlap.a_covered_by_b >= 0.55 ||
+                        reprojectionOverlap.b_covered_by_a >= 0.35
+                    )
+            );
+            if (!reprojectionOk) {
+                return {
+                    applied: false,
+                    reason: 'live-fusion-reprojection-rejected',
+                    view_count: component.length,
+                    consistent_view_count: consistentViews.length,
+                    support_view_max_angle_degrees: viewAngles.max_degrees,
+                    support_view_avg_angle_degrees: viewAngles.avg_degrees,
+                    fusion_method: method,
+                    consensus_overlap_ratio: consensus.ratio,
+                    support_box: supportBox,
+                    support_tight_aabb: tight,
+                    support_tight_consensus_edge_aabb: clampedTight.aabb,
+                    support_tight_consensus_edge: clampedTight.applied ? {
+                        axis: clampedTight.axis,
+                        side: clampedTight.side,
+                        amount: clampedTight.amount
+                    } : null,
+                    support_intersection_aabb: supportIntersection,
+                    compact_intersection_aabb: compactIntersection,
+                    current_support_inside_count: currentSupportCoverage.inside_count,
+                    current_support_count: currentSupportCoverage.total_count,
+                    current_support_coverage: currentSupportCoverage.coverage,
+                    reprojection_bb2d: reprojectionBb2d,
+                    reprojection_overlap: reprojectionOverlap,
+                    selected_source: local.debug.selected_candidate_source,
+                    support_sample_source: supportSampleSource
+                };
+            }
+            return {
+                applied: true,
+                reason: 'live-brush-support-fusion',
+                obb,
+                view_count: component.length,
+                consistent_view_count: consistentViews.length,
+                support_view_max_angle_degrees: viewAngles.max_degrees,
+                support_view_avg_angle_degrees: viewAngles.avg_degrees,
+                fusion_method: method,
+                consensus_overlap_ratio: consensus.ratio,
+                support_box: supportBox,
+                support_tight_aabb: tight,
+                support_tight_consensus_edge_aabb: clampedTight.aabb,
+                support_tight_consensus_edge: clampedTight.applied ? {
+                    axis: clampedTight.axis,
+                    side: clampedTight.side,
+                    amount: clampedTight.amount
+                } : null,
+                support_intersection_aabb: supportIntersection,
+                compact_intersection_aabb: compactIntersection,
+                current_support_inside_count: currentSupportCoverage.inside_count,
+                current_support_count: currentSupportCoverage.total_count,
+                current_support_coverage: currentSupportCoverage.coverage,
+                reprojection_bb2d: reprojectionBb2d,
+                reprojection_overlap: reprojectionOverlap,
+                selected_source: local.debug.selected_candidate_source,
+                support_sample_source: supportSampleSource
+            };
+        };
+
         const executeEvalFusion = async (
             evalCases: BoxerFusionEvalCase[],
             options: BoxerFusionOptions = {}
@@ -6171,6 +8875,7 @@ class BoxerSelection {
                 const frontCounts = new Map<number, number>();
                 const pointByIndex = new Map<number, [number, number, number]>();
                 const viewStats = [];
+                const brushSupportViews: BrushSupportFusionView[] = [];
 
                 for (const [viewIndex, evalCase] of group.cases.entries()) {
                     applyCameraState(scene, evalCase.camera);
@@ -6193,6 +8898,9 @@ class BoxerSelection {
                         if (!sanitized) {
                             viewStats.push({
                                 view_index: viewIndex,
+                                fixture_index: evalCase.fixture_index,
+                                captured_at: evalCase.captured_at,
+                                prompt_type: evalCase.prompt?.type,
                                 id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
                                 preview_image: viewImage,
                                 rejected: 'target-not-visible'
@@ -6212,6 +8920,9 @@ class BoxerSelection {
                         if (!clickSource) {
                             viewStats.push({
                                 view_index: viewIndex,
+                                fixture_index: evalCase.fixture_index,
+                                captured_at: evalCase.captured_at,
+                                prompt_type: evalCase.prompt?.type,
                                 id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
                                 rejected: 'missing-click'
                             });
@@ -6228,6 +8939,9 @@ class BoxerSelection {
                         if (clickDepth <= 0) {
                             viewStats.push({
                                 view_index: viewIndex,
+                                fixture_index: evalCase.fixture_index,
+                                captured_at: evalCase.captured_at,
+                                prompt_type: evalCase.prompt?.type,
                                 id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
                                 preview_image: viewImage,
                                 rejected: 'missing-click-depth',
@@ -6263,6 +8977,9 @@ class BoxerSelection {
                         if (!sanitized || selected.length < 24) {
                             viewStats.push({
                                 view_index: viewIndex,
+                                fixture_index: evalCase.fixture_index,
+                                captured_at: evalCase.captured_at,
+                                prompt_type: evalCase.prompt?.type,
                                 id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
                                 preview_image: viewImage,
                                 rejected: 'too-few-click-candidates',
@@ -6281,6 +8998,129 @@ class BoxerSelection {
                             (expandBb2d(sanitized, padScale, frame.image_width, frame.image_height) ?? sanitized);
                         projected = selected.filter(candidate => bbContainsPoint(padded!, candidate.pixel[0], candidate.pixel[1]));
                         frontSurface = filterFrontSurfaceProjectedCandidates(projected, frame.image_width, frame.image_height);
+                    } else if (source === 'brush_support') {
+                        const prompt = evalCase.prompt;
+                        const brush = prompt && 'brush' in prompt ? prompt.brush : undefined;
+                        if (!brush?.points?.length) {
+                            viewStats.push({
+                                view_index: viewIndex,
+                                fixture_index: evalCase.fixture_index,
+                                captured_at: evalCase.captured_at,
+                                prompt_type: evalCase.prompt?.type,
+                                id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
+                                rejected: 'missing-brush-points'
+                            });
+                            continue;
+                        }
+
+                        const { frame } = await buildBoxerFramePayload(events, scene, splat, canvas, {
+                            includeImage: !!options.capture_view_images,
+                            includeEncodedDepth: false,
+                            skipDepth: true
+                        });
+                        viewImage = options.capture_view_images ? frame.image : undefined;
+                        const sourceWidth = evalCase.frame?.image_width ?? frame.image_width;
+                        const sourceHeight = evalCase.frame?.image_height ?? frame.image_height;
+                        const scaleX = frame.image_width / Math.max(1, sourceWidth);
+                        const scaleY = frame.image_height / Math.max(1, sourceHeight);
+                        const scaledBrush: BoxerBrushPrompt = {
+                            ...brush,
+                            ...(brush.center_xy ? {
+                                center_xy: [
+                                    brush.center_xy[0] * scaleX,
+                                    brush.center_xy[1] * scaleY
+                                ] as [number, number]
+                            } : {}),
+                            ...(brush.radius !== undefined ? { radius: brush.radius * Math.max(scaleX, scaleY) } : {}),
+                            ...(brush.width !== undefined ? { width: brush.width * scaleX } : {}),
+                            ...(brush.height !== undefined ? { height: brush.height * scaleY } : {}),
+                            ...(brush.bb2d ? {
+                                bb2d: [
+                                    brush.bb2d[0] * scaleX,
+                                    brush.bb2d[1] * scaleY,
+                                    brush.bb2d[2] * scaleX,
+                                    brush.bb2d[3] * scaleY
+                                ] as NormalizedBb2d
+                            } : {}),
+                            points: brush.points.map(point => [
+                                point[0] * scaleX,
+                                point[1] * scaleY
+                            ] as [number, number]),
+                            ...(brush.pad !== undefined ? { pad: brush.pad * Math.max(scaleX, scaleY) } : {})
+                        };
+                        const clickSource = prompt && 'click_xy' in prompt ? prompt.click_xy : undefined;
+                        const scaledClick = clickSource ? [
+                            clickSource[0] * scaleX,
+                            clickSource[1] * scaleY
+                        ] as [number, number] : undefined;
+                        const region = resolveClientBrushRegion(frame, scaledBrush, scaledClick);
+                        sanitized = region.bb2d;
+                        const targetBb2d = projectedTargetBb2d(group.target, scene, frame.intrinsics);
+                        const targetBrushMetrics = targetBb2d ?
+                            buildBb2dTargetMetrics(region.bb2d, targetBb2d) :
+                            null;
+                        const targetViewScorable = !!targetBrushMetrics &&
+                            targetBrushMetrics.target_covered_by_bb2d >= 0.65;
+                        const baseProjected = collectProjectedSplatCandidates(splat, scene, frame.intrinsics, region.bb2d);
+                        const surfaceEvidence = collectBrushSurfaceEvidence(frame, scene, region, scaledBrush, baseProjected);
+                        if (!surfaceEvidence || surfaceEvidence.support.length < 24) {
+                            viewStats.push({
+                                view_index: viewIndex,
+                                fixture_index: evalCase.fixture_index,
+                                captured_at: evalCase.captured_at,
+                                prompt_type: evalCase.prompt?.type,
+                                id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
+                                preview_image: viewImage,
+                                rejected: 'too-few-brush-support',
+                                bb2d: sanitized,
+                                target_projected_bb2d: targetBb2d,
+                                target_brush_metrics: targetBrushMetrics,
+                                target_view_scorable: targetViewScorable,
+                                target_view_scorable_reason: targetBb2d ? 'prompt_target_coverage_low' : 'target_not_projected',
+                                support_count: surfaceEvidence?.support.length ?? 0,
+                                anchor_count: surfaceEvidence?.anchors.length ?? 0,
+                                anchor_hit_ratio: surfaceEvidence?.anchor_hit_ratio ?? 0
+                            });
+                            continue;
+                        }
+                        const supportStep = Math.max(1, Math.ceil(surfaceEvidence.support.length / 4000));
+                        const points: [number, number, number][] = [];
+                        for (let i = 0; i < surfaceEvidence.support.length; i += supportStep) {
+                            points.push([...surfaceEvidence.support[i].point] as [number, number, number]);
+                        }
+                        const supportBox = quantileAabbFromPoints(points, 0.015, 0.985, 1.02);
+                        const e = frame.extrinsics;
+                        const includeInSupportFusion = !options.scorable_support_only || targetViewScorable;
+                        if (includeInSupportFusion) {
+                            brushSupportViews.push({
+                                points,
+                                supportBox,
+                                forward: [e[8], e[9], e[10]]
+                            });
+                        }
+                        viewStats.push({
+                            view_index: viewIndex,
+                            fixture_index: evalCase.fixture_index,
+                            captured_at: evalCase.captured_at,
+                            prompt_type: evalCase.prompt?.type,
+                            id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
+                            preview_image: viewImage,
+                            bb2d: sanitized,
+                            target_projected_bb2d: targetBb2d,
+                            target_brush_metrics: targetBrushMetrics,
+                            target_view_scorable: targetViewScorable,
+                            target_view_scorable_reason: targetViewScorable ?
+                                'ok' :
+                                (targetBb2d ? 'prompt_target_coverage_low' : 'target_not_projected'),
+                            support_count: surfaceEvidence.support.length,
+                            core_support_count: surfaceEvidence.core_support.length,
+                            anchor_count: surfaceEvidence.anchors.length,
+                            anchor_hit_ratio: surfaceEvidence.anchor_hit_ratio,
+                            support_box: supportBox,
+                            fusion_support_included: includeInSupportFusion,
+                            candidate_source: 'brush_support'
+                        });
+                        continue;
                     } else {
                         throw new Error(`Unsupported fusion source: ${source}`);
                     }
@@ -6295,6 +9135,9 @@ class BoxerSelection {
 
                     viewStats.push({
                         view_index: viewIndex,
+                        fixture_index: evalCase.fixture_index,
+                        captured_at: evalCase.captured_at,
+                        prompt_type: evalCase.prompt?.type,
                         id: evalCase.id ?? evalCase.captured_at ?? `view-${viewIndex}`,
                         preview_image: viewImage,
                         bb2d: sanitized,
@@ -6304,6 +9147,90 @@ class BoxerSelection {
                         candidate_count: projected.length,
                         candidate_source: candidateSource
                     });
+                }
+
+                if (source === 'brush_support') {
+                    const validViews = brushSupportViews.length;
+                    const consistentViews = filterConsistentBrushSupportViews(brushSupportViews);
+                    const scorableViews = viewStats.filter(stat => (
+                        !('rejected' in stat) &&
+                        (stat as { target_view_scorable?: boolean }).target_view_scorable
+                    )).length;
+                    if (consistentViews.length < 2) {
+                        groupResults.push({
+                            key,
+                            target: group.target,
+                            valid_views: validViews,
+                            consistent_views: consistentViews.length,
+                            scorable_views: scorableViews,
+                            group_scorable: scorableViews >= 2,
+                            min_views: 2,
+                            selected_point_count: 0,
+                            view_stats: viewStats,
+                            error: validViews < 2 ? 'too-few-brush-support-views' : 'incoherent-brush-support-views'
+                        });
+                        continue;
+                    }
+                    const consensus = buildBrushSupportConsensusAabb(consistentViews);
+                    const tight = buildBrushSupportTightAabb(consistentViews);
+                    const clampedTight = clampTightAabbWithConsensusEdge(tight, consensus.aabb, consensus.ratio);
+                    const supportIntersection = intersectAabbs(consistentViews
+                    .map(view => view.supportBox)
+                    .filter((box): box is Aabb => !!box));
+                    const compactIntersection = supportIntersection &&
+                        consistentViews.length <= 4 &&
+                        !!consensus.aabb &&
+                        consensus.ratio >= 0.75 ?
+                        scaleAabbAxes(supportIntersection, [1.06, 0.98, 1.065]) :
+                        null;
+                    const chosenAabb = compactIntersection ??
+                        (consensus.aabb && consensus.ratio >= 0.55 ? consensus.aabb : clampedTight.aabb);
+                    const method = compactIntersection ?
+                        'brush-support-compact-intersection' :
+                        (consensus.aabb && consensus.ratio >= 0.55 ? 'brush-support-consensus' : (clampedTight.applied ? 'brush-support-tight-consensus-edge' : 'brush-support-tight'));
+                    if (!chosenAabb) {
+                        groupResults.push({
+                            key,
+                            target: group.target,
+                            valid_views: validViews,
+                            consistent_views: consistentViews.length,
+                            scorable_views: scorableViews,
+                            group_scorable: scorableViews >= 2,
+                            min_views: 2,
+                            selected_point_count: 0,
+                            view_stats: viewStats,
+                            consensus_overlap_ratio: consensus.ratio,
+                            error: 'no-brush-support-fusion-box'
+                        });
+                        continue;
+                    }
+                    const obb = buildAxisAlignedObbFromAabbWithSource(chosenAabb, method, method);
+                    groupResults.push({
+                        key,
+                        target: group.target,
+                        valid_views: validViews,
+                        consistent_views: consistentViews.length,
+                        scorable_views: scorableViews,
+                        group_scorable: scorableViews >= 2,
+                        min_views: 2,
+                        selected_point_count: consistentViews.reduce((sum, view) => sum + view.points.length, 0),
+                        view_stats: viewStats,
+                        consensus_overlap_ratio: consensus.ratio,
+                        fusion_method: method,
+                        consensus_aabb: consensus.aabb,
+                        support_tight_aabb: tight,
+                        support_tight_consensus_edge_aabb: clampedTight.aabb,
+                        support_tight_consensus_edge: clampedTight.applied ? {
+                            axis: clampedTight.axis,
+                            side: clampedTight.side,
+                            amount: clampedTight.amount
+                        } : null,
+                        support_intersection_aabb: supportIntersection,
+                        compact_intersection_aabb: compactIntersection,
+                        boxer_result: obb,
+                        metrics: buildEvalMetrics(obb, group.target)
+                    });
+                    continue;
                 }
 
                 const validViews = viewStats.filter(stat => !('rejected' in stat)).length;
@@ -6445,37 +9372,40 @@ class BoxerSelection {
         };
 
         const saveEvalCaseLocally = async (evalCase: Record<string, unknown>) => {
-            const url = getLocalEvalSaveUrl();
-            if (!url) {
-                return { ok: false, error: 'Local eval save proxy is not configured' };
-            }
+            // prefer the always-on eval-save-server; the sam3 dev proxy path
+            // only exists when SAM3_BACKEND_URL points at localhost
+            const urls = [
+                getLocalEvalSaveUrl(),
+                'http://127.0.0.1:48013/append'
+            ].filter((url, index, all): url is string => !!url && all.indexOf(url) === index);
 
             const compactEvalCase = compactEvalCaseForLocalSave(evalCase);
-            const controller = new AbortController();
-            const timeout = window.setTimeout(() => controller.abort(), LOCAL_EVAL_SAVE_TIMEOUT_MS);
-            try {
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ eval_case: compactEvalCase }),
-                    signal: controller.signal
-                });
-                const body = await response.json().catch((): null => null);
-                if (!response.ok) {
-                    return {
-                        ok: false,
-                        error: body?.error ?? `Local eval save failed with ${response.status}`
-                    };
+            let lastError = 'No local eval save URL configured';
+            for (const url of urls) {
+                const controller = new AbortController();
+                const timeout = window.setTimeout(() => controller.abort(), LOCAL_EVAL_SAVE_TIMEOUT_MS);
+                try {
+                    const response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ eval_case: compactEvalCase }),
+                        signal: controller.signal
+                    });
+                    const body = await response.json().catch((): null => null);
+                    if (response.ok && body?.ok !== false) {
+                        return body ?? { ok: true };
+                    }
+                    lastError = body?.error ?? `Local eval save failed with ${response.status} at ${url}`;
+                } catch (err) {
+                    lastError = err instanceof Error ? `${url}: ${err.message}` : `Local eval save failed at ${url}`;
+                } finally {
+                    window.clearTimeout(timeout);
                 }
-                return body ?? { ok: true };
-            } catch (err) {
-                return {
-                    ok: false,
-                    error: err instanceof Error ? err.message : 'Local eval save failed'
-                };
-            } finally {
-                window.clearTimeout(timeout);
             }
+            return {
+                ok: false,
+                error: lastError
+            };
         };
 
         const copyEvalCase = async (input?: BoxerCopyEvalCaseInput) => {
@@ -6494,6 +9424,49 @@ class BoxerSelection {
             const loadUrls = new URLSearchParams(window.location.search).getAll('load');
             const copyCamera = events.invoke('camera.debugState') as CameraDebugState;
             const cameraChanged = cameraChangedSinceRun(lastEvalCamera, copyCamera);
+            const resultTargetProjectedBb2d = (result as { target_projected_bb2d?: NormalizedBb2d | null }).target_projected_bb2d ?? null;
+            const resultBb2dTargetMetrics = (result as { bb2d_target_metrics?: ReturnType<typeof buildBb2dTargetMetrics> }).bb2d_target_metrics ?? null;
+            const promptBrush = 'brush' in lastEvalPrompt ? lastEvalPrompt.brush : undefined;
+            const promptBb2d = promptBrush?.bb2d ??
+                ('bb2d' in result && Array.isArray(result.bb2d) ? result.bb2d as NormalizedBb2d : null);
+            const promptTargetMetrics = buildBb2dTargetMetrics(promptBb2d, resultTargetProjectedBb2d);
+            const qualityWarnings: string[] = [];
+            if (cameraChanged) qualityWarnings.push('camera-changed-after-run');
+            if (target) {
+                if (!resultTargetProjectedBb2d) {
+                    qualityWarnings.push('target-not-visible-from-captured-camera');
+                } else if (promptTargetMetrics && promptTargetMetrics.target_covered_by_bb2d < 0.65) {
+                    qualityWarnings.push('prompt-target-2d-coverage-low');
+                }
+                if (resultBb2dTargetMetrics && resultBb2dTargetMetrics.bb2d_iou < 0.2) {
+                    qualityWarnings.push('result-target-2d-overlap-low');
+                }
+            }
+            const scorableReason = !target ?
+                'no-target' :
+                (!resultTargetProjectedBb2d ?
+                    'target_not_projected' :
+                    (promptTargetMetrics && promptTargetMetrics.target_covered_by_bb2d < 0.65 ?
+                        'prompt_target_coverage_low' :
+                        'ok'));
+            const scorable = !target || scorableReason === 'ok';
+            const blockingQualityWarnings = targetReused ?
+                qualityWarnings.filter(warning => (
+                    warning === 'target-not-visible-from-captured-camera' ||
+                    warning === 'prompt-target-2d-coverage-low'
+                )) :
+                [];
+            const evalQualityGate = {
+                status: blockingQualityWarnings.length ? 'failed' : (qualityWarnings.length ? 'warning' : 'passed'),
+                warnings: qualityWarnings,
+                blocking_warnings: blockingQualityWarnings,
+                scorable,
+                scorable_reason: scorableReason,
+                target_reused: targetReused,
+                target_projected_bb2d: resultTargetProjectedBb2d,
+                prompt_target_metrics: promptTargetMetrics,
+                result_target_metrics: resultBb2dTargetMetrics
+            };
             const evalCase = {
                 schema: 'boxer-eval-case/v1',
                 captured_at: new Date().toISOString(),
@@ -6532,13 +9505,19 @@ class BoxerSelection {
                 target: target ? cloneEvalTarget(target) : null,
                 target_label: resolvedLabel,
                 target_reused: targetReused,
+                eval_quality_gate: evalQualityGate,
                 raw_metrics: result.raw_boxer_result ? buildEvalMetrics(result.raw_boxer_result, target) : null,
                 metrics: buildEvalMetrics(result, target)
             };
             console.log('[Boxer] eval case', evalCase);
+            if (evalQualityGate.status !== 'passed') {
+                console.warn('[Boxer] eval quality gate warning', evalQualityGate);
+            }
             const shouldSaveLocal = !isBoxerEvalTarget(input) && input?.save_local === true;
             const shouldCopyClipboard = isBoxerEvalTarget(input) || input?.copy_clipboard !== false;
-            const localSave = shouldSaveLocal ? await saveEvalCaseLocally(evalCase) : null;
+            const localSave = shouldSaveLocal && evalQualityGate.status !== 'failed' ?
+                await saveEvalCaseLocally(evalCase) :
+                (shouldSaveLocal ? { ok: false, error: `eval quality gate failed: ${blockingQualityWarnings.map(formatEvalQualityWarning).join(', ')}` } : null);
             const shouldCopyFallback = shouldSaveLocal && localSave?.ok !== true;
             if (shouldCopyClipboard || shouldCopyFallback) {
                 const clipboardCase = shouldSaveLocal ? compactEvalCaseForLocalSave(evalCase) : evalCase;
@@ -6548,13 +9527,32 @@ class BoxerSelection {
             if (cameraChanged) {
                 events.fire('toast', 'Camera changed after Boxer; rerun Boxer for this angle', 'warning');
             } else if (shouldSaveLocal && localSave?.ok === true) {
-                events.fire('toast', `Brush eval saved to ${localSave.file ?? 'local file'}`, 'info');
+                if (evalQualityGate.status === 'passed') {
+                    events.fire('toast', `Brush eval saved to ${localSave.file ?? 'local file'}`, 'info');
+                } else {
+                    const warningText = evalQualityGate.warnings.map(formatEvalQualityWarning).join(', ');
+                    events.fire('toast', `Brush eval saved with warning: ${warningText}`, 'warning');
+                }
             } else if (shouldSaveLocal) {
-                events.fire('toast', `Local save failed; eval copied instead (${localSave?.error ?? 'proxy unavailable'})`, 'warning');
+                if (evalQualityGate.status === 'failed') {
+                    events.fire('toast', `Eval not saved: ${blockingQualityWarnings.map(formatEvalQualityWarning).join(', ')}. Save a fresh 4-click target for this view.`, 'warning');
+                } else {
+                    events.fire('toast', `Local save failed; eval copied instead (${localSave?.error ?? 'proxy unavailable'})`, 'warning');
+                }
             } else if (targetReused) {
-                events.fire('toast', 'Boxer eval case copied with saved target', 'info');
+                if (evalQualityGate.status === 'passed') {
+                    events.fire('toast', 'Boxer eval case copied with saved target', 'info');
+                } else {
+                    const warningText = evalQualityGate.warnings.map(formatEvalQualityWarning).join(', ');
+                    events.fire('toast', `Boxer eval copied with warning: ${warningText}`, 'warning');
+                }
             } else {
-                events.fire('toast', target ? 'Boxer eval case copied and target saved' : 'Boxer eval case copied without target', 'info');
+                if (target && evalQualityGate.status !== 'passed') {
+                    const warningText = evalQualityGate.warnings.map(formatEvalQualityWarning).join(', ');
+                    events.fire('toast', `Boxer eval copied with warning: ${warningText}`, 'warning');
+                } else {
+                    events.fire('toast', target ? 'Boxer eval case copied and target saved' : 'Boxer eval case copied without target', 'info');
+                }
             }
             return evalCase;
         };
@@ -6575,6 +9573,40 @@ class BoxerSelection {
             events.function('boxer.getLastBrushPrompt', () => lastBrushPrompt);
         } catch (err) {
             console.warn('[Boxer] boxer.getLastBrushPrompt was already registered', err);
+        }
+
+        try {
+            events.function('boxer.getLiveBrushFusionViews', () => liveBrushSupportViews.map((view, index) => ({
+                index,
+                live_id: view.live_id,
+                created_at: view.created_at,
+                point_count: view.points.length,
+                support_count: view.support_count,
+                support_box: view.supportBox,
+                forward: view.forward,
+                selected_source: view.selected_source
+            })));
+        } catch (err) {
+            console.warn('[Boxer] boxer.getLiveBrushFusionViews was already registered', err);
+        }
+
+        try {
+            events.function('boxer.getLiveBrushFusionStatus', () => getLiveBrushFusionStatus());
+        } catch (err) {
+            console.warn('[Boxer] boxer.getLiveBrushFusionStatus was already registered', err);
+        }
+
+        try {
+            events.function('boxer.clearLiveBrushFusion', () => {
+                liveBrushSupportViews.length = 0;
+                lastLiveBrushFusionResult = null;
+                publishLiveBrushFusionStatus();
+                renderBrushPanel();
+                events.fire('toast', 'Cleared live brush fusion memory', 'info');
+                return true;
+            });
+        } catch (err) {
+            console.warn('[Boxer] boxer.clearLiveBrushFusion was already registered', err);
         }
 
         try {
@@ -6772,8 +9804,8 @@ class BoxerSelection {
                 };
             }
             currentCorners = buildWireframeCorners(obb);
-            scene.forceRender = true;
-            events.fire('select.byOBB', 'set', obb);
+            const selectionTruth = await applyBoxerObbSelection(obb);
+            (window as any).__lastBoxerResult.selection_truth = selectionTruth;
             const finalProjectedBb2d = projectResultTo2D(obb, frame);
             const overlayLayers: BoxerOverlayLayer[] = [];
             if (finalProjectedBb2d) {
@@ -6810,6 +9842,7 @@ class BoxerSelection {
                 image_height: frame.image_height,
                 depth_source: frame.depth_source,
                 bb2d,
+                selected_splat_count: selectionTruth.selected_after,
                 candidate_count: (obb.candidates?.length ?? 0) + (obb.detections?.length ?? 0),
                 proposal_count: obb.proposals?.length,
                 ray_sample_count: rayDebug?.samples.length,
@@ -6842,6 +9875,7 @@ class BoxerSelection {
                 frame?: { image_width?: number; image_height?: number };
                 prompt: BoxerEvalPrompt;
                 target?: BoxerEvalTarget | null;
+                live_brush_fusion?: boolean;
             }) => {
                 if (busy) {
                     throw new Error('Still processing previous Boxer request');
@@ -6851,13 +9885,18 @@ class BoxerSelection {
                     evalCase.prompt?.type !== 'click_sam' &&
                     evalCase.prompt?.type !== 'client_click' &&
                     evalCase.prompt?.type !== 'client_brush' &&
+                    evalCase.prompt?.type !== 'client_brush_floor_snap' &&
+                    evalCase.prompt?.type !== 'brush_sam' &&
+                    evalCase.prompt?.type !== 'brush_sam_clean' &&
+                    evalCase.prompt?.type !== 'brush_boxer' &&
+                    evalCase.prompt?.type !== 'brush_fused' &&
                     evalCase.prompt?.type !== 'detect_all_click' &&
                     evalCase.prompt?.type !== 'direct_lift_click' &&
                     evalCase.prompt?.type !== 'lift_target_box' &&
                     evalCase.prompt?.type !== 'client_lift_target_box' &&
                     evalCase.prompt?.type !== 'lift_box'
                 ) {
-                    throw new Error('Only click, click_sam, client_click, client_brush, detect_all_click, direct_lift_click, lift_target_box, client_lift_target_box, and lift_box eval cases can be replayed right now');
+                    throw new Error('Only click, click_sam, client_click, client_brush, client_brush_floor_snap, brush_sam, brush_sam_clean, detect_all_click, direct_lift_click, lift_target_box, client_lift_target_box, and lift_box eval cases can be replayed right now');
                 }
 
                 busy = true;
@@ -6912,7 +9951,57 @@ class BoxerSelection {
                         replay = await executeClientBrush(
                             scaleBrush(brushPrompt.brush),
                             click ? [click.x, click.y] : undefined,
-                            evalCase.target ?? null
+                            evalCase.target ?? null,
+                            { liveFusion: evalCase.live_brush_fusion === true }
+                        );
+                    } else if (evalCase.prompt.type === 'client_brush_floor_snap') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'client_brush_floor_snap' }>;
+                        replay = await executeClientBrush(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            { floorSnap: true, liveFusion: false }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_sam') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_sam' }>;
+                        replay = await executeClientBrush(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            { useSam: true, liveFusion: false }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_sam_clean') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_sam_clean' }>;
+                        replay = await executeClientBrush(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            { samClean: true, liveFusion: false }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_fused') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_fused' }>;
+                        replay = await executeBrushFused(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            {
+                                boxernet_world_scale: brushPrompt.boxernet_world_scale,
+                                fuse_mode: brushPrompt.fuse_mode
+                            }
+                        );
+                    } else if (evalCase.prompt.type === 'brush_boxer') {
+                        const brushPrompt = evalCase.prompt as Extract<BoxerEvalPrompt, { type: 'brush_boxer' }>;
+                        replay = await executeBrushBoxer(
+                            scaleBrush(brushPrompt.brush),
+                            click ? [click.x, click.y] : undefined,
+                            evalCase.target ?? null,
+                            {
+                                boxernet_world_scale: brushPrompt.boxernet_world_scale,
+                                boxernet_world_scales: brushPrompt.boxernet_world_scales,
+                                refinement_mode: brushPrompt.refinement_mode,
+                                preprocess_mode: brushPrompt.preprocess_mode,
+                                object_crop: brushPrompt.object_crop
+                            }
                         );
                     } else if (evalCase.prompt.type === 'detect_all_click' && click) {
                         const detectAll = await executeDetectAll({ x: click.x, y: click.y, target: evalCase.target ?? null });
@@ -7075,6 +10164,84 @@ class BoxerSelection {
             console.warn('[Boxer] boxer.runEvalCase was already registered', err);
         }
 
+        try {
+            // Non-destructive preview for the eval case editor: apply the case
+            // camera, then overlay the recorded stroke/click, the projected
+            // target box, and the target wireframe in 3D. Runs no geometry.
+            events.function('boxer.previewEvalCase', async (evalCase: {
+                camera: CameraDebugState;
+                frame?: { image_width?: number; image_height?: number };
+                prompt?: BoxerEvalPrompt;
+                target?: BoxerEvalTarget | null;
+            }) => {
+                applyCameraState(scene, evalCase.camera);
+                await waitForNextRender(scene);
+
+                const sourceWidth = evalCase.frame?.image_width ?? canvas.clientWidth;
+                const sourceHeight = evalCase.frame?.image_height ?? canvas.clientHeight;
+                const scaleX = canvas.clientWidth / Math.max(1, sourceWidth);
+                const scaleY = canvas.clientHeight / Math.max(1, sourceHeight);
+                const intrinsics = extractIntrinsics(scene.camera.camera, canvas.clientWidth, canvas.clientHeight);
+                const layers: BoxerOverlayLayer[] = [];
+
+                const target = evalCase.target ?? null;
+                const targetBb = projectedTargetBb2d(target, scene, intrinsics);
+                if (targetBb) {
+                    layers.push({ bb2d: targetBb, label: 'target', color: '#3dff7b', width: 2 });
+                }
+
+                const prompt = evalCase.prompt;
+                const brush = prompt && 'brush' in prompt ? prompt.brush : undefined;
+                if (brush?.bb2d) {
+                    layers.push({
+                        bb2d: [
+                            brush.bb2d[0] * scaleX,
+                            brush.bb2d[1] * scaleY,
+                            brush.bb2d[2] * scaleX,
+                            brush.bb2d[3] * scaleY
+                        ],
+                        label: 'brush bb',
+                        color: '#00d2ff',
+                        dash: '5 5',
+                        width: 1
+                    });
+                }
+                if (brush?.points?.length) {
+                    layers.push({
+                        label: 'stroke',
+                        color: '#ff9f1a',
+                        width: Math.max(3, (brush.radius ?? 8) * 2 * scaleX),
+                        points: brush.points.map(point => [point[0] * scaleX, point[1] * scaleY] as [number, number])
+                    });
+                }
+                const click = prompt && 'click_xy' in prompt && prompt.click_xy ? prompt.click_xy : null;
+                if (click) {
+                    const cx = click[0] * scaleX;
+                    const cy = click[1] * scaleY;
+                    layers.push({
+                        bb2d: [cx - 6, cy - 6, cx + 6, cy + 6],
+                        label: 'click',
+                        color: '#ff4fd8',
+                        width: 2
+                    });
+                }
+
+                show2DBoxLayers(layers);
+                currentCorners = target ?
+                    buildWireframeCorners({ center: target.center, dimensions: target.dimensions, rotation: target.rotation } as OBBResult) :
+                    null;
+                scene.forceRender = true;
+
+                return {
+                    target_projected_bb2d: targetBb,
+                    has_stroke: !!brush?.points?.length,
+                    has_click: !!click
+                };
+            });
+        } catch (err) {
+            console.warn('[Boxer] boxer.previewEvalCase was already registered', err);
+        }
+
         scene.app.on('update', () => {
             if (!currentCorners) return;
 
@@ -7206,8 +10373,8 @@ class BoxerSelection {
                 );
 
                 currentCorners = buildWireframeCorners(obb);
-                scene.forceRender = true;
-                events.fire('select.byOBB', 'set', obb);
+                const selectionTruth = await applyBoxerObbSelection(obb);
+                (window as any).__lastBoxerResult.selection_truth = selectionTruth;
             } catch (err) {
                 console.error('[Boxer] Text request failed:', err);
                 events.fire('toast', 'Boxer text request failed', 'error');

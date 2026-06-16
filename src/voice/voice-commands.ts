@@ -7,12 +7,12 @@ import { Pivot } from '../pivot';
 const DETERMINISTIC_COMMANDS: Array<{ patterns: RegExp[]; action: (events: Events) => void; label: string }> = [
     {
         patterns: [/\bundo\b/i],
-        action: (events) => events.fire('edit.undo'),
+        action: events => events.fire('edit.undo'),
         label: 'undo'
     },
     {
         patterns: [/\bredo\b/i],
-        action: (events) => events.fire('edit.redo'),
+        action: events => events.fire('edit.redo'),
         label: 'redo'
     },
     {
@@ -25,37 +25,37 @@ const DETERMINISTIC_COMMANDS: Array<{ patterns: RegExp[]; action: (events: Event
     },
     {
         patterns: [/\bselect all\b/i],
-        action: (events) => events.fire('select.all'),
+        action: events => events.fire('select.all'),
         label: 'select all'
     },
     {
         patterns: [/\b(delete|remove)\b/i],
-        action: (events) => events.fire('select.delete'),
+        action: events => events.fire('select.delete'),
         label: 'delete'
     },
     {
-        patterns: [/\binvert\b.*\bselect/i, /\bselect\b.*\binvert/i],
-        action: (events) => events.fire('select.invert'),
+        patterns: [/\binvert\b.+\bselect/i, /\bselect\b.+\binvert/i],
+        action: events => events.fire('select.invert'),
         label: 'invert selection'
     },
     {
         patterns: [/\b(use |switch to |activate )?boxer\b/i],
-        action: (events) => events.fire('tool.boxerSelection'),
+        action: events => events.fire('tool.boxerSelection'),
         label: 'boxer tool'
     },
     {
         patterns: [/\b(use |switch to |activate )?sam\b/i],
-        action: (events) => events.fire('tool.sam3Selection'),
+        action: events => events.fire('tool.sam3Selection'),
         label: 'sam3 tool'
     },
     {
-        patterns: [/\b(use |switch to |activate )?rect(angle)?\b.*\bselect/i],
-        action: (events) => events.fire('tool.rectSelection'),
+        patterns: [/\b(use |switch to |activate )?rect(angle)?\b.+\bselect/i],
+        action: events => events.fire('tool.rectSelection'),
         label: 'rect selection'
     },
     {
         patterns: [/\b(use |switch to |activate )?brush\b/i],
-        action: (events) => events.fire('tool.brushSelection'),
+        action: events => events.fire('tool.brushSelection'),
         label: 'brush tool'
     }
 ];
@@ -375,9 +375,9 @@ Rules:
 
             case 'replace_asset':
                 this.events.fire('assetBrowser.replaceSelected', args.query);
-                return args.query
-                    ? `Replacing with "${args.query}"`
-                    : 'Swapping to a different variant';
+                return args.query ?
+                    `Replacing with "${args.query}"` :
+                    'Swapping to a different variant';
 
             case 'editor_action': {
                 const eventName = ACTION_MAP[args.action];
@@ -402,18 +402,19 @@ Rules:
                 return;
             }
 
+            const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
+            const onPlaced = () => {
+                if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                this.events.off('pivot.placed', onPlaced);
+                resolve();
+            };
+
             // Wait for pivot.placed event
-            const timeout = setTimeout(() => {
+            timeoutRef.current = setTimeout(() => {
                 this.events.off('pivot.placed', onPlaced);
                 console.log('[VoiceCommands] waitForPivot timed out, proceeding anyway');
                 resolve();
             }, 500);
-
-            const onPlaced = () => {
-                clearTimeout(timeout);
-                this.events.off('pivot.placed', onPlaced);
-                resolve();
-            };
 
             this.events.on('pivot.placed', onPlaced);
         });
@@ -443,9 +444,9 @@ Rules:
 
     private async executeSelectObject(description: string, useBoxer: boolean): Promise<string> {
         // Try preferred tool first, fall back to the other on failure
-        const tools = useBoxer
-            ? [{ event: 'tool.boxerSelection', name: 'Boxer' }, { event: 'tool.sam3Selection', name: 'SAM3' }]
-            : [{ event: 'tool.sam3Selection', name: 'SAM3' }, { event: 'tool.boxerSelection', name: 'Boxer' }];
+        const tools = useBoxer ?
+            [{ event: 'tool.boxerSelection', name: 'Boxer' }, { event: 'tool.sam3Selection', name: 'SAM3' }] :
+            [{ event: 'tool.sam3Selection', name: 'SAM3' }, { event: 'tool.boxerSelection', name: 'Boxer' }];
 
         for (const tool of tools) {
             const result = await this.trySelectWithTool(tool.event, tool.name, description);
@@ -463,45 +464,51 @@ Rules:
         this.events.fire(toolEvent);
 
         // Wait for tool to activate
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 200);
+        });
+
+        const events = this.events;
 
         // Listen for completion signals before firing the query
         const result = await new Promise<string>((resolve) => {
-            const timeout = setTimeout(() => {
-                cleanup();
-                resolve(`Selection failed: ${toolName} timed out after 30s`);
-            }, 30000);
+            const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
 
-            const cleanup = () => {
-                clearTimeout(timeout);
-                this.events.off('select.byOBB', onBoxerDone);
-                this.events.off('edit.add', onSamDone);
-                this.events.off('toast', onError);
-            };
+            function cleanup() {
+                if (timeoutRef.current) clearTimeout(timeoutRef.current);
+                events.off('select.byOBB', onBoxerDone);
+                events.off('edit.add', onSamDone);
+                events.off('toast', onError);
+            }
 
-            const onBoxerDone = () => {
+            function onBoxerDone() {
                 cleanup();
                 resolve(`Selected "${description}" via Boxer`);
-            };
+            }
 
-            const onSamDone = () => {
+            function onSamDone() {
                 cleanup();
                 resolve(`Selected "${description}" via SAM3`);
-            };
+            }
 
-            const onError = (msg: string, level: string) => {
+            function onError(msg: string, level: string) {
                 if (level === 'error' || level === 'warning') {
                     cleanup();
                     resolve(`Selection failed: ${msg}`);
                 }
-            };
+            }
 
-            this.events.on('select.byOBB', onBoxerDone);
-            this.events.on('edit.add', onSamDone);
-            this.events.on('toast', onError);
+            timeoutRef.current = setTimeout(() => {
+                cleanup();
+                resolve(`Selection failed: ${toolName} timed out after 30s`);
+            }, 30000);
+
+            events.on('select.byOBB', onBoxerDone);
+            events.on('edit.add', onSamDone);
+            events.on('toast', onError);
 
             // Fire the text query
-            this.events.fire('ai.textQuery', description);
+            events.fire('ai.textQuery', description);
         });
 
         console.log(`[VoiceCommands] ${result}`);

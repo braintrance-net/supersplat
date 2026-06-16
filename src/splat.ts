@@ -345,12 +345,17 @@ class Splat extends Element {
         const selectedClr = events.invoke('selectedClr');
         const unselectedClr = events.invoke('unselectedClr');
         const lockedClr = events.invoke('lockedClr');
+        const selectedSplatOverlay = selected && events.invoke('view.selectedSplatsOverlay');
+        const selectedAlpha = selectedSplatOverlay ?
+            Math.max(selectedClr.a * this.selectionAlpha, 0.85) :
+            selectedClr.a * this.selectionAlpha;
 
         if (!selected) {
             material.setParameter('selectedClr', [0, 0, 0, 0]);
         } else {
-            material.setParameter('selectedClr', [selectedClr.r, selectedClr.g, selectedClr.b, selectedClr.a * this.selectionAlpha]);
+            material.setParameter('selectedClr', [selectedClr.r, selectedClr.g, selectedClr.b, selectedAlpha]);
         }
+        material.setParameter('selectedSplatOverlay', selectedSplatOverlay ? 1 : 0);
         material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
         material.setParameter('lockedClr', [lockedClr.r, lockedClr.g, lockedClr.b, lockedClr.a]);
 
