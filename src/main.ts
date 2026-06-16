@@ -20,6 +20,7 @@ import { registerSemanticScanEvents } from './semantic-scan';
 import { ShortcutManager } from './shortcut-manager';
 import { registerTimelineEvents } from './timeline';
 import { BoxSelection } from './tools/box-selection';
+import { BoxVolumeTool } from './tools/box-volume-tool';
 import { BoxerSelection } from './tools/boxer-selection';
 import { BrushSelection } from './tools/brush-selection';
 import { EyedropperSelection } from './tools/eyedropper-selection';
@@ -102,6 +103,9 @@ declare global {
             getLastBrushBoxerPrompt: () => unknown;
             runLastBrushBoxer: (payload?: unknown) => Promise<unknown>;
             copyLastBrushBoxerEvalCase: (payload?: unknown) => Promise<unknown>;
+            getLiveBrushFusionViews: () => unknown;
+            getLiveBrushFusionStatus: () => unknown;
+            clearLiveBrushFusion: () => unknown;
             getBrushSelectionRadius: () => unknown;
             setBrushSelectionRadius: (value: number) => unknown;
             setBoxerEvalTarget: (payload?: unknown) => unknown;
@@ -306,6 +310,7 @@ const main = async () => {
     toolManager.register('lassoSelection', new LassoSelection(events, editorUI.toolsContainer.dom, mask));
     toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer));
     toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer));
+    toolManager.register('boxVolume', new BoxVolumeTool(events, scene, editorUI.canvasContainer));
     toolManager.register('boxerSelection', new BoxerSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('sam3Selection', new Sam3Selection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
@@ -402,6 +407,15 @@ const main = async () => {
         },
         copyLastBrushBoxerEvalCase: (payload?: unknown) => {
             return events.invoke('boxer.copyLastBrushEvalCase', payload);
+        },
+        getLiveBrushFusionViews: () => {
+            return events.invoke('boxer.getLiveBrushFusionViews');
+        },
+        getLiveBrushFusionStatus: () => {
+            return events.invoke('boxer.getLiveBrushFusionStatus');
+        },
+        clearLiveBrushFusion: () => {
+            return events.invoke('boxer.clearLiveBrushFusion');
         },
         getBrushSelectionRadius: () => {
             return events.invoke('brushSelection.getRadius');

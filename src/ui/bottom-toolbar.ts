@@ -6,6 +6,7 @@ import { localize } from './localization';
 import assetBrowserSvg from './svg/asset-browser.svg';
 import micSvg from './svg/microphone.svg';
 import redoSvg from './svg/redo.svg';
+import boxVolumeSvg from './svg/select-box-volume.svg';
 import boxerSvg from './svg/select-boxer.svg';
 import brushSvg from './svg/select-brush.svg';
 import eyedropperSvg from './svg/select-eyedropper.svg';
@@ -129,6 +130,11 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const boxVolume = new Button({
+            id: 'bottom-toolbar-box-volume',
+            class: 'bottom-toolbar-tool'
+        });
+
         const semanticScan = new Button({
             id: 'bottom-toolbar-semantic-scan',
             class: 'bottom-toolbar-tool'
@@ -178,6 +184,7 @@ class BottomToolbar extends Container {
         addVariantBadge(brushSamSelect, 'S');
         addVariantBadge(brushRawSelect, 'R');
         manualBox.dom.appendChild(createSvg(boxSvg));
+        boxVolume.dom.appendChild(createSvg(boxVolumeSvg));
         semanticScan.dom.appendChild(createSvg(semanticScanSvg));
         simplifiedAssetBrowser.dom.appendChild(createSvg(assetBrowserSvg));
 
@@ -189,6 +196,7 @@ class BottomToolbar extends Container {
         appendSimplified(brushRawSelect);
         appendSimplified(boxerAll);
         appendSimplified(manualBox);
+        appendSimplified(boxVolume);
         appendSimplified(samModeWrap);
         appendSimplified(semanticScan);
 
@@ -257,6 +265,7 @@ class BottomToolbar extends Container {
             }
         });
         manualBox.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
+        boxVolume.dom.addEventListener('click', () => events.fire('tool.boxVolume'));
         semanticScan.dom.addEventListener('click', () => events.fire('semanticScan.run'));
         simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
 
@@ -268,6 +277,7 @@ class BottomToolbar extends Container {
         tooltips.register(brushRawSelect, 'Brush Raw (no model — local geometry)');
         tooltips.register(boxerAll, 'Boxer Detect All');
         tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
+        tooltips.register(boxVolume, 'Box Volume (point → width → depth → height)');
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
@@ -429,6 +439,7 @@ class BottomToolbar extends Container {
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
             syncBrushVariantActive(toolName);
             manualBox.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
+            boxVolume.class[toolName === 'boxVolume' ? 'add' : 'remove']('active');
 
             picker.class[toolName === 'rectSelection' ? 'add' : 'remove']('active');
             brush.class[toolName === 'brushSelection' ? 'add' : 'remove']('active');

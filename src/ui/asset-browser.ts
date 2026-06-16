@@ -145,7 +145,7 @@ class AssetBrowser extends Container {
         const categories = document.createElement('div');
         categories.className = 'asset-browser-categories';
         const categoryList = ['Furniture', 'Architecture', 'Nature', 'Vehicles', 'Characters', 'Food'];
-        categoryList.forEach(cat => {
+        categoryList.forEach((cat) => {
             const chip = document.createElement('button');
             chip.className = 'asset-browser-chip';
             chip.textContent = cat;
@@ -423,7 +423,7 @@ class AssetBrowser extends Container {
 
             this.statusLabel.textContent = `Results for "${query}"`;
 
-            data.results.forEach(model => {
+            data.results.forEach((model) => {
                 this.gridContainer.appendChild(this.createModelCard(model));
             });
 
@@ -607,6 +607,19 @@ class AssetBrowser extends Container {
         const canvas = scene.canvas as HTMLCanvasElement;
         canvas.style.cursor = 'crosshair';
 
+        const onEscape = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape' || !this.pendingPlacement) return;
+
+            // Cancel placement — remove the entity
+            const { entity, card, actionEl } = this.pendingPlacement;
+            entity.destroy();
+            cleanupPlacement();
+
+            card.classList.remove('pending-place');
+            if (actionEl) actionEl.textContent = 'Click to place in scene';
+            this.pendingPlacement = null;
+        };
+
         const onPointerDown = async (e: PointerEvent) => {
             if (!this.pendingPlacement) return;
             // Ignore right-click / middle-click
@@ -660,29 +673,18 @@ class AssetBrowser extends Container {
             this.selectEntity(entity);
 
             // Clean up placement mode
-            canvas.style.cursor = '';
-            canvas.removeEventListener('pointerdown', onPointerDown, true);
-            canvas.removeEventListener('keydown', onEscape, true);
+            cleanupPlacement();
 
             card.classList.remove('pending-place');
             if (actionEl) actionEl.textContent = 'Placed! Click to place another';
             this.pendingPlacement = null;
         };
 
-        const onEscape = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape' || !this.pendingPlacement) return;
-
-            // Cancel placement — remove the entity
-            const { entity, card, actionEl } = this.pendingPlacement;
-            entity.destroy();
+        function cleanupPlacement() {
             canvas.style.cursor = '';
             canvas.removeEventListener('pointerdown', onPointerDown, true);
             canvas.removeEventListener('keydown', onEscape, true);
-
-            card.classList.remove('pending-place');
-            if (actionEl) actionEl.textContent = 'Click to place in scene';
-            this.pendingPlacement = null;
-        };
+        }
 
         // Use capture phase so we get the click before orbit controls
         canvas.addEventListener('pointerdown', onPointerDown, true);

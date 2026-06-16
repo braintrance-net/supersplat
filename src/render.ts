@@ -104,7 +104,7 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     };
 
     events.function('render.offscreen', async (width: number, height: number): Promise<Uint8Array> => {
-        return captureOffscreenRgba({
+        return await captureOffscreenRgba({
             width,
             height,
             transparentBg: true,

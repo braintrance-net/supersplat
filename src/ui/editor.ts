@@ -44,6 +44,7 @@ class EditorUI {
     toolsContainer: Container;
     canvas: HTMLCanvasElement;
     popup: Popup;
+    toastManager: ToastManager;
 
     constructor(events: Events) {
         const UI_MODE_STORAGE_KEY = 'supersplat-ui-mode';
@@ -55,7 +56,7 @@ class EditorUI {
         document.head.appendChild(link);
 
         // toast notifications
-        new ToastManager(events);
+        this.toastManager = new ToastManager(events);
 
         // app
         const appContainer = new Container({

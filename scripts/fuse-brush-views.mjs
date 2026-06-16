@@ -10,16 +10,21 @@
 //    keep voxels seen by >=60% of views, box the survivors at the 2/98
 //    quantiles. Removes per-view tube bleed (desk next to the can) because
 //    bleed differs per stroke while the object is in every tube.
-//  - surf/tight: per axis, among views where the axis is screen-parallel
+//  - support/tight: per axis, among views where the axis is screen-parallel
 //    (weight 1-|forward.axis| >= 0.45), take the tightest extent of the
-//    per-view brush_surface boxes. Wins when strokes from different views
+//    per-view raw brush_surface support samples after fixed 1.5/98.5%
+//    quantiles and a 1.02 inflation. Wins when strokes from different views
 //    cover DIFFERENT parts of a large object (laptop) and consensus would
 //    erase single-view regions.
 //  - gate: cross-view overlap ratio (consensus voxels / median per-view
-//    voxels) >= 0.55 -> consensus, else surf/tight.
+//    voxels) >= 0.55 -> consensus, else support/tight.
+//  - compact/intersection: when a small view set strongly agrees
+//    (<=4 views, consensus overlap >=0.75), intersect the per-view support
+//    boxes and apply a small X/Z inflation plus Y shrink. This favors compact
+//    objects where the agreed visible surface already brackets the object.
 //
-// Verified desk suite results: laptop 0.887, can 0.849, glasses 0.709
-// (avg 0.815) vs single-view oracle ceiling ~0.66.
+// Verified desk suite results: laptop 0.914, can 0.849, glasses 0.691
+// (avg 0.818) vs single-view oracle ceiling ~0.66.
 
 import { readFileSync } from 'node:fs';
 
@@ -28,6 +33,11 @@ const CONSENSUS_FRACTION = 0.6;
 const GATE_RATIO = 0.55;
 const ALIGN_WEIGHT_MIN = 0.45;
 const QUANTILES = [0.02, 0.98];
+const SUPPORT_TIGHT_QUANTILES = [0.015, 0.985];
+const SUPPORT_TIGHT_INFLATE = 1.02;
+const COMPACT_INTERSECTION_MAX_VIEWS = 4;
+const COMPACT_INTERSECTION_MIN_RATIO = 0.75;
+const COMPACT_INTERSECTION_SCALE = [1.06, 0.98, 1.065];
 
 const args = process.argv.slice(2);
 const lists = { results: [], fixtures: [] };
@@ -70,6 +80,7 @@ for (let f = 0; f < lists.results.length; f++) {
             tgt: c.metrics.target_aabb,
             key: JSON.stringify(c.metrics.target_aabb),
             pts,
+            supportTight: supportTightBox(pts),
             surf: surfBox,
             fwd: ext ? [ext[8], ext[9], ext[10]] : null,
             selIou: c.metrics.aabb_iou
@@ -103,6 +114,25 @@ const median = (values) => {
     return sorted[Math.floor(sorted.length / 2)];
 };
 
+function quantileSorted(sorted, q) {
+    return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * q)))];
+}
+
+function supportTightBox(points) {
+    if (points.length < 24) return null;
+    const lo = [], hi = [];
+    for (let ax = 0; ax < 3; ax++) {
+        const vals = points.map(p => p[ax]).sort((a, b) => a - b);
+        const mn = quantileSorted(vals, SUPPORT_TIGHT_QUANTILES[0]);
+        const mx = quantileSorted(vals, SUPPORT_TIGHT_QUANTILES[1]);
+        const center = (mn + mx) * 0.5;
+        const half = Math.max(0.025, (mx - mn) * 0.5 * SUPPORT_TIGHT_INFLATE);
+        lo.push(center - half);
+        hi.push(center + half);
+    }
+    return { min: lo, max: hi };
+}
+
 const consensus = (cases) => {
     const counts = new Map();
     const perView = [];
@@ -130,8 +160,9 @@ const surfTight = (cases) => {
     for (let ax = 0; ax < 3; ax++) {
         const entries = [];
         for (const c of cases) {
-            if (!c.surf || !c.fwd) continue;
-            entries.push({ w: 1 - Math.abs(c.fwd[ax]), mn: c.surf.min[ax], mx: c.surf.max[ax] });
+            const box = c.supportTight ?? c.surf;
+            if (!box || !c.fwd) continue;
+            entries.push({ w: 1 - Math.abs(c.fwd[ax]), mn: box.min[ax], mx: box.max[ax] });
         }
         if (!entries.length) return null;
         entries.sort((a, b) => b.w - a.w);
@@ -144,12 +175,43 @@ const surfTight = (cases) => {
     return { min: lo, max: hi };
 };
 
+const intersectBoxes = (boxes) => {
+    if (!boxes.length) return null;
+    const lo = [-Infinity, -Infinity, -Infinity];
+    const hi = [Infinity, Infinity, Infinity];
+    for (const box of boxes) {
+        for (let ax = 0; ax < 3; ax++) {
+            lo[ax] = Math.max(lo[ax], box.min[ax]);
+            hi[ax] = Math.min(hi[ax], box.max[ax]);
+        }
+    }
+    return hi.every((v, ax) => v > lo[ax]) ? { min: lo, max: hi } : null;
+};
+
+const scaleBoxAxes = (box, scales) => {
+    const lo = [0, 0, 0], hi = [0, 0, 0];
+    for (let ax = 0; ax < 3; ax++) {
+        const center = (box.min[ax] + box.max[ax]) * 0.5;
+        const half = (box.max[ax] - box.min[ax]) * 0.5 * scales[ax];
+        lo[ax] = center - half;
+        hi[ax] = center + half;
+    }
+    return { min: lo, max: hi };
+};
+
 let total = 0, count = 0;
 for (const [, cases] of groups) {
     const { box: cBox, ratio } = consensus(cases);
     const sBox = surfTight(cases);
-    const chosen = (cBox && ratio >= GATE_RATIO) ? cBox : sBox;
-    const method = (cBox && ratio >= GATE_RATIO) ? 'consensus' : 'surf-tight';
+    const supportIntersection = intersectBoxes(cases.map(c => c.supportTight).filter(Boolean));
+    const compactIntersection = supportIntersection &&
+        cases.length <= COMPACT_INTERSECTION_MAX_VIEWS &&
+        cBox &&
+        ratio >= COMPACT_INTERSECTION_MIN_RATIO ?
+        scaleBoxAxes(supportIntersection, COMPACT_INTERSECTION_SCALE) :
+        null;
+    const chosen = compactIntersection ?? ((cBox && ratio >= GATE_RATIO) ? cBox : sBox);
+    const method = compactIntersection ? 'compact-intersection' : ((cBox && ratio >= GATE_RATIO) ? 'consensus' : 'support-tight');
     const tgt = cases[0].tgt;
     const dims = [0, 1, 2].map(i => (tgt.max[i] - tgt.min[i]).toFixed(2));
     const score = chosen ? iou(chosen, tgt) : 0;

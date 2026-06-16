@@ -265,14 +265,21 @@ class EvalCasePanel {
                 const replay = await events.invoke('boxer.runEvalCase', JSON.parse(JSON.stringify(evalCase))) as {
                     metrics?: { aabb_iou?: number; center_distance?: number };
                     client_brush_probe?: { selected_candidate_source?: string; brush_surface_demoted?: boolean };
+                    boxer_result?: {
+                        selection_truth?: { splat_count?: number; selected_after?: number };
+                    };
+                    selection_truth?: { splat_count?: number; selected_after?: number };
                 };
                 const iou = replay?.metrics?.aabb_iou;
                 const center = replay?.metrics?.center_distance;
                 const source = replay?.client_brush_probe?.selected_candidate_source;
+                const truth = replay.selection_truth ?? replay.boxer_result?.selection_truth;
+                const selectedSplats = truth?.selected_after ?? truth?.splat_count;
                 metricsInfo.textContent =
                     `IoU ${iou === undefined ? '-' : iou.toFixed(3)}` +
                     `  center ${center === undefined ? '-' : center.toFixed(3)}${
-                        source ? `\nselected: ${source}${replay.client_brush_probe?.brush_surface_demoted ? ' (surface demoted)' : ''}` : ''}`;
+                        source ? `\nselected: ${source}${replay.client_brush_probe?.brush_surface_demoted ? ' (surface demoted)' : ''}` : ''
+                    }${selectedSplats === undefined ? '' : `\nselected splats: ${selectedSplats}`}`;
             } catch (err) {
                 metricsInfo.textContent = `run failed: ${err instanceof Error ? err.message : err}`;
             }

@@ -1,6 +1,15 @@
 import { Events } from '../events';
 
 type BrushSelectionVariant = 'boxer' | 'sam' | 'raw';
+type BrushSelectionOp = 'add' | 'remove' | 'set';
+
+const LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED = true;
+const LIVE_GAUSSIAN_PREVIEW_INTERVAL_MS = 90;
+
+const livePreviewEnabledFromUrl = () => {
+    const value = new URLSearchParams(window.location.search).get('brushLivePreview')?.toLowerCase();
+    return value !== '0' && value !== 'false' && value !== 'off';
+};
 
 class BrushSelection {
     activate: () => void;
@@ -34,6 +43,13 @@ class BrushSelection {
         let points: [number, number][] = [];
         let pointRadii: number[] = [];
         let variant: BrushSelectionVariant = 'boxer';
+        let livePreviewEnabled = LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED && livePreviewEnabledFromUrl();
+        let livePreviewTimer: number | undefined;
+        let livePreviewInFlight = false;
+        let livePreviewQueued = false;
+        let livePreviewOp: BrushSelectionOp = 'set';
+        let livePreviewRunId = 0;
+        let lastLivePreviewAt = 0;
 
         // 3D brush mode: when a collision surface is loaded for the scene, the
         // brush keeps a constant world-space radius and the cursor conforms to
@@ -239,6 +255,77 @@ class BrushSelection {
             };
         };
 
+        const selectionOpFromPointer = (e: PointerEvent): BrushSelectionOp => {
+            return e.shiftKey ? 'add' : (e.ctrlKey ? 'remove' : 'set');
+        };
+
+        const invokeClearLivePreview = () => {
+            const result = events.invoke('select.clearMaskPreview') as Promise<unknown> | undefined;
+            if (result && typeof result.catch === 'function') {
+                result.catch((err) => {
+                    console.warn('[BrushSelection] live preview clear failed', err);
+                });
+            }
+        };
+
+        const cancelLivePreview = () => {
+            livePreviewRunId++;
+            livePreviewQueued = false;
+            if (livePreviewTimer !== undefined) {
+                window.clearTimeout(livePreviewTimer);
+                livePreviewTimer = undefined;
+            }
+        };
+
+        const clearLivePreview = () => {
+            cancelLivePreview();
+            invokeClearLivePreview();
+        };
+
+        async function runLivePreview() {
+            livePreviewTimer = undefined;
+            if (!livePreviewEnabled || !livePreviewQueued || dragId === undefined) {
+                livePreviewQueued = false;
+                return;
+            }
+
+            const runId = livePreviewRunId;
+            const op = livePreviewOp;
+            livePreviewQueued = false;
+            livePreviewInFlight = true;
+
+            try {
+                await events.invoke('select.previewByMask', op, canvas, context);
+            } catch (err) {
+                console.warn('[BrushSelection] live preview failed', err);
+            } finally {
+                livePreviewInFlight = false;
+                lastLivePreviewAt = performance.now();
+                if (livePreviewQueued && dragId !== undefined && runId === livePreviewRunId) {
+                    requestLivePreview(livePreviewOp);
+                }
+            }
+        }
+
+        function requestLivePreview(op: BrushSelectionOp) {
+            if (!livePreviewEnabled || dragId === undefined) {
+                return;
+            }
+
+            livePreviewOp = op;
+            livePreviewQueued = true;
+
+            if (livePreviewInFlight || livePreviewTimer !== undefined) {
+                return;
+            }
+
+            const elapsed = performance.now() - lastLivePreviewAt;
+            const delay = Math.max(0, LIVE_GAUSSIAN_PREVIEW_INTERVAL_MS - elapsed);
+            livePreviewTimer = window.setTimeout(() => {
+                runLivePreview();
+            }, delay);
+        }
+
         const update = (e: PointerEvent) => {
             const x = e.offsetX;
             const y = e.offsetY;
@@ -259,6 +346,8 @@ class BrushSelection {
 
                 prev.x = x;
                 prev.y = y;
+
+                requestLivePreview(selectionOpFromPointer(e));
             }
         };
 
@@ -306,16 +395,18 @@ class BrushSelection {
             parent.releasePointerCapture(dragId);
             dragId = undefined;
             canvas.style.display = 'none';
+            clearLivePreview();
         };
 
         const pointerup = async (e: PointerEvent) => {
             if (e.pointerId === dragId) {
                 e.preventDefault();
                 e.stopPropagation();
+                cancelLivePreview();
 
                 await events.invoke(
                     'select.byMask',
-                    e.shiftKey ? 'add' : (e.ctrlKey ? 'remove' : 'set'),
+                    selectionOpFromPointer(e),
                     canvas,
                     context
                 );
@@ -403,6 +494,14 @@ class BrushSelection {
                 return radius;
             });
             events.function('brushSelection.getVariant', () => variant);
+            events.function('brushSelection.getLivePreviewEnabled', () => livePreviewEnabled);
+            events.function('brushSelection.setLivePreviewEnabled', (enabled: boolean) => {
+                livePreviewEnabled = enabled === true;
+                if (!livePreviewEnabled) {
+                    clearLivePreview();
+                }
+                return livePreviewEnabled;
+            });
         } catch (err) {
             console.warn('[BrushSelection] brushSelection functions were already registered', err);
         }

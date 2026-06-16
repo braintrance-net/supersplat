@@ -97,6 +97,7 @@ const vertexShader = /* glsl */ `
 
         ivec2 splatUV = calcSplatUV(splatId, texParams.x);
         uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
+        bool isSelected = (splatState & 1u) != 0u;
 
         // check for locked splats (deleted splats are already excluded from order texture)
         if ((splatState & 2u) != 0u) {
@@ -148,7 +149,10 @@ const vertexShader = /* glsl */ `
             }
 
             // choose between selection colors and gaussian color
-            varying_color = vec4(mix(gaussianClr, selectedClr.xyz, (splatState == 1u) ? selectedClr.w : 0.0), unselectedClr.w);
+            varying_color = vec4(
+                mix(gaussianClr, selectedClr.xyz, isSelected ? selectedClr.w : 0.0),
+                unselectedClr.w
+            );
 
             gl_Position = matrix_viewProjection * model * vec4(center, 1.0);
             gl_PointSize = splatSize;

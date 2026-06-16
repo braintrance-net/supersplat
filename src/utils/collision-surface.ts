@@ -5,10 +5,9 @@ import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
 
-// Grid-accelerated triangle raycaster over a scene's collision mesh sidecar.
-// The mesh is a one-time per-scene artifact generated from the source splat via:
+// Raycasters over scene collision sidecars generated from the source splat via:
 //   splat-transform <scene>.ply -N -G <scene>.voxel.json --voxel-params 0.1,0.1 -K smooth
-// splat-transform writes the mesh in the same frame the editor displays the
+// splat-transform writes the voxel/mesh data in the same frame the editor displays the
 // splat in (verified empirically against desk.ply), so rays are cast in editor
 // world space directly. Like the walk tool, the mesh does not track user
 // transforms applied to the splat after load.
@@ -18,6 +17,30 @@ type CollisionSurfaceHit = {
     distance: number;
     // unit surface normal at the hit, oriented toward the ray origin
     normal: [number, number, number];
+};
+
+type MeshCollisionRaycastSurface = {
+    source: 'mesh';
+    triangleCount: number;
+    raycastWorld(origin: [number, number, number], direction: [number, number, number], maxDistance?: number): CollisionSurfaceHit | null;
+};
+
+type VoxelCollisionRaycastSurface = {
+    source: 'voxel';
+    voxelCount: number;
+    voxelResolution: number;
+    raycastWorld(origin: [number, number, number], direction: [number, number, number], maxDistance?: number): CollisionSurfaceHit | null;
+};
+
+type CollisionRaycastSurface = MeshCollisionRaycastSurface | VoxelCollisionRaycastSurface;
+
+type VoxelMetadata = {
+    gridBounds: { min: number[]; max: number[] };
+    voxelResolution: number;
+    leafSize: number;
+    treeDepth: number;
+    nodeCount: number;
+    leafDataCount: number;
 };
 
 type SurfaceGltfAccessor = {
@@ -133,6 +156,7 @@ const readSurfaceIndices = (json: SurfaceGltfDocument, bin: ArrayBuffer, accesso
 };
 
 class CollisionSurface {
+    readonly source = 'mesh' as const;
     // 9 floats per triangle: ax,ay,az,bx,by,bz,cx,cy,cz (splat-local space)
     private readonly triangles: Float32Array;
     readonly triangleCount: number;
@@ -424,6 +448,192 @@ class CollisionSurface {
     }
 }
 
+const SOLID_LEAF_MARKER = 0xFF000000 >>> 0;
+
+const popcount8 = (value: number) => {
+    value &= 0xFF;
+    value -= ((value >>> 1) & 0x55);
+    value = (value & 0x33) + ((value >>> 2) & 0x33);
+    return (value + (value >>> 4)) & 0x0F;
+};
+
+class VoxelCollisionSurface {
+    readonly source = 'voxel' as const;
+    readonly voxelResolution: number;
+    readonly voxelCount: number;
+
+    private readonly nodes: Uint32Array;
+    private readonly leafData: Uint32Array;
+    private readonly gridMin: [number, number, number];
+    private readonly gridMax: [number, number, number];
+    private readonly dims: [number, number, number];
+    private readonly treeDepth: number;
+
+    private constructor(metadata: VoxelMetadata, nodes: Uint32Array, leafData: Uint32Array) {
+        this.nodes = nodes;
+        this.leafData = leafData;
+        this.voxelResolution = metadata.voxelResolution;
+        this.treeDepth = metadata.treeDepth;
+        this.gridMin = [
+            metadata.gridBounds.min[0],
+            metadata.gridBounds.min[1],
+            metadata.gridBounds.min[2]
+        ];
+        this.gridMax = [
+            metadata.gridBounds.max[0],
+            metadata.gridBounds.max[1],
+            metadata.gridBounds.max[2]
+        ];
+        this.dims = [0, 1, 2].map(axis => Math.max(1, Math.round((this.gridMax[axis] - this.gridMin[axis]) / this.voxelResolution))) as [number, number, number];
+        this.voxelCount = this.dims[0] * this.dims[1] * this.dims[2];
+    }
+
+    static fromFiles(metadata: VoxelMetadata, buffer: ArrayBuffer) {
+        if (metadata.leafSize !== 4) {
+            throw new Error(`Unsupported voxel leaf size ${metadata.leafSize}.`);
+        }
+        const words = new Uint32Array(buffer);
+        const expectedWords = metadata.nodeCount + metadata.leafDataCount;
+        if (words.length < expectedWords) {
+            throw new Error(`Voxel bin is truncated: expected ${expectedWords} u32 words, got ${words.length}.`);
+        }
+        const nodes = words.slice(0, metadata.nodeCount);
+        const leafData = words.slice(metadata.nodeCount, expectedWords);
+        return new VoxelCollisionSurface(metadata, nodes, leafData);
+    }
+
+    private voxelAt(ix: number, iy: number, iz: number) {
+        if (
+            ix < 0 || iy < 0 || iz < 0 ||
+            ix >= this.dims[0] || iy >= this.dims[1] || iz >= this.dims[2] ||
+            this.nodes.length === 0
+        ) {
+            return false;
+        }
+
+        const bx = ix >> 2;
+        const by = iy >> 2;
+        const bz = iz >> 2;
+        let nodeIndex = 0;
+        for (let level = this.treeDepth - 1; level >= 0; level--) {
+            const node = this.nodes[nodeIndex];
+            if (node === SOLID_LEAF_MARKER) return true;
+
+            const childMask = node >>> 24;
+            const octant = ((bx >>> level) & 1) | (((by >>> level) & 1) << 1) | (((bz >>> level) & 1) << 2);
+            const octantBit = 1 << octant;
+            if ((childMask & octantBit) === 0) return false;
+
+            const childBase = node & 0x00FFFFFF;
+            nodeIndex = childBase + popcount8(childMask & (octantBit - 1));
+            if (nodeIndex < 0 || nodeIndex >= this.nodes.length) return false;
+        }
+
+        const leafNode = this.nodes[nodeIndex];
+        if (leafNode === SOLID_LEAF_MARKER) return true;
+        const leafDataIndex = leafNode & 0x00FFFFFF;
+        const dataOffset = leafDataIndex * 2;
+        if (dataOffset + 1 >= this.leafData.length) return false;
+
+        const bitIdx = (ix & 3) + ((iy & 3) << 2) + ((iz & 3) << 4);
+        return bitIdx < 32 ?
+            ((this.leafData[dataOffset] >>> bitIdx) & 1) === 1 :
+            ((this.leafData[dataOffset + 1] >>> (bitIdx - 32)) & 1) === 1;
+    }
+
+    raycastWorld(origin: [number, number, number], direction: [number, number, number], maxDistance = Infinity): CollisionSurfaceHit | null {
+        const dirLength = Math.hypot(direction[0], direction[1], direction[2]);
+        if (!(dirLength > 0)) return null;
+
+        const dx = direction[0] / dirLength;
+        const dy = direction[1] / dirLength;
+        const dz = direction[2] / dirLength;
+        const [ox, oy, oz] = origin;
+        let tMin = 0;
+        let tMax = Math.min(maxDistance, 1e9);
+        let entryNormal: [number, number, number] = [-dx, -dy, -dz];
+        const clipAxis = (o: number, d: number, lo: number, hi: number, axis: 0 | 1 | 2) => {
+            if (Math.abs(d) < 1e-12) {
+                return o >= lo && o <= hi;
+            }
+            let t0 = (lo - o) / d;
+            let t1 = (hi - o) / d;
+            let normalSign = -Math.sign(d);
+            if (t0 > t1) {
+                [t0, t1] = [t1, t0];
+                normalSign = Math.sign(d);
+            }
+            if (t0 > tMin) {
+                tMin = t0;
+                entryNormal = [0, 0, 0];
+                entryNormal[axis] = normalSign;
+            }
+            tMax = Math.min(tMax, t1);
+            return tMin <= tMax;
+        };
+
+        if (!clipAxis(ox, dx, this.gridMin[0], this.gridMax[0], 0)) return null;
+        if (!clipAxis(oy, dy, this.gridMin[1], this.gridMax[1], 1)) return null;
+        if (!clipAxis(oz, dz, this.gridMin[2], this.gridMax[2], 2)) return null;
+
+        const startT = Math.max(0, tMin) + 1e-6;
+        const res = this.voxelResolution;
+        let ix = Math.min(this.dims[0] - 1, Math.max(0, Math.floor((ox + dx * startT - this.gridMin[0]) / res)));
+        let iy = Math.min(this.dims[1] - 1, Math.max(0, Math.floor((oy + dy * startT - this.gridMin[1]) / res)));
+        let iz = Math.min(this.dims[2] - 1, Math.max(0, Math.floor((oz + dz * startT - this.gridMin[2]) / res)));
+
+        const stepX = dx > 0 ? 1 : -1;
+        const stepY = dy > 0 ? 1 : -1;
+        const stepZ = dz > 0 ? 1 : -1;
+        const nextBoundary = (cell: number, axis: number, step: number) => {
+            return this.gridMin[axis] + (cell + (step > 0 ? 1 : 0)) * res;
+        };
+        let tNextX = Math.abs(dx) < 1e-12 ? Infinity : (nextBoundary(ix, 0, stepX) - ox) / dx;
+        let tNextY = Math.abs(dy) < 1e-12 ? Infinity : (nextBoundary(iy, 1, stepY) - oy) / dy;
+        let tNextZ = Math.abs(dz) < 1e-12 ? Infinity : (nextBoundary(iz, 2, stepZ) - oz) / dz;
+        const tDeltaX = Math.abs(dx) < 1e-12 ? Infinity : res / Math.abs(dx);
+        const tDeltaY = Math.abs(dy) < 1e-12 ? Infinity : res / Math.abs(dy);
+        const tDeltaZ = Math.abs(dz) < 1e-12 ? Infinity : res / Math.abs(dz);
+        let t = Math.max(0, tMin);
+        let normal = entryNormal;
+
+        for (let guard = this.dims[0] + this.dims[1] + this.dims[2] + 3; guard > 0; guard--) {
+            if (this.voxelAt(ix, iy, iz)) {
+                return {
+                    point: [ox + dx * t, oy + dy * t, oz + dz * t],
+                    distance: t,
+                    normal
+                };
+            }
+
+            if (tNextX <= tNextY && tNextX <= tNextZ) {
+                t = tNextX;
+                if (t > tMax) break;
+                ix += stepX;
+                if (ix < 0 || ix >= this.dims[0]) break;
+                tNextX += tDeltaX;
+                normal = [-stepX, 0, 0];
+            } else if (tNextY <= tNextZ) {
+                t = tNextY;
+                if (t > tMax) break;
+                iy += stepY;
+                if (iy < 0 || iy >= this.dims[1]) break;
+                tNextY += tDeltaY;
+                normal = [0, -stepY, 0];
+            } else {
+                t = tNextZ;
+                if (t > tMax) break;
+                iz += stepZ;
+                if (iz < 0 || iz >= this.dims[2]) break;
+                tNextZ += tDeltaZ;
+                normal = [0, 0, -stepZ];
+            }
+        }
+
+        return null;
+    }
+}
+
 // Explicit pinhole screen math in raw viewport (client) pixels, built from
 // the camera pose + fov — the same convention as the Boxer eval pipeline.
 // (The engine's screenToWorld/worldToScreen are NOT inverse-consistent in
@@ -483,30 +693,50 @@ const createScreenMath = (scene: Scene) => {
     return { pinhole, rayThrough, projectToClient };
 };
 
-// Active surface registry. Surfaces load from the same sidecar convention as
-// the walk tool: /static/dev-assets/collision/<basename>.collision.glb
-const surfaceCache = new Map<string, Promise<CollisionSurface | null>>();
-let activeSurface: CollisionSurface | null = null;
+// Active surface registry. Voxel octrees are preferred; the generated GLB mesh
+// remains the fallback for older sidecars.
+const surfaceCache = new Map<string, Promise<CollisionRaycastSurface | null>>();
+let activeSurface: CollisionRaycastSurface | null = null;
 let activeSurfaceFilename: string | null = null;
-let activeSurfacePending: Promise<CollisionSurface | null> = Promise.resolve(null);
+let activeSurfacePending: Promise<CollisionRaycastSurface | null> = Promise.resolve(null);
 
-const collisionSurfaceUrlForFilename = (filename: string | undefined | null) => {
+const collisionSurfaceBaseForFilename = (filename: string | undefined | null) => {
     if (!filename) return null;
     const basename = filename.split('/').pop()?.replace(/\.(ply|sog|spz|splat|ksplat|compressed\.ply)$/i, '');
-    return basename ? `/static/dev-assets/collision/${basename}.collision.glb` : null;
+    return basename ? `/static/dev-assets/collision/${basename}` : null;
 };
 
-const loadCollisionSurface = (url: string) => {
-    let pending = surfaceCache.get(url);
+const loadVoxelSurface = async (baseUrl: string): Promise<VoxelCollisionSurface | null> => {
+    const jsonUrl = `${baseUrl}.voxel.json`;
+    const metadataResponse = await fetch(jsonUrl);
+    if (!metadataResponse.ok) return null;
+    const metadata = await metadataResponse.json() as VoxelMetadata;
+    const binUrl = `${baseUrl}.voxel.bin`;
+    const binResponse = await fetch(binUrl);
+    if (!binResponse.ok) return null;
+    return VoxelCollisionSurface.fromFiles(metadata, await binResponse.arrayBuffer());
+};
+
+const loadMeshSurface = async (baseUrl: string): Promise<CollisionSurface | null> => {
+    const response = await fetch(`${baseUrl}.collision.glb`);
+    if (!response.ok) return null;
+    return CollisionSurface.fromGlb(await response.arrayBuffer());
+};
+
+const loadCollisionSurface = (baseUrl: string) => {
+    let pending = surfaceCache.get(baseUrl);
     if (!pending) {
-        pending = fetch(url)
-        .then(response => (response.ok ? response.arrayBuffer() : null))
-        .then(buffer => (buffer ? CollisionSurface.fromGlb(buffer) : null))
-        .catch((err): CollisionSurface | null => {
-            console.warn(`[CollisionSurface] failed to load ${url}`, err);
-            return null;
-        });
-        surfaceCache.set(url, pending);
+        pending = (async (): Promise<CollisionRaycastSurface | null> => {
+            try {
+                const voxelSurface = await loadVoxelSurface(baseUrl);
+                if (voxelSurface) return voxelSurface;
+                return await loadMeshSurface(baseUrl);
+            } catch (err) {
+                console.warn(`[CollisionSurface] failed to load ${baseUrl}`, err);
+                return null;
+            }
+        })();
+        surfaceCache.set(baseUrl, pending);
     }
     return pending;
 };
@@ -520,16 +750,19 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     events.on('scene.elementAdded', (element: Element) => {
         if (element.type !== ElementType.splat) return;
         const splat = element as Splat;
-        const url = collisionSurfaceUrlForFilename(splat.filename ?? splat.name);
-        if (!url) return;
+        const baseUrl = collisionSurfaceBaseForFilename(splat.filename ?? splat.name);
+        if (!baseUrl) return;
         activeSurfaceFilename = splat.filename ?? splat.name;
         const requestedFor = activeSurfaceFilename;
-        activeSurfacePending = loadCollisionSurface(url).then((surface) => {
+        activeSurfacePending = loadCollisionSurface(baseUrl).then((surface) => {
             if (activeSurfaceFilename !== requestedFor) return activeSurface;
             activeSurface = surface;
             if (surface) {
-                console.log(`[CollisionSurface] loaded ${url} (${surface.triangleCount} triangles)`);
-                events.fire('collisionSurface.loaded', { url, triangleCount: surface.triangleCount });
+                const details = surface.source === 'voxel' ?
+                    { url: `${baseUrl}.voxel.json`, source: surface.source, voxelCount: surface.voxelCount, voxelResolution: surface.voxelResolution } :
+                    { url: `${baseUrl}.collision.glb`, source: surface.source, triangleCount: surface.triangleCount };
+                console.log(`[CollisionSurface] loaded ${details.url} (${details.source})`);
+                events.fire('collisionSurface.loaded', details);
             }
             return surface;
         });
@@ -663,4 +896,4 @@ const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
     });
 };
 
-export { CollisionSurface, CollisionSurfaceHit, createScreenMath, getActiveCollisionSurface, waitForCollisionSurface, registerCollisionSurfaceLoader };
+export { CollisionSurface, VoxelCollisionSurface, CollisionSurfaceHit, createScreenMath, getActiveCollisionSurface, waitForCollisionSurface, registerCollisionSurfaceLoader };

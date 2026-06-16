@@ -166,7 +166,9 @@ const fragmentShader = /* glsl*/`
 varying mediump vec4 texCoord_flags;
 varying mediump vec4 color;
 
+uniform vec4 selectedClr;
 uniform bool outlineMode;
+uniform float selectedSplatOverlay;
 uniform float ringSize;
 
 #if PICK_PASS
@@ -215,6 +217,14 @@ void main(void) {
         }
 
         bool selected = texCoord_flags.z != 0.0 && texCoord_flags.w == 0.0;
+
+        if (selectedSplatOverlay > 0.5 && selected) {
+            mediump float overlayAlpha = max(alpha, norm * max(selectedClr.a, 0.85));
+            vec3 overlayColor = mix(color.xyz, selectedClr.xyz, 0.8);
+            pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
+            pcFragColor1 = vec4(selectedClr.xyz * overlayAlpha, overlayAlpha);
+            return;
+        }
 
         if (outlineMode) {
             pcFragColor0 = vec4(color.xyz * alpha, alpha);
