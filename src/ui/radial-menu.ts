@@ -23,7 +23,18 @@ class RadialMenu extends Container {
     private menuEl: HTMLElement;
     private isVisible = false;
     private oneShotTool: string | null = null;
+    private selectionToolCommitVisible = false;
     private events: Events;
+    private selectionToolNames = new Set([
+        'brushSelection',
+        'boxSelection',
+        'boxVolume',
+        'rectSelection',
+        'lassoSelection',
+        'polygonSelection',
+        'floodSelection',
+        'eyedropperSelection'
+    ]);
 
     constructor(events: Events, args = {}) {
         args = {
@@ -157,6 +168,20 @@ class RadialMenu extends Container {
         });
 
         const checkSelection = () => {
+            if (this.selectionToolNames.has(events.invoke('tool.active') as string)) {
+                if (this.selectionToolCommitVisible) {
+                    const hasSplats = events.invoke('selection.splats');
+                    if (hasSplats) {
+                        if (!this.isVisible) {
+                            this.showNearSelection(true);
+                        }
+                        return;
+                    }
+                }
+                this.hide();
+                return;
+            }
+
             const hasSplats = events.invoke('selection.splats');
             console.log('[RadialMenu] checkSelection — hasSplats:', hasSplats, 'oneShotTool:', this.oneShotTool);
             if (hasSplats) {
@@ -172,6 +197,19 @@ class RadialMenu extends Container {
         // splat.stateChanged = gaussians selected/deselected within a splat (SAM3, brush, etc.)
         events.on('selection.changed', checkSelection);
         events.on('splat.stateChanged', checkSelection);
+
+        events.on('selection.commit', () => {
+            this.selectionToolCommitVisible = true;
+            let attempts = 0;
+            const showCommittedSelection = () => {
+                if (events.invoke('selection.splats')) {
+                    this.showNearSelection(true);
+                } else if (attempts++ < 8) {
+                    window.setTimeout(showCommittedSelection, 80);
+                }
+            };
+            showCommittedSelection();
+        });
 
         // Show menu immediately at click point when SAM3 starts processing
         events.on('sam3.clickStarted', (pt: { x: number; y: number }) => {
@@ -189,8 +227,22 @@ class RadialMenu extends Container {
             }
         });
 
+        events.on('tool.activated', (toolName: string | null) => {
+            if (toolName && this.selectionToolNames.has(toolName)) {
+                this.oneShotTool = null;
+                this.selectionToolCommitVisible = false;
+                this.hide();
+            }
+        });
+
+        events.on('selection.gestureStarted', () => {
+            this.selectionToolCommitVisible = false;
+            this.hide();
+        });
+
         // When selection is cleared, hide
         events.on('selection.deselect', () => {
+            this.selectionToolCommitVisible = false;
             this.hide();
         });
 
@@ -218,8 +270,9 @@ class RadialMenu extends Container {
         this.events.fire(`tool.${toolName}`);
     }
 
-    private showAtPoint(x: number, y: number) {
+    private showAtPoint(x: number, y: number, allowSelectionTool = false) {
         if (this.oneShotTool) return;
+        if (!allowSelectionTool && this.selectionToolNames.has(this.events.invoke('tool.active') as string)) return;
 
         const padding = 170;
         const clampedX = Math.max(padding, Math.min(x, window.innerWidth - padding));
@@ -237,14 +290,18 @@ class RadialMenu extends Container {
         });
     }
 
-    private showNearSelection() {
+    private showNearSelection(allowSelectionTool = false) {
         if (this.oneShotTool) return;
+        if (!allowSelectionTool && this.selectionToolNames.has(this.events.invoke('tool.active') as string)) {
+            this.hide();
+            return;
+        }
 
         const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
         console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);
 
         if (screenPos) {
-            this.showAtPoint(screenPos.x, screenPos.y);
+            this.showAtPoint(screenPos.x, screenPos.y, allowSelectionTool);
         } else {
             // Fallback: center horizontally, near bottom
             this.dom.style.left = '50%';

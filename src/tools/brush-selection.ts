@@ -355,6 +355,7 @@ class BrushSelection {
             if (dragId === undefined && (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary)) {
                 e.preventDefault();
                 e.stopPropagation();
+                events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
                 dragId = e.pointerId;
                 parent.setPointerCapture(dragId);
@@ -391,9 +392,16 @@ class BrushSelection {
             update(e);
         };
 
-        const dragEnd = () => {
-            parent.releasePointerCapture(dragId);
+        const dragEnd = (releaseCapture = true) => {
+            const pointerId = dragId;
             dragId = undefined;
+            if (releaseCapture && pointerId !== undefined && parent.hasPointerCapture(pointerId)) {
+                try {
+                    parent.releasePointerCapture(pointerId);
+                } catch (err) {
+                    console.warn('[BrushSelection] pointer capture release failed', err);
+                }
+            }
             canvas.style.display = 'none';
             clearLivePreview();
         };
@@ -404,18 +412,43 @@ class BrushSelection {
                 e.stopPropagation();
                 cancelLivePreview();
 
-                await events.invoke(
-                    'select.byMask',
-                    selectionOpFromPointer(e),
-                    canvas,
-                    context
-                );
-                const prompt = buildBrushPrompt();
+                let selectionResult: { selected_after?: number; splat_count?: number } | undefined;
+                let prompt: ReturnType<typeof buildBrushPrompt> = null;
+                try {
+                    selectionResult = await events.invoke(
+                        'select.byMask',
+                        selectionOpFromPointer(e),
+                        canvas,
+                        context
+                    ) as { selected_after?: number; splat_count?: number } | undefined;
+                    prompt = buildBrushPrompt();
+                } catch (err) {
+                    console.warn('[BrushSelection] mask selection failed', err);
+                    events.fire('toast', 'Brush selection failed', 'error');
+                } finally {
+                    dragEnd();
+                }
+
+                if (selectionResult) {
+                    events.fire('selection.commit', { source: 'brushSelection', variant, result: selectionResult });
+                }
                 if (prompt) {
                     events.fire('boxer.brushPromptCaptured', prompt);
                 }
+            }
+        };
 
+        const pointercancel = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                e.preventDefault();
+                e.stopPropagation();
                 dragEnd();
+            }
+        };
+
+        const lostpointercapture = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                dragEnd(false);
             }
         };
 
@@ -457,6 +490,8 @@ class BrushSelection {
             parent.addEventListener('pointerdown', pointerdown);
             parent.addEventListener('pointermove', pointermove);
             parent.addEventListener('pointerup', pointerup);
+            parent.addEventListener('pointercancel', pointercancel);
+            parent.addEventListener('lostpointercapture', lostpointercapture);
             parent.addEventListener('wheel', wheel);
         };
 
@@ -471,6 +506,8 @@ class BrushSelection {
             parent.removeEventListener('pointerdown', pointerdown);
             parent.removeEventListener('pointermove', pointermove);
             parent.removeEventListener('pointerup', pointerup);
+            parent.removeEventListener('pointercancel', pointercancel);
+            parent.removeEventListener('lostpointercapture', lostpointercapture);
             parent.removeEventListener('wheel', wheel);
         };
 

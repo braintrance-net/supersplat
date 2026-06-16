@@ -88,6 +88,21 @@ const COLLISION_MESH_PLAYER_HEIGHT = 1.65;
 const COLLISION_MESH_EYE_HEIGHT = 1.47;
 const COLLISION_MESH_CAPSULE_RADIUS = 0.28;
 const COLLISION_MESH_STEP_HEIGHT = 0.12;
+
+const isBoardDemoEditorHost = () => (
+    typeof window !== 'undefined' &&
+    /^board-demo-editor(?:-[a-z0-9-]+)?\.vercel\.app$/i.test(window.location.hostname)
+);
+
+const shouldHideWalkHeightControls = () => {
+    if (typeof window === 'undefined') {
+        return false;
+    }
+    const params = new URLSearchParams(window.location.search);
+    return params.get('hideWalkHeightControls') === '1' ||
+        params.get('walkHeightControls') === '0' ||
+        isBoardDemoEditorHost();
+};
 const COLLISION_MESH_HEAD_CLEARANCE = 0;
 const COLLISION_MESH_WALK_SPEED = 1.8;
 const COLLISION_MESH_HEIGHT_ADJUST_SPEED = 0.65;
@@ -949,7 +964,7 @@ class WalkTool {
     }
 
     private createHeightControls() {
-        if (this.heightControls) {
+        if (this.heightControls || shouldHideWalkHeightControls()) {
             return;
         }
 
