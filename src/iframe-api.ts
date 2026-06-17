@@ -5,6 +5,10 @@ import type { SemanticAnnotation, SemanticLayer } from './semantic-annotations';
 
 const IS_SCENE_DIRTY = 'supersplat:is-scene-dirty';
 const LOAD_FILE = 'supersplat:load-file';
+const LOAD_SCENE_MANIFEST = 'supersplat:load-scene-manifest';
+const LOAD_SCENE_MANIFEST_STREAM_START = 'supersplat:load-scene-manifest-stream-start';
+const LOAD_SCENE_MANIFEST_STREAM_LAYER = 'supersplat:load-scene-manifest-stream-layer';
+const LOAD_SCENE_MANIFEST_STREAM_FINISH = 'supersplat:load-scene-manifest-stream-finish';
 const GET_CAMERA_STATE = 'supersplat:get-camera-state';
 const CAMERA_STATE = 'supersplat:camera-state';
 const GET_PRESET_STATE = 'supersplat:get-preset-state';
@@ -40,7 +44,14 @@ const WALK_INPUT = 'supersplat:walk-input';
 const WALK_SAVE_HEIGHT = 'supersplat:walk-save-height';
 const CROSSHAIR_CLICK = 'supersplat:crosshair-click';
 const MULTIPLAYER_PLAYERS = 'supersplat:multiplayer-players';
+const MULTIPLAYER_AVATAR_PRELOAD = 'supersplat:multiplayer-avatar-preload';
+const SCREEN_SURFACE = 'supersplat:screen-surface';
+const SCREEN_FRAME = 'supersplat:screen-frame';
+const SCREEN_CLEAR = 'supersplat:screen-clear';
+const RAYCAST = 'supersplat:raycast';
+const RAYCAST_RESULT = 'supersplat:raycast-result';
 const RENDER_WARMUP = 'supersplat:render-warmup';
+const ROOM_WARMUP_MODE = 'supersplat:room-warmup-mode';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 const COLLISION_DEBUG_BUNDLE_GET = 'supersplat:collision-debug-bundle-get';
 const COLLISION_DEBUG_BUNDLE = 'supersplat:collision-debug-bundle';
@@ -70,8 +81,13 @@ type MultiplayerPlayer = {
     id: string;
     label: string;
     color?: string;
+    avatarId?: string;
+    avatarName?: string;
+    avatarUrl?: string;
     position: Vec3Tuple;
     target?: Vec3Tuple;
+    speaking?: boolean;
+    level?: number;
 };
 
 interface IsSceneDirtyQuery {
@@ -90,6 +106,56 @@ interface LoadFileMessage {
     camera?: CameraState;
     transform?: PresetTransform;
     collisionMeshSrc?: string | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestLayer {
+    id: string;
+    label?: string;
+    filename: string;
+    assetUrl?: string;
+    byteLength?: number;
+    data?: ArrayBuffer;
+    docTransform?: Record<string, unknown>;
+    transform?: PresetTransform;
+}
+
+interface LoadSceneManifestMessage {
+    type: typeof LOAD_SCENE_MANIFEST;
+    manifest: {
+        id: string;
+        title?: string;
+        strategy?: string;
+        backgroundLayerId?: string;
+        sourceBytes?: number;
+        totalBytes?: number;
+        manifestUrl?: string;
+        layers: LoadSceneManifestLayer[];
+    };
+    camera?: CameraState;
+    collisionMeshSrc?: string | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestStreamStartMessage {
+    type: typeof LOAD_SCENE_MANIFEST_STREAM_START;
+    manifest: LoadSceneManifestMessage['manifest'];
+    camera?: CameraState;
+    collisionMeshSrc?: string | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestStreamLayerMessage {
+    type: typeof LOAD_SCENE_MANIFEST_STREAM_LAYER;
+    manifestId: string;
+    layerIndex: number;
+    layer: LoadSceneManifestLayer;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestStreamFinishMessage {
+    type: typeof LOAD_SCENE_MANIFEST_STREAM_FINISH;
+    manifestId: string;
     requestId?: RequestId;
 }
 
@@ -191,6 +257,7 @@ interface GameModeMessage {
     objectiveIds?: string[];
     showHitboxes?: boolean;
     hideChrome?: boolean;
+    performanceMode?: unknown;
     camera?: CameraState;
 }
 
@@ -248,6 +315,11 @@ interface RenderWarmupMessage {
     frames?: number;
 }
 
+interface RoomWarmupModeMessage {
+    type: typeof ROOM_WARMUP_MODE;
+    background: boolean;
+}
+
 interface ViewerPerfResetMessage {
     type: typeof VIEWER_PERF_RESET;
 }
@@ -260,6 +332,36 @@ interface CollisionDebugBundleGetMessage {
 interface MultiplayerPlayersMessage {
     type: typeof MULTIPLAYER_PLAYERS;
     players: MultiplayerPlayer[];
+}
+
+interface MultiplayerAvatarPreloadMessage {
+    type: typeof MULTIPLAYER_AVATAR_PRELOAD;
+    player: MultiplayerPlayer;
+}
+
+type ScreenCornerPoint = { x: number; y: number; z: number };
+
+interface ScreenSurfaceMessage {
+    type: typeof SCREEN_SURFACE;
+    corners: { topLeft: ScreenCornerPoint; topRight: ScreenCornerPoint; bottomLeft: ScreenCornerPoint } | null;
+}
+
+interface ScreenFrameMessage {
+    type: typeof SCREEN_FRAME;
+    bitmap?: ImageBitmap;
+    data?: ArrayBuffer | ArrayBufferView;
+    mimeType?: string;
+}
+
+interface ScreenClearMessage {
+    type: typeof SCREEN_CLEAR;
+}
+
+interface RaycastMessage {
+    type: typeof RAYCAST;
+    x: number;
+    y: number;
+    requestId?: string | number;
 }
 
 const hasOptionalRequestId = (data: any) => (
@@ -299,6 +401,65 @@ const isLoadFileMessage = (data: any): data is LoadFileMessage => {
         data.type === LOAD_FILE &&
         typeof data.filename === 'string' &&
         (data.data === undefined || data.data instanceof ArrayBuffer) &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestMessage = (data: any): data is LoadSceneManifestMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST &&
+        data.manifest &&
+        typeof data.manifest === 'object' &&
+        typeof data.manifest.id === 'string' &&
+        Array.isArray(data.manifest.layers) &&
+        data.manifest.layers.every((layer: any) => (
+            layer &&
+            typeof layer === 'object' &&
+            typeof layer.id === 'string' &&
+            typeof layer.filename === 'string' &&
+            (layer.data === undefined || layer.data instanceof ArrayBuffer)
+        )) &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestStreamStartMessage = (data: any): data is LoadSceneManifestStreamStartMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST_STREAM_START &&
+        data.manifest &&
+        typeof data.manifest === 'object' &&
+        typeof data.manifest.id === 'string' &&
+        Array.isArray(data.manifest.layers) &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestStreamLayerMessage = (data: any): data is LoadSceneManifestStreamLayerMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST_STREAM_LAYER &&
+        typeof data.manifestId === 'string' &&
+        typeof data.layerIndex === 'number' &&
+        data.layer &&
+        typeof data.layer === 'object' &&
+        typeof data.layer.id === 'string' &&
+        typeof data.layer.filename === 'string' &&
+        data.layer.data instanceof ArrayBuffer &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestStreamFinishMessage = (data: any): data is LoadSceneManifestStreamFinishMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST_STREAM_FINISH &&
+        typeof data.manifestId === 'string' &&
         hasOptionalRequestId(data)
     );
 };
@@ -459,6 +620,10 @@ const isRenderWarmupMessage = (data: any): data is RenderWarmupMessage => {
     return data && typeof data === 'object' && data.type === RENDER_WARMUP && (data.frames === undefined || typeof data.frames === 'number');
 };
 
+const isRoomWarmupModeMessage = (data: any): data is RoomWarmupModeMessage => {
+    return data && typeof data === 'object' && data.type === ROOM_WARMUP_MODE && typeof data.background === 'boolean';
+};
+
 const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => {
     return data && typeof data === 'object' && data.type === VIEWER_PERF_RESET;
 };
@@ -467,22 +632,113 @@ const isCollisionDebugBundleGetMessage = (data: any): data is CollisionDebugBund
     return data && typeof data === 'object' && data.type === COLLISION_DEBUG_BUNDLE_GET && hasOptionalRequestId(data);
 };
 
+const isMultiplayerPlayer = (player: any): player is MultiplayerPlayer => (
+    player &&
+    typeof player === 'object' &&
+    typeof player.id === 'string' &&
+    typeof player.label === 'string' &&
+    (player.color === undefined || typeof player.color === 'string') &&
+    (player.avatarId === undefined || typeof player.avatarId === 'string') &&
+    (player.avatarName === undefined || typeof player.avatarName === 'string') &&
+    (player.avatarUrl === undefined || typeof player.avatarUrl === 'string') &&
+    isVec3Tuple(player.position) &&
+    (player.target === undefined || isVec3Tuple(player.target)) &&
+    (player.speaking === undefined || typeof player.speaking === 'boolean') &&
+    (player.level === undefined || typeof player.level === 'number')
+);
+
 const isMultiplayerPlayersMessage = (data: any): data is MultiplayerPlayersMessage => {
     return (
         data &&
         typeof data === 'object' &&
         data.type === MULTIPLAYER_PLAYERS &&
         Array.isArray(data.players) &&
-        data.players.every((player: any) => (
-            player &&
-            typeof player === 'object' &&
-            typeof player.id === 'string' &&
-            typeof player.label === 'string' &&
-            (player.color === undefined || typeof player.color === 'string') &&
-            isVec3Tuple(player.position) &&
-            (player.target === undefined || isVec3Tuple(player.target))
-        ))
+        data.players.every(isMultiplayerPlayer)
     );
+};
+
+const isMultiplayerAvatarPreloadMessage = (data: any): data is MultiplayerAvatarPreloadMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === MULTIPLAYER_AVATAR_PRELOAD &&
+        isMultiplayerPlayer(data.player)
+    );
+};
+
+const isScreenCornerPoint = (value: any): value is ScreenCornerPoint => (
+    value &&
+    typeof value === 'object' &&
+    typeof value.x === 'number' &&
+    typeof value.y === 'number' &&
+    typeof value.z === 'number'
+);
+
+const isScreenSurfaceMessage = (data: any): data is ScreenSurfaceMessage => (
+    data &&
+    typeof data === 'object' &&
+    data.type === SCREEN_SURFACE &&
+    (
+        data.corners === null ||
+        (
+            data.corners &&
+            isScreenCornerPoint(data.corners.topLeft) &&
+            isScreenCornerPoint(data.corners.topRight) &&
+            isScreenCornerPoint(data.corners.bottomLeft)
+        )
+    )
+);
+
+const isScreenFrameMessage = (data: any): data is ScreenFrameMessage => (
+    data &&
+    typeof data === 'object' &&
+    data.type === SCREEN_FRAME &&
+    (
+        (typeof ImageBitmap !== 'undefined' && data.bitmap instanceof ImageBitmap) ||
+        data.data instanceof ArrayBuffer ||
+        ArrayBuffer.isView(data.data)
+    )
+);
+
+const screenFrameBlobPart = (data: ArrayBuffer | ArrayBufferView): BlobPart => {
+    if (data instanceof ArrayBuffer) {
+        return data;
+    }
+
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    return copy;
+};
+
+const isScreenClearMessage = (data: any): data is ScreenClearMessage => (
+    data && typeof data === 'object' && data.type === SCREEN_CLEAR
+);
+
+const isRaycastMessage = (data: any): data is RaycastMessage => (
+    data && typeof data === 'object' && data.type === RAYCAST && typeof data.x === 'number' && typeof data.y === 'number'
+);
+
+// Raycast normalized screen coords against the splat, returning the world hit
+// point. Tries a small ring of nearby pixels since splats are sparse and an
+// exact click can fall between gaussians.
+const raycastWorldPoint = async (nx: number, ny: number) => {
+    const scene = window.scene as any;
+    const camera = scene?.camera;
+    const canvas = scene?.canvas as HTMLCanvasElement | undefined;
+    if (!camera || !canvas) return null;
+
+    const width = Math.max(1, canvas.clientWidth);
+    const height = Math.max(1, canvas.clientHeight);
+    const offsets = [[0, 0], [6, 0], [-6, 0], [0, 6], [0, -6], [10, 10], [-10, 10], [10, -10], [-10, -10]];
+    for (const [ox, oy] of offsets) {
+        const x = Math.min(1, Math.max(0, nx + ox / width));
+        const y = Math.min(1, Math.max(0, ny + oy / height));
+        const hit = await camera.intersect(x, y);
+        if (hit?.position) {
+            return { x: hit.position.x, y: hit.position.y, z: hit.position.z };
+        }
+    }
+    return null;
 };
 
 const normalizeOrigin = (value: string, base: string) => new URL(value, base).origin;
@@ -558,13 +814,18 @@ const cameraStateFromAnnotation = (annotation: SemanticAnnotation): CameraState 
     ortho: annotation.source.camera.ortho
 });
 
-const applyTransformState = (events: Events, transform?: PresetTransform) => {
+const applyTransformState = (
+    events: Events,
+    transform?: PresetTransform,
+    targetSplat?: any,
+    options: { forceRender?: boolean } = {}
+) => {
     if (!transform) {
         return;
     }
 
     const splats = events.invoke('scene.splats') as Array<any>;
-    const splat = splats?.[0];
+    const splat = targetSplat ?? splats?.[0];
     if (!splat) {
         return;
     }
@@ -586,9 +847,64 @@ const applyTransformState = (events: Events, transform?: PresetTransform) => {
     }
 
     const scene = window.scene as any;
-    if (scene) {
+    if (scene && options.forceRender !== false) {
         scene.forceRender = true;
     }
+};
+
+const applyDocTransformState = (
+    splat: any,
+    docTransform?: Record<string, unknown>,
+    options: { forceRender?: boolean } = {}
+) => {
+    if (!docTransform || typeof splat?.docDeserialize !== 'function') {
+        return false;
+    }
+
+    splat.docDeserialize(docTransform);
+    const scene = window.scene as any;
+    if (scene && options.forceRender !== false) {
+        scene.forceRender = true;
+    }
+    return true;
+};
+
+const importSplatFile = async (events: Events, filename: string, data: ArrayBuffer) => {
+    const splatsBefore = events.invoke('scene.splats') as Array<any>;
+    const beforeCount = splatsBefore?.length ?? 0;
+    const file = new File([data], filename);
+    const imported = await events.invoke('import', [{
+        filename: file.name,
+        contents: file
+    }]) as unknown;
+    if (Array.isArray(imported) && imported[0]) {
+        return imported[0];
+    }
+
+    const splatsAfter = events.invoke('scene.splats') as Array<any>;
+    return splatsAfter?.[beforeCount] ?? splatsAfter?.[splatsAfter.length - 1] ?? null;
+};
+
+const importSceneManifestLayer = async (
+    events: Events,
+    layer: LoadSceneManifestLayer,
+    options: { forceRender?: boolean } = {}
+) => {
+    if (!layer.data) {
+        throw new Error(`Scene layer '${layer.label ?? layer.id}' did not include data.`);
+    }
+
+    const importedSplat = await importSplatFile(events, layer.filename, layer.data);
+    if (!importedSplat) {
+        throw new Error(`Scene layer '${layer.label ?? layer.id}' did not import.`);
+    }
+
+    const usedDocTransform = applyDocTransformState(importedSplat, layer.docTransform, options);
+    if (!usedDocTransform) {
+        applyTransformState(events, layer.transform, importedSplat, options);
+    }
+
+    return usedDocTransform;
 };
 
 const collisionMeshAssetVersion = '20260605-raw-mesh-v1';
@@ -733,6 +1049,22 @@ const LONG_TASK_REPORT_MS = 5000;
 const POSTRENDER_SPIKE_GAP_MS = 120;
 const POSTRENDER_SPIKE_REPORT_MS = 1000;
 const GAME_MODE_ACTIVE_RENDER_IDLE_MS = 320;
+const POINTER_LOOK_ACTIVE_RENDER_MS = 900;
+const ROOM_WARMUP_BACKGROUND_PIXEL_SCALE = 2;
+const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
+
+type ActiveSceneManifestStream = {
+    camera?: CameraState;
+    finished: boolean;
+    importedCount: number;
+    manifest: LoadSceneManifestMessage['manifest'];
+    nextLayerIndex: number;
+    origin: string;
+    pendingLayers: Map<number, LoadSceneManifestLayer>;
+    processing: boolean;
+    requestId?: RequestId;
+    source: Window;
+};
 
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -749,6 +1081,7 @@ const registerIframeApi = (events: Events) => {
     let pendingPointerLookFrame: number | null = null;
     let pendingPointerLookSource: Window | null = null;
     let pendingPointerLookOrigin = '*';
+    let latestScreenFrameId = 0;
     let perfFrameCount = 0;
     let perfTotalGapMs = 0;
     let perfMaxGapMs = 0;
@@ -774,6 +1107,10 @@ const registerIframeApi = (events: Events) => {
     let activeRenderFrame: number | null = null;
     let activeRenderUntil = 0;
     let activeRenderWalkHeld = false;
+    let roomWarmupBackground = false;
+    let roomWarmupPreviousPixelScale: number | null = null;
+    let roomWarmupPreviousMaxPixelRatio: number | null = null;
+    let meetingPerformanceMode = false;
     let activeRenderTickCount = 0;
     let activeRenderTotalGapMs = 0;
     let activeRenderMaxGapMs = 0;
@@ -783,6 +1120,7 @@ const registerIframeApi = (events: Events) => {
     let longTaskMaxMs = 0;
     let longTaskSamples: Array<Record<string, unknown>> = [];
     let lastLongTaskReportAt = performance.now();
+    let activeSceneManifestStream: ActiveSceneManifestStream | null = null;
 
     const resetLongTaskStats = () => {
         longTaskCount = 0;
@@ -816,9 +1154,9 @@ const registerIframeApi = (events: Events) => {
         resetLongTaskStats();
     };
 
-    const startRenderWarmup = (frames?: number) => {
+    const startRenderWarmup = (frames?: number, options: { allowBackground?: boolean } = {}) => {
         const scene = window.scene as any;
-        if (!scene) {
+        if (!scene || (roomWarmupBackground && !options.allowBackground)) {
             return;
         }
 
@@ -827,13 +1165,146 @@ const registerIframeApi = (events: Events) => {
             renderWarmupFrame = null;
         }
 
-        let remaining = Math.max(1, Math.min(240, Math.round(frames ?? 30)));
+        const maxFrames = roomWarmupBackground ? 3 : 240;
+        let remaining = Math.max(1, Math.min(maxFrames, Math.round(frames ?? 30)));
         const tick = () => {
             scene.forceRender = true;
             remaining -= 1;
             renderWarmupFrame = remaining > 0 ? window.requestAnimationFrame(tick) : null;
         };
         tick();
+    };
+
+    const postSceneManifestLoaded = (
+        source: Window,
+        origin: string,
+        error: string | undefined,
+        rendered: boolean,
+        requestId?: RequestId
+    ) => {
+        source.postMessage({
+            type: SCENE_LOADED,
+            result: {
+                empty: events.invoke('scene.empty') as boolean,
+                semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer,
+                error: error ?? (rendered ? undefined : 'Scene imported, but render confirmation timed out')
+            },
+            ...requestIdPayload(requestId)
+        }, origin);
+    };
+
+    const failSceneManifestLoad = (
+        source: Window,
+        origin: string,
+        diagnosticPrefix: string,
+        error: string,
+        requestId?: RequestId
+    ) => {
+        console.error(`[iframe-api] ${diagnosticPrefix} failed:`, error);
+        events.fire('toast', error, 'error');
+        postDiagnostic(source, origin, `${diagnosticPrefix}-error`, { error }, requestId);
+        postSceneManifestLoaded(source, origin, error, false, requestId);
+    };
+
+    const finalizeSceneManifestLoad = async (
+        source: Window,
+        origin: string,
+        diagnosticPrefix: string,
+        manifest: LoadSceneManifestMessage['manifest'],
+        importedCount: number,
+        camera?: CameraState,
+        requestId?: RequestId
+    ) => {
+        let rendered = false;
+        try {
+            postDiagnostic(source, origin, `${diagnosticPrefix}-imported`, {
+                id: manifest.id,
+                importedCount,
+                empty: events.invoke('scene.empty') as boolean
+            }, requestId);
+
+            events.fire('walk.collisionMeshClear', {
+                reason: 'manifest-disabled',
+                requestId: requestId ?? null
+            });
+            applyCameraState(events, camera);
+            startRenderWarmup(roomWarmupBackground ? 3 : 8, { allowBackground: true });
+            rendered = await waitForPostRender(events);
+            postDiagnostic(source, origin, `${diagnosticPrefix}-postrender`, { rendered }, requestId);
+            postSceneManifestLoaded(source, origin, undefined, rendered, requestId);
+        } catch (err) {
+            failSceneManifestLoad(
+                source,
+                origin,
+                diagnosticPrefix,
+                err instanceof Error ? err.message : 'Manifest import failed',
+                requestId
+            );
+        }
+    };
+
+    const processSceneManifestStream = async () => {
+        const stream = activeSceneManifestStream;
+        if (!stream || stream.processing) {
+            return;
+        }
+
+        stream.processing = true;
+        try {
+            while (activeSceneManifestStream === stream) {
+                const layer = stream.pendingLayers.get(stream.nextLayerIndex);
+                if (!layer) {
+                    break;
+                }
+
+                stream.pendingLayers.delete(stream.nextLayerIndex);
+                const layerIndex = stream.nextLayerIndex;
+                const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
+                stream.importedCount += 1;
+                stream.nextLayerIndex += 1;
+                postDiagnostic(stream.source, stream.origin, 'load-scene-manifest-stream-layer-imported', {
+                    id: layer.id,
+                    label: layer.label ?? null,
+                    filename: layer.filename,
+                    byteLength: layer.data?.byteLength ?? layer.byteLength ?? null,
+                    layerIndex,
+                    layerCount: stream.manifest.layers.length,
+                    usedDocTransform
+                }, stream.requestId);
+            }
+
+            if (
+                activeSceneManifestStream === stream &&
+                stream.finished &&
+                stream.importedCount >= stream.manifest.layers.length
+            ) {
+                activeSceneManifestStream = null;
+                await finalizeSceneManifestLoad(
+                    stream.source,
+                    stream.origin,
+                    'load-scene-manifest-stream',
+                    stream.manifest,
+                    stream.importedCount,
+                    stream.camera,
+                    stream.requestId
+                );
+            }
+        } catch (err) {
+            if (activeSceneManifestStream === stream) {
+                activeSceneManifestStream = null;
+            }
+            failSceneManifestLoad(
+                stream.source,
+                stream.origin,
+                'load-scene-manifest-stream',
+                err instanceof Error ? err.message : 'Manifest stream import failed',
+                stream.requestId
+            );
+        } finally {
+            if (activeSceneManifestStream === stream) {
+                stream.processing = false;
+            }
+        }
     };
 
     events.on('scene.clear', () => {
@@ -895,7 +1366,7 @@ const registerIframeApi = (events: Events) => {
     };
 
     const scheduleActiveRender = (leaseMs = GAME_MODE_ACTIVE_RENDER_IDLE_MS) => {
-        if (!gameModeActive) {
+        if (!gameModeActive || roomWarmupBackground) {
             return;
         }
 
@@ -925,6 +1396,114 @@ const registerIframeApi = (events: Events) => {
             activeRenderFrame = window.requestAnimationFrame(tick);
         };
         tick();
+    };
+
+    const resetPointerLookState = () => {
+        pointerLookStats = emptyPointerLookStats();
+        pendingPointerLookDx = 0;
+        pendingPointerLookDy = 0;
+        pendingPointerLookSource = null;
+        pendingPointerLookOrigin = '*';
+        if (pendingPointerLookFrame !== null) {
+            window.cancelAnimationFrame(pendingPointerLookFrame);
+            pendingPointerLookFrame = null;
+        }
+    };
+
+    const isMeetingPerformanceMode = (message: GameModeMessage) => {
+        return typeof message.performanceMode === 'string' &&
+            message.performanceMode.trim().toLowerCase() === 'meeting';
+    };
+
+    const applyMeetingPerformanceMode = (enabled: boolean, source?: Window | null, origin = '*') => {
+        const scene = window.scene as any;
+        const graphicsDevice = scene?.app?.graphicsDevice;
+
+        if (enabled && !scene) {
+            postDiagnostic(source ?? window.parent, origin, 'meeting-performance-mode', {
+                enabled,
+                available: false
+            });
+            return;
+        }
+
+        const changed = meetingPerformanceMode !== enabled;
+        meetingPerformanceMode = enabled;
+
+        if (scene) {
+            scene.forceRender = true;
+        }
+
+        if (source) {
+            postDiagnostic(source, origin, 'meeting-performance-mode', {
+                enabled,
+                changed,
+                pixelScale: scene?.config?.camera?.pixelScale ?? null,
+                maxPixelRatio: graphicsDevice?.maxPixelRatio ?? null
+            });
+        }
+    };
+
+    const applyRoomWarmupMode = (background: boolean, source?: Window | null, origin = '*') => {
+        if (roomWarmupBackground === background) {
+            return;
+        }
+
+        roomWarmupBackground = background;
+        const scene = window.scene as any;
+        const graphicsDevice = scene?.app?.graphicsDevice;
+
+        if (background) {
+            if (renderWarmupFrame !== null) {
+                window.cancelAnimationFrame(renderWarmupFrame);
+                renderWarmupFrame = null;
+            }
+            stopActiveRender();
+            resetPointerLookState();
+        }
+
+        if (scene?.config?.camera) {
+            if (background) {
+                const previousPixelScale = roomWarmupPreviousPixelScale ?? scene.config.camera.pixelScale;
+                roomWarmupPreviousPixelScale = previousPixelScale;
+                scene.config.camera.pixelScale = Math.max(previousPixelScale, ROOM_WARMUP_BACKGROUND_PIXEL_SCALE);
+            } else if (roomWarmupPreviousPixelScale !== null) {
+                scene.config.camera.pixelScale = roomWarmupPreviousPixelScale;
+                roomWarmupPreviousPixelScale = null;
+            }
+        }
+
+        if (graphicsDevice) {
+            if (background) {
+                const previousMaxPixelRatio = roomWarmupPreviousMaxPixelRatio ?? graphicsDevice.maxPixelRatio;
+                roomWarmupPreviousMaxPixelRatio = previousMaxPixelRatio;
+                graphicsDevice.maxPixelRatio = Math.min(previousMaxPixelRatio, ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO);
+            } else if (roomWarmupPreviousMaxPixelRatio !== null) {
+                graphicsDevice.maxPixelRatio = roomWarmupPreviousMaxPixelRatio;
+                roomWarmupPreviousMaxPixelRatio = null;
+            }
+        }
+
+        if (!background && meetingPerformanceMode) {
+            applyMeetingPerformanceMode(true, source, origin);
+        }
+
+        if (scene) {
+            scene.forceRender = true;
+        }
+
+        events.fire('walk.warmupBackground', background);
+
+        if (!background) {
+            startRenderWarmup(8);
+            scheduleActiveRender(1200);
+        }
+
+        postDiagnostic(source ?? window.parent, origin, 'room-warmup-mode', {
+            background,
+            pixelScale: scene?.config?.camera?.pixelScale ?? null,
+            maxPixelRatio: graphicsDevice?.maxPixelRatio ?? null
+        });
     };
 
     if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
@@ -974,18 +1553,6 @@ const registerIframeApi = (events: Events) => {
         window.setInterval(() => flushLongTasks('interval'), LONG_TASK_REPORT_MS);
     }
 
-    const resetPointerLookState = () => {
-        pointerLookStats = emptyPointerLookStats();
-        pendingPointerLookDx = 0;
-        pendingPointerLookDy = 0;
-        pendingPointerLookSource = null;
-        pendingPointerLookOrigin = '*';
-        if (pendingPointerLookFrame !== null) {
-            window.cancelAnimationFrame(pendingPointerLookFrame);
-            pendingPointerLookFrame = null;
-        }
-    };
-
     const tickRafPerf = () => {
         const now = performance.now();
         if (rafLastFrameAt !== null) {
@@ -1001,6 +1568,10 @@ const registerIframeApi = (events: Events) => {
         }
         rafLastFrameAt = now;
         rafFrameCount += 1;
+        if (roomWarmupBackground) {
+            window.setTimeout(() => window.requestAnimationFrame(tickRafPerf), 750);
+            return;
+        }
         window.requestAnimationFrame(tickRafPerf);
     };
     window.requestAnimationFrame(tickRafPerf);
@@ -1024,6 +1595,7 @@ const registerIframeApi = (events: Events) => {
         lastGameModeSignature = '';
         events.fire('walk.embeddedControls', false);
         resetPointerLookState();
+        applyMeetingPerformanceMode(false);
         restoreGameModeTool();
         events.fire('semanticAnnotations.interactionMode', 'edit');
         document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
@@ -1067,13 +1639,13 @@ const registerIframeApi = (events: Events) => {
         const dy = pendingPointerLookDy;
         pendingPointerLookDx = 0;
         pendingPointerLookDy = 0;
-        if (dx === 0 && dy === 0) {
+        if (roomWarmupBackground || (dx === 0 && dy === 0)) {
             return;
         }
 
         const applyStart = performance.now();
         events.fire('walk.pointerLook', dx, dy);
-        scheduleActiveRender();
+        scheduleActiveRender(POINTER_LOOK_ACTIVE_RENDER_MS);
         const applyMs = performance.now() - applyStart;
         pointerLookStats.totalApplyMs += applyMs;
         pointerLookStats.maxApplyMs = Math.max(pointerLookStats.maxApplyMs, applyMs);
@@ -1334,8 +1906,14 @@ const registerIframeApi = (events: Events) => {
                     walkSaveHeight: true,
                     thumbnailError: true,
                     multiplayerPlayers: true,
+                    screenSurface: true,
+                    screenFrameBytes: true,
+                    raycast: true,
                     collisionDebugBundle: true,
-                    version: 5
+                    roomWarmupMode: true,
+                    sceneManifest: true,
+                    sceneManifestStream: true,
+                    version: 10
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1351,6 +1929,56 @@ const registerIframeApi = (events: Events) => {
 
         if (isMultiplayerPlayersMessage(event.data)) {
             events.fire('multiplayer.players', event.data.players);
+            return;
+        }
+
+        if (isMultiplayerAvatarPreloadMessage(event.data)) {
+            events.fire('multiplayer.avatarPreload', event.data.player);
+            return;
+        }
+
+        if (isScreenSurfaceMessage(event.data)) {
+            events.fire('screen.surface', event.data.corners);
+            return;
+        }
+
+        if (isScreenFrameMessage(event.data)) {
+            const frameId = ++latestScreenFrameId;
+            if (event.data.bitmap) {
+                events.fire('screen.frame', event.data.bitmap);
+            } else if (event.data.data) {
+                try {
+                    const blob = new Blob([screenFrameBlobPart(event.data.data)], { type: event.data.mimeType || 'image/jpeg' });
+                    const bitmap = await createImageBitmap(blob);
+                    if (frameId === latestScreenFrameId) {
+                        events.fire('screen.frame', bitmap);
+                    } else {
+                        bitmap.close?.();
+                    }
+                } catch (error) {
+                    postDiagnostic(source, event.origin, 'screen-frame-decode-failed', {
+                        error: error instanceof Error ? error.message : 'screen frame decode failed'
+                    });
+                }
+            }
+            return;
+        }
+
+        if (isScreenClearMessage(event.data)) {
+            latestScreenFrameId += 1;
+            events.fire('screen.clear');
+            return;
+        }
+
+        if (isRaycastMessage(event.data)) {
+            const requestId = event.data.requestId;
+            const position = await raycastWorldPoint(event.data.x, event.data.y);
+            source.postMessage({ type: RAYCAST_RESULT, requestId, position }, event.origin);
+            return;
+        }
+
+        if (isRoomWarmupModeMessage(event.data)) {
+            applyRoomWarmupMode(event.data.background, source, event.origin);
             return;
         }
 
@@ -1394,6 +2022,10 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isPointerLookMessage(event.data)) {
+            if (roomWarmupBackground) {
+                resetPointerLookState();
+                return;
+            }
             const receivedAt = performance.now();
             if (pointerLookStats.lastAt !== null) {
                 const gapMs = receivedAt - pointerLookStats.lastAt;
@@ -1424,6 +2056,11 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isWalkInputMessage(event.data)) {
+            if (roomWarmupBackground) {
+                activeRenderWalkHeld = false;
+                events.fire('walk.input', {});
+                return;
+            }
             activeRenderWalkHeld = hasWalkInput(event.data.keys);
             events.fire('walk.input', event.data.keys);
             scheduleActiveRender(activeRenderWalkHeld ? 1000 : GAME_MODE_ACTIVE_RENDER_IDLE_MS);
@@ -1505,6 +2142,7 @@ const registerIframeApi = (events: Events) => {
         }
 
         if (isGameModeMessage(event.data)) {
+            const meetingPerformance = event.data.enabled && isMeetingPerformanceMode(event.data);
             if (event.data.enabled) {
                 applyCameraState(events, event.data.camera);
             }
@@ -1512,12 +2150,15 @@ const registerIframeApi = (events: Events) => {
                 enabled: event.data.enabled,
                 objectiveIds: event.data.objectiveIds ?? [],
                 showHitboxes: event.data.showHitboxes === true,
-                hideChrome: event.data.hideChrome !== false
+                hideChrome: event.data.hideChrome !== false,
+                performanceMode: meetingPerformance ? 'meeting' : null
             });
             if (gameModeSignature === lastGameModeSignature) {
+                applyMeetingPerformanceMode(meetingPerformance, source, event.origin);
                 postDiagnostic(source, event.origin, 'game-mode-skip', {
                     enabled: event.data.enabled,
                     objectiveCount: event.data.objectiveIds?.length ?? 0,
+                    performanceMode: meetingPerformance ? 'meeting' : null,
                     cameraReset: Boolean(event.data.camera)
                 });
                 return;
@@ -1529,13 +2170,17 @@ const registerIframeApi = (events: Events) => {
             events.fire('semanticAnnotations.showHitboxes', event.data.enabled && event.data.showHitboxes === true);
             document.body.classList.toggle('time-trial-game-mode', event.data.enabled && event.data.hideChrome !== false);
             setGameModeRenderChrome(event.data.enabled);
+            applyMeetingPerformanceMode(meetingPerformance, source, event.origin);
             postDiagnostic(source, event.origin, 'game-mode', {
                 enabled: event.data.enabled,
                 objectiveCount: event.data.objectiveIds?.length ?? 0,
                 showHitboxes: event.data.showHitboxes === true,
                 hideChrome: event.data.hideChrome !== false,
+                performanceMode: meetingPerformance ? 'meeting' : null,
                 renderOverlays: (window.scene as any)?.camera?.renderOverlays ?? null,
                 gizmoLayerEnabled: (window.scene as any)?.gizmoLayer?.enabled ?? null,
+                pixelScale: (window.scene as any)?.config?.camera?.pixelScale ?? null,
+                maxPixelRatio: (window.scene as any)?.app?.graphicsDevice?.maxPixelRatio ?? null,
                 cameraReset: Boolean(event.data.camera)
             });
             if (event.data.enabled) {
@@ -1592,7 +2237,127 @@ const registerIframeApi = (events: Events) => {
             }, event.origin);
         }
 
+        if (isLoadSceneManifestMessage(event.data)) {
+            activeSceneManifestStream = null;
+            resetGameModeState();
+            events.fire('multiplayer.players', []);
+            const layers = event.data.manifest.layers;
+            postDiagnostic(source, event.origin, 'load-scene-manifest-start', {
+                id: event.data.manifest.id,
+                layerCount: layers.length,
+                totalBytes: event.data.manifest.totalBytes ?? layers.reduce((total, layer) => total + (layer.data?.byteLength ?? layer.byteLength ?? 0), 0),
+                strategy: event.data.manifest.strategy ?? null
+            }, event.data.requestId);
+            try {
+                events.fire('scene.clear');
+                activeCollisionMeshSrc = null;
+                let importedCount = 0;
+                for (const [layerIndex, layer] of layers.entries()) {
+                    const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
+                    importedCount += 1;
+                    postDiagnostic(source, event.origin, 'load-scene-manifest-layer-imported', {
+                        id: layer.id,
+                        label: layer.label ?? null,
+                        filename: layer.filename,
+                        byteLength: layer.data.byteLength,
+                        layerIndex,
+                        layerCount: layers.length,
+                        usedDocTransform
+                    }, event.data.requestId);
+                }
+
+                await finalizeSceneManifestLoad(
+                    source,
+                    event.origin,
+                    'load-scene-manifest',
+                    event.data.manifest,
+                    importedCount,
+                    event.data.camera,
+                    event.data.requestId
+                );
+            } catch (err) {
+                failSceneManifestLoad(
+                    source,
+                    event.origin,
+                    'load-scene-manifest',
+                    err instanceof Error ? err.message : 'Manifest import failed',
+                    event.data.requestId
+                );
+            }
+            return;
+        }
+
+        if (isLoadSceneManifestStreamStartMessage(event.data)) {
+            resetGameModeState();
+            events.fire('multiplayer.players', []);
+            events.fire('scene.clear');
+            activeCollisionMeshSrc = null;
+            activeSceneManifestStream = {
+                camera: event.data.camera,
+                finished: false,
+                importedCount: 0,
+                manifest: event.data.manifest,
+                nextLayerIndex: 0,
+                origin: event.origin,
+                pendingLayers: new Map(),
+                processing: false,
+                requestId: event.data.requestId,
+                source
+            };
+            postDiagnostic(source, event.origin, 'load-scene-manifest-stream-start', {
+                id: event.data.manifest.id,
+                layerCount: event.data.manifest.layers.length,
+                totalBytes: event.data.manifest.totalBytes ?? event.data.manifest.layers.reduce((total, layer) => total + (layer.byteLength ?? 0), 0),
+                strategy: event.data.manifest.strategy ?? null
+            }, event.data.requestId);
+            return;
+        }
+
+        if (isLoadSceneManifestStreamLayerMessage(event.data)) {
+            const stream = activeSceneManifestStream;
+            if (!stream || stream.manifest.id !== event.data.manifestId) {
+                postDiagnostic(source, event.origin, 'load-scene-manifest-stream-layer-miss', {
+                    manifestId: event.data.manifestId,
+                    layerIndex: event.data.layerIndex
+                }, event.data.requestId);
+                return;
+            }
+
+            stream.pendingLayers.set(event.data.layerIndex, event.data.layer);
+            postDiagnostic(source, event.origin, 'load-scene-manifest-stream-layer-received', {
+                id: event.data.layer.id,
+                label: event.data.layer.label ?? null,
+                filename: event.data.layer.filename,
+                byteLength: event.data.layer.data.byteLength,
+                layerIndex: event.data.layerIndex,
+                layerCount: stream.manifest.layers.length
+            }, stream.requestId);
+            void processSceneManifestStream();
+            return;
+        }
+
+        if (isLoadSceneManifestStreamFinishMessage(event.data)) {
+            const stream = activeSceneManifestStream;
+            if (!stream || stream.manifest.id !== event.data.manifestId) {
+                postDiagnostic(source, event.origin, 'load-scene-manifest-stream-finish-miss', {
+                    manifestId: event.data.manifestId
+                }, event.data.requestId);
+                return;
+            }
+
+            stream.finished = true;
+            postDiagnostic(source, event.origin, 'load-scene-manifest-stream-finish', {
+                id: stream.manifest.id,
+                importedCount: stream.importedCount,
+                layerCount: stream.manifest.layers.length,
+                pendingLayers: stream.pendingLayers.size
+            }, stream.requestId);
+            void processSceneManifestStream();
+            return;
+        }
+
         if (isLoadFileMessage(event.data)) {
+            activeSceneManifestStream = null;
             let error: string | undefined;
             let rendered = false;
             resetGameModeState();
@@ -1605,11 +2370,7 @@ const registerIframeApi = (events: Events) => {
                 const hasSceneData = Boolean(event.data.data);
                 if (hasSceneData && event.data.data) {
                     events.fire('scene.clear');
-                    const file = new File([event.data.data], event.data.filename);
-                    await events.invoke('import', [{
-                        filename: file.name,
-                        contents: file
-                    }]);
+                    await importSplatFile(events, event.data.filename, event.data.data);
                     postDiagnostic(source, event.origin, 'load-file-imported', {
                         filename: event.data.filename,
                         empty: events.invoke('scene.empty') as boolean
@@ -1637,6 +2398,7 @@ const registerIframeApi = (events: Events) => {
                     });
                 }
                 applyCameraState(events, event.data.camera);
+                startRenderWarmup(roomWarmupBackground ? 3 : 8, { allowBackground: true });
                 rendered = await waitForPostRender(events);
                 postDiagnostic(source, event.origin, 'load-file-postrender', { rendered }, event.data.requestId);
             } catch (err) {

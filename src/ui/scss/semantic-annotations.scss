@@ -254,8 +254,11 @@
     opacity: 0.72;
 }
 
-.multiplayer-avatar-marker.has-3d-avatar,
 .multiplayer-avatar-marker.awaiting-3d-avatar {
+    visibility: hidden;
+}
+
+.multiplayer-avatar-marker.has-3d-avatar {
     width: 1px;
     height: 1px;
     filter: none;
@@ -268,7 +271,7 @@
     }
 
     .multiplayer-avatar-label {
-        top: -28px;
+        top: 0;
         bottom: auto;
         width: max-content;
         max-width: 96px;
@@ -276,7 +279,7 @@
         height: 18px;
         padding: 0 7px;
         font-size: 10px;
-        transform: translateX(-50%);
+        transform: translate(-50%, -100%);
     }
 }
 

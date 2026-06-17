@@ -37,8 +37,14 @@ type MultiplayerOverlayPlayer = {
     id: string;
     label: string;
     color?: string;
+    avatarId?: string;
+    avatarName?: string;
+    avatarUrl?: string;
     position: [number, number, number];
     target?: [number, number, number];
+    speaking?: boolean;
+    level?: number;
+    hidden?: boolean;
 };
 
 type MultiplayerHeightCalibration = {
@@ -48,15 +54,41 @@ type MultiplayerHeightCalibration = {
 
 type MultiplayerAvatarAnimation = 'idle' | 'run';
 
+type MultiplayerMorph = {
+    getWeight?: (key: number | string) => number | undefined;
+    setWeight: (key: number | string, weight: number) => void;
+    _weightMap?: Map<string, number>;
+};
+
 type MultiplayerAvatarInstance = {
+    avatarUrl: string;
+    avatarIsVrm: boolean;
     entity: Entity;
     rig: MultiplayerAvatarRig | null;
     usesProceduralRig: boolean;
+    proceduralRigSettled: boolean;
     state: MultiplayerAvatarAnimation;
     smoothedPlanarSpeed: number;
     phase: number;
     lastPosition: Vec3;
+    renderPosition: Vec3;
+    lastTargetPosition: Vec3;
+    targetVelocity: Vec3;
     lastUpdateMs: number;
+    lastTargetUpdateMs: number;
+    renderInitialized: boolean;
+    renderYawDeg: number | null;
+    mouthMorphKeys: Array<{ morph: MultiplayerMorph; keys: Array<number | string> }>;
+    lastMouthWeight: number;
+    speaking: boolean;
+    voiceLevel: number;
+    smoothedVoiceLevel: number;
+};
+
+type MultiplayerAvatarPreloadDetails = {
+    reason?: string;
+    count?: number;
+    forceRetry?: boolean;
 };
 
 type MultiplayerAvatarRigBone = {
@@ -65,6 +97,8 @@ type MultiplayerAvatarRigBone = {
 };
 
 type MultiplayerAvatarRig = {
+    leftShoulder?: MultiplayerAvatarRigBone;
+    rightShoulder?: MultiplayerAvatarRigBone;
     leftArm?: MultiplayerAvatarRigBone;
     rightArm?: MultiplayerAvatarRigBone;
     leftLeg?: MultiplayerAvatarRigBone;
@@ -124,13 +158,36 @@ const MULTIPLAYER_MIN_HEIGHT = 0.95;
 const MULTIPLAYER_MAX_HEIGHT = 2.35;
 const MULTIPLAYER_RAYCAST_MAX_SAMPLES = 260_000;
 const MULTIPLAYER_GROUND_RADII = [0.04, 0.08, 0.14, 0.22, 0.35, 0.52];
-const MULTIPLAYER_AVATAR_URL = '/static/dev-assets/kenney/kenney-avatar-animated.glb';
 const MULTIPLAYER_AVATAR_SOURCE_HEIGHT = 3.765;
 const MULTIPLAYER_AVATAR_RUN_START_SPEED = 0.12;
 const MULTIPLAYER_AVATAR_RUN_STOP_SPEED = 0.05;
 const MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS = 0.08;
+const MULTIPLAYER_AVATAR_POSITION_SMOOTHING_SECONDS = 0.045;
+const MULTIPLAYER_AVATAR_PREDICTION_SECONDS = 0.08;
+const MULTIPLAYER_AVATAR_MAX_PREDICTION_DISTANCE = 0.28;
+const MULTIPLAYER_AVATAR_SNAP_DISTANCE = 1.2;
+const MULTIPLAYER_AVATAR_YAW_SMOOTHING_SECONDS = 0.055;
+const MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS = 0.045;
+const MULTIPLAYER_AVATAR_MOUTH_RELEASE_SECONDS = 0.11;
 const MULTIPLAYER_AVATAR_TRANSITION_SECONDS = 0.12;
 const MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES = 0;
+const MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES = 0;
+const MULTIPLAYER_VRM_ARM_DOWN_DEGREES = 78;
+const MULTIPLAYER_AVATAR_IDLE_ARM_SWING_DEGREES = 1.5;
+const MULTIPLAYER_AVATAR_RUN_ARM_SWING_DEGREES = 24;
+const MULTIPLAYER_VRM_MOUTH_MORPH_NAMES = [
+    'A', 'I', 'U', 'E', 'O',
+    'aa', 'ih', 'ou', 'oh',
+    'vrc_v_aa', 'vrc_v_ee', 'vrc_v_ih', 'vrc_v_oh', 'vrc_v_ou',
+    'mouthOpen', 'MouthOpen'
+];
+const MULTIPLAYER_VRM_MOUTH_MORPH_FALLBACK_INDICES = [0, 1, 2, 3, 4];
+// Render VRM avatars at a consistent adult height regardless of the scene's
+// (often short) eye-to-floor calibration.
+const MULTIPLAYER_VRM_TARGET_HEIGHT = 1.7;
+const MULTIPLAYER_VRM_EYE_HEIGHT = 1.48;
+const MULTIPLAYER_AVATAR_LABEL_CLEARANCE = 0.24;
+const MULTIPLAYER_AVATAR_RETRY_MS = 10_000;
 
 const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, reject) => {
     const image = new Image();
@@ -138,6 +195,12 @@ const loadImage = (src: string) => new Promise<HTMLImageElement>((resolve, rejec
     image.onerror = () => reject(new Error('Image failed to load'));
     image.src = src;
 });
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+const smoothAngleDegrees = (current: number, target: number, blend: number) => {
+    const delta = ((target - current + 540) % 360) - 180;
+    return current + delta * blend;
+};
 
 const selectedMaskPixels = async (src: string, maxSamples = 256): Promise<MaskPixels> => {
     const image = await loadImage(src);
@@ -324,9 +387,8 @@ class SemanticAnnotationOverlay {
     private readonly screenPos = new Vec3();
     private readonly markerDistanceDelta = new Vec3();
     private readonly multiplayerWorld = new Vec3();
-    private readonly multiplayerFeetWorld = new Vec3();
-    private readonly multiplayerFeetScreenPos = new Vec3();
-    private readonly multiplayerDelta = new Vec3();
+    private readonly multiplayerLabelWorld = new Vec3();
+    private readonly multiplayerLabelScreenPos = new Vec3();
     private readonly multiplayerTargetWorld = new Vec3();
     private readonly multiplayerTargetScreenPos = new Vec3();
     private readonly captureViewMatrix = new Mat4();
@@ -336,12 +398,13 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerMarkers = new Map<string, HTMLDivElement>();
     private readonly multiplayerHeightCalibrations = new Map<string, MultiplayerHeightCalibration>();
     private readonly multiplayerAvatarInstances = new Map<string, MultiplayerAvatarInstance>();
+    private readonly multiplayerAvatarAssets = new Map<string, Asset>();
+    private readonly multiplayerAvatarLoadingUrls = new Set<string>();
+    private readonly multiplayerAvatarFailedAt = new Map<string, number>();
+    private readonly multiplayerAvatarLoadStartedAt = new Map<string, number>();
+    private readonly multiplayerAvatarRetryTimers = new Map<string, number>();
     private annotations: SemanticAnnotation[] = [];
     private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
-    private multiplayerAvatarAsset: Asset | null = null;
-    private multiplayerAvatarLoading = false;
-    private multiplayerAvatarFailed = false;
-    private multiplayerAvatarLoadStartedAt: number | null = null;
     private interactionMode: 'edit' | 'game' = 'edit';
     private activeGameTargetIds = new Set<string>();
     private foundAnnotationIds = new Set<string>();
@@ -352,6 +415,8 @@ class SemanticAnnotationOverlay {
     private lastClickCandidates: Array<Record<string, unknown>> = [];
     private sceneGeometryRevision = 0;
     private hitVolumeRebuildTimer: number | null = null;
+    private roomWarmupBackground = false;
+    private lastMultiplayerStatsDiagnosticAt = 0;
 
     constructor(private readonly events: Events, private readonly scene: Scene, parent: HTMLElement) {
         this.container = document.createElement('div');
@@ -364,6 +429,7 @@ class SemanticAnnotationOverlay {
         events.on('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         events.on('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         events.on('walk.collisionDebug', this.onCollisionDebug, this);
+        events.on('walk.warmupBackground', this.setRoomWarmupBackground, this);
         events.on('multiplayer.players', this.setMultiplayerPlayers, this);
         events.on('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         events.on('scene.elementAdded', this.onSceneGeometryChanged, this);
@@ -387,6 +453,7 @@ class SemanticAnnotationOverlay {
         this.events.off('semanticAnnotations.foundTargets', this.setFoundTargets, this);
         this.events.off('semanticAnnotations.showHitboxes', this.setShowHitboxes, this);
         this.events.off('walk.collisionDebug', this.onCollisionDebug, this);
+        this.events.off('walk.warmupBackground', this.setRoomWarmupBackground, this);
         this.events.off('multiplayer.players', this.setMultiplayerPlayers, this);
         this.events.off('multiplayer.avatarPreload', this.preloadMultiplayerAvatarAsset, this);
         this.events.off('scene.elementAdded', this.onSceneGeometryChanged, this);
@@ -401,6 +468,10 @@ class SemanticAnnotationOverlay {
             window.clearTimeout(this.hitVolumeRebuildTimer);
             this.hitVolumeRebuildTimer = null;
         }
+        for (const timer of this.multiplayerAvatarRetryTimers.values()) {
+            window.clearTimeout(timer);
+        }
+        this.multiplayerAvatarRetryTimers.clear();
         this.container.parentElement?.removeEventListener('pointerdown', this.onPointerDown);
         this.container.parentElement?.removeEventListener('pointerup', this.onPointerUp);
         this.container.remove();
@@ -463,15 +534,54 @@ class SemanticAnnotationOverlay {
         if (mode !== 'game') {
             this.setShowHitboxes(false);
         } else {
-            this.preloadMultiplayerAvatarAsset({ reason: 'game-mode' });
+            this.preloadMultiplayerAvatarAsset(undefined, { reason: 'game-mode' });
         }
         this.syncMarkerClasses();
     }
 
-    private updateMultiplayerMarkerAvatarState(marker: HTMLDivElement, avatar: MultiplayerAvatarInstance | null = null) {
-        const expects3dAvatar = !this.multiplayerAvatarFailed;
+    private multiplayerAvatarUrl(player?: MultiplayerOverlayPlayer) {
+        const url = player?.avatarUrl?.trim();
+        return url || undefined;
+    }
+
+    private multiplayerAvatarUsesMeetingVrmProfile(
+        player: MultiplayerOverlayPlayer,
+        mouthMorphKeys: MultiplayerAvatarInstance['mouthMorphKeys']
+    ) {
+        return Boolean(player.avatarId && mouthMorphKeys.length);
+    }
+
+    private multiplayerAvatarRenderedHeight(instance: MultiplayerAvatarInstance, avatarWorldHeight: number) {
+        return instance.avatarIsVrm ? MULTIPLAYER_VRM_TARGET_HEIGHT : avatarWorldHeight;
+    }
+
+    private multiplayerAvatarEyeHeight(instance: MultiplayerAvatarInstance, avatarWorldHeight: number) {
+        return instance.avatarIsVrm ? MULTIPLAYER_VRM_EYE_HEIGHT : avatarWorldHeight;
+    }
+
+    private updateMultiplayerMarkerAvatarState(
+        marker: HTMLDivElement,
+        player?: MultiplayerOverlayPlayer,
+        avatar: MultiplayerAvatarInstance | null = null
+    ) {
+        const awaitingAvatar = Boolean(player && this.multiplayerAvatarUrl(player) && !avatar);
         marker.classList.toggle('has-3d-avatar', Boolean(avatar));
-        marker.classList.toggle('awaiting-3d-avatar', expects3dAvatar && !avatar);
+        marker.classList.toggle('awaiting-3d-avatar', awaitingAvatar);
+    }
+
+    private setRoomWarmupBackground(background?: boolean) {
+        this.roomWarmupBackground = background === true;
+        if (!this.roomWarmupBackground && this.multiplayerPlayers.length) {
+            for (const player of this.multiplayerPlayers) {
+                this.preloadMultiplayerAvatarAsset(player, {
+                    reason: 'warmup-visible',
+                    count: this.multiplayerPlayers.length,
+                    forceRetry: true
+                });
+            }
+            this.update();
+            this.scene.forceRender = true;
+        }
     }
 
     private setMultiplayerPlayers(players?: MultiplayerOverlayPlayer[]) {
@@ -487,11 +597,10 @@ class SemanticAnnotationOverlay {
             }
         }
 
-        if (this.multiplayerPlayers.length > 0) {
-            this.preloadMultiplayerAvatarAsset({ reason: 'players', count: this.multiplayerPlayers.length });
-        }
-
         for (const player of this.multiplayerPlayers) {
+            if (!player.hidden) {
+                this.preloadMultiplayerAvatarAsset(player, { reason: 'players', count: this.multiplayerPlayers.length });
+            }
             let marker = this.multiplayerMarkers.get(player.id);
             if (!marker) {
                 marker = document.createElement('div');
@@ -513,11 +622,48 @@ class SemanticAnnotationOverlay {
 
             marker.style.setProperty('--multiplayer-avatar-color', player.color || '#53d6ff');
             marker.querySelector('.multiplayer-avatar-label')!.textContent = player.label;
-            this.updateMultiplayerMarkerAvatarState(marker);
+            // Talking cue: glow the avatar body while the participant is speaking.
+            const body = marker.querySelector('.multiplayer-avatar-body') as HTMLElement | null;
+            if (body) body.style.filter = player.speaking ? 'drop-shadow(0 0 9px #91d9ce) drop-shadow(0 0 4px #91d9ce)' : '';
+            this.updateMultiplayerMarkerAvatarState(marker, player);
+        }
+        this.emitMultiplayerStatsDiagnostic('players');
+
+        if (this.roomWarmupBackground) {
+            return;
         }
 
         this.update();
         this.scene.forceRender = true;
+    }
+
+    private emitMultiplayerStatsDiagnostic(reason: string) {
+        const now = performance.now();
+        if (now - this.lastMultiplayerStatsDiagnosticAt < 2000) {
+            return;
+        }
+
+        const hiddenPlayers = this.multiplayerPlayers.filter(player => player.hidden).length;
+        let visiblePlayers = 0;
+        for (const player of this.multiplayerPlayers) {
+            if (!player.hidden) {
+                visiblePlayers += 1;
+            }
+        }
+
+        this.lastMultiplayerStatsDiagnosticAt = now;
+        this.emitDiagnostic('multiplayer-player-stats', {
+            reason,
+            players: this.multiplayerPlayers.length,
+            visiblePlayers,
+            hiddenPlayers,
+            markers: this.multiplayerMarkers.size,
+            avatarInstances: this.multiplayerAvatarInstances.size,
+            avatarAssets: this.multiplayerAvatarAssets.size,
+            avatarLoading: this.multiplayerAvatarLoadingUrls.size,
+            avatarFailed: this.multiplayerAvatarFailedAt.size,
+            roomWarmupBackground: this.roomWarmupBackground
+        });
     }
 
     private setGameTargets(annotationIds?: string[]) {
@@ -623,66 +769,170 @@ class SemanticAnnotationOverlay {
     }
 
     private onSceneUpdate(deltaTime = 1 / 60) {
-        if (this.multiplayerAvatarInstances.size === 0) {
+        if (this.roomWarmupBackground || this.multiplayerAvatarInstances.size === 0) {
             return;
         }
 
         const rigDeltaTime = Math.min(Math.max(deltaTime, 1 / 120), 1 / 15);
+        const nowMs = performance.now();
+        let changed = false;
         for (const avatar of this.multiplayerAvatarInstances.values()) {
-            if (avatar.entity.enabled && avatar.usesProceduralRig) {
-                this.animateMultiplayerAvatarRig(avatar, rigDeltaTime);
+            if (!avatar.entity.enabled) {
+                continue;
+            }
+            if (avatar.usesProceduralRig) {
+                const activeRig = avatar.state === 'run' || avatar.speaking || avatar.smoothedVoiceLevel > 0.01;
+                if (activeRig || !avatar.proceduralRigSettled) {
+                    this.animateMultiplayerAvatarRig(avatar, activeRig ? rigDeltaTime : 0, !activeRig);
+                    avatar.proceduralRigSettled = !activeRig;
+                    changed = true;
+                }
+            }
+            if (avatar.mouthMorphKeys.length) {
+                const previousVoiceLevel = avatar.smoothedVoiceLevel;
+                const targetLevel = avatar.speaking ? Math.max(0.12, avatar.voiceLevel) : 0;
+                const smoothingSeconds = targetLevel > avatar.smoothedVoiceLevel ?
+                    MULTIPLAYER_AVATAR_MOUTH_ATTACK_SECONDS :
+                    MULTIPLAYER_AVATAR_MOUTH_RELEASE_SECONDS;
+                const blend = 1 - Math.exp(-rigDeltaTime / smoothingSeconds);
+                avatar.smoothedVoiceLevel += (targetLevel - avatar.smoothedVoiceLevel) * blend;
+                const pulse = avatar.speaking ? 0.94 + 0.06 * Math.sin(nowMs * 0.026 + avatar.phase) : 1;
+                const mouth = clamp01(avatar.smoothedVoiceLevel * pulse) * 0.82;
+                if ((avatar.speaking || previousVoiceLevel > 0.001 || mouth > 0.001) && Math.abs(mouth - avatar.lastMouthWeight) > 0.002) {
+                    for (const mouthMorph of avatar.mouthMorphKeys) {
+                        for (const key of mouthMorph.keys) {
+                            mouthMorph.morph.setWeight(key, mouth);
+                        }
+                    }
+                    avatar.lastMouthWeight = mouth;
+                    changed = true;
+                }
             }
         }
-        this.scene.forceRender = true;
+        if (changed) {
+            this.scene.forceRender = true;
+        }
     }
 
-    private preloadMultiplayerAvatarAsset(details: { reason?: string; count?: number } = {}) {
-        this.loadMultiplayerAvatarAsset(details.reason ?? 'preload', details);
+    private preloadMultiplayerAvatarAsset(player?: MultiplayerOverlayPlayer, details: MultiplayerAvatarPreloadDetails = {}) {
+        this.loadMultiplayerAvatarAsset(this.multiplayerAvatarUrl(player), details.reason ?? 'preload', details);
     }
 
-    private loadMultiplayerAvatarAsset(reason = 'update', details: Record<string, unknown> = {}) {
-        if (this.multiplayerAvatarAsset || this.multiplayerAvatarLoading || this.multiplayerAvatarFailed) {
+    private clearMultiplayerAvatarRetryTimer(url: string) {
+        const timer = this.multiplayerAvatarRetryTimers.get(url);
+        if (timer === undefined) {
+            return;
+        }
+        window.clearTimeout(timer);
+        this.multiplayerAvatarRetryTimers.delete(url);
+    }
+
+    private scheduleMultiplayerAvatarRetry(url: string) {
+        if (this.multiplayerAvatarRetryTimers.has(url) || this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
             return;
         }
 
-        this.multiplayerAvatarLoading = true;
-        this.multiplayerAvatarLoadStartedAt = performance.now();
-        this.emitDiagnostic('multiplayer-avatar-preload-start', {
-            url: MULTIPLAYER_AVATAR_URL,
-            reason,
-            ...details
-        });
-        this.scene.app.assets.loadFromUrl(MULTIPLAYER_AVATAR_URL, 'container', (error: unknown, asset?: Asset) => {
-            this.multiplayerAvatarLoading = false;
-            const loadMs = this.multiplayerAvatarLoadStartedAt === null ? null : performance.now() - this.multiplayerAvatarLoadStartedAt;
-            if (error || !asset) {
-                this.multiplayerAvatarFailed = true;
-                this.emitDiagnostic('multiplayer-avatar-load-failed', {
-                    url: MULTIPLAYER_AVATAR_URL,
-                    loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
-                    error: error instanceof Error ? error.message : String(error ?? 'unknown')
-                });
-                for (const marker of this.multiplayerMarkers.values()) {
-                    this.updateMultiplayerMarkerAvatarState(marker);
-                }
-                this.update();
-                this.scene.forceRender = true;
+        const waitingPlayers = this.multiplayerPlayers.filter(player => this.multiplayerAvatarUrl(player) === url);
+        if (!waitingPlayers.length) {
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            this.multiplayerAvatarRetryTimers.delete(url);
+            if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
                 return;
             }
 
-            this.multiplayerAvatarAsset = asset;
+            const nextWaitingPlayers = this.multiplayerPlayers.filter(player => this.multiplayerAvatarUrl(player) === url);
+            if (!nextWaitingPlayers.length) {
+                return;
+            }
+
+            this.loadMultiplayerAvatarAsset(url, 'retry-timer', {
+                count: nextWaitingPlayers.length,
+                forceRetry: true
+            });
+        }, MULTIPLAYER_AVATAR_RETRY_MS);
+        this.multiplayerAvatarRetryTimers.set(url, timer);
+    }
+
+    private loadMultiplayerAvatarAsset(url?: string, reason = 'update', details: MultiplayerAvatarPreloadDetails = {}) {
+        if (!url) {
+            return;
+        }
+        if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
+            return;
+        }
+
+        const { forceRetry, ...diagnosticDetails } = details;
+        const failedAt = this.multiplayerAvatarFailedAt.get(url);
+        if (failedAt !== undefined) {
+            const retryAgeMs = performance.now() - failedAt;
+            if (!forceRetry && retryAgeMs < MULTIPLAYER_AVATAR_RETRY_MS) {
+                return;
+            }
+            this.multiplayerAvatarFailedAt.delete(url);
+            this.clearMultiplayerAvatarRetryTimer(url);
+            this.emitDiagnostic('multiplayer-avatar-url-retry', {
+                url,
+                reason,
+                retryAgeMs: Number(retryAgeMs.toFixed(1)),
+                ...diagnosticDetails
+            });
+        }
+
+        if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
+            return;
+        }
+
+        this.multiplayerAvatarLoadingUrls.add(url);
+        this.multiplayerAvatarLoadStartedAt.set(url, performance.now());
+        this.emitDiagnostic('multiplayer-avatar-preload-start', { url, reason, ...diagnosticDetails });
+        this.scene.app.assets.loadFromUrl(url, 'container', (error: unknown, asset?: Asset) => {
+            const startedAt = this.multiplayerAvatarLoadStartedAt.get(url);
+            const loadMs = startedAt === undefined ? null : performance.now() - startedAt;
+            this.multiplayerAvatarLoadingUrls.delete(url);
+            this.multiplayerAvatarLoadStartedAt.delete(url);
+            if (error || !asset) {
+                this.multiplayerAvatarFailedAt.set(url, performance.now());
+                this.scheduleMultiplayerAvatarRetry(url);
+                this.emitDiagnostic('multiplayer-avatar-url-failed', {
+                    url,
+                    error: error instanceof Error ? error.message : String(error ?? 'unknown')
+                });
+                for (const player of this.multiplayerPlayers) {
+                    if (this.multiplayerAvatarUrl(player) === url) {
+                        const marker = this.multiplayerMarkers.get(player.id);
+                        if (marker) this.updateMultiplayerMarkerAvatarState(marker, player);
+                    }
+                }
+                if (!this.roomWarmupBackground) {
+                    this.update();
+                    this.scene.forceRender = true;
+                }
+                return;
+            }
+
+            this.multiplayerAvatarFailedAt.delete(url);
+            this.clearMultiplayerAvatarRetryTimer(url);
+            this.multiplayerAvatarAssets.set(url, asset);
             const resource = asset.resource as MultiplayerAvatarContainer | undefined;
             this.emitDiagnostic('multiplayer-avatar-preload-ready', {
-                url: MULTIPLAYER_AVATAR_URL,
+                url,
                 loadMs: loadMs === null ? null : Number(loadMs.toFixed(1)),
                 animations: resource?.animations?.map(animation => animation.name) ?? [],
-                waitingPlayers: this.multiplayerPlayers.length
+                waitingPlayers: this.multiplayerPlayers.filter(player => this.multiplayerAvatarUrl(player) === url).length
             });
-            for (const marker of this.multiplayerMarkers.values()) {
-                this.updateMultiplayerMarkerAvatarState(marker);
+            for (const player of this.multiplayerPlayers) {
+                if (this.multiplayerAvatarUrl(player) === url) {
+                    const marker = this.multiplayerMarkers.get(player.id);
+                    if (marker) this.updateMultiplayerMarkerAvatarState(marker, player);
+                }
             }
-            this.update();
-            this.scene.forceRender = true;
+            if (!this.roomWarmupBackground) {
+                this.update();
+                this.scene.forceRender = true;
+            }
         });
     }
 
@@ -693,6 +943,25 @@ class SemanticAnnotationOverlay {
         }
         avatar.entity.destroy();
         this.multiplayerAvatarInstances.delete(id);
+    }
+
+    private resolveMultiplayerMouthMorphKeys(morph: MultiplayerMorph) {
+        const weightKeys = [...(morph._weightMap?.keys() ?? [])];
+        const namedKeys = MULTIPLAYER_VRM_MOUTH_MORPH_NAMES.flatMap((name) => {
+            const key = weightKeys.find(candidate => candidate === name || candidate.endsWith(`.${name}`));
+            return key ? [key] : [];
+        });
+        if (namedKeys.length) {
+            return namedKeys.slice(0, 1);
+        }
+
+        const numericKeys = MULTIPLAYER_VRM_MOUTH_MORPH_FALLBACK_INDICES.filter((index) => {
+            if (!morph.getWeight) {
+                return true;
+            }
+            return typeof morph.getWeight(index) === 'number';
+        });
+        return numericKeys.slice(0, 1);
     }
 
     private setMultiplayerAvatarLayers(entity: Entity) {
@@ -781,8 +1050,33 @@ class SemanticAnnotationOverlay {
         };
     }
 
+    private findMultiplayerRigBoneEntity(entity: Entity, name: string): Entity | null {
+        const mixamoName = `mixamorig:${name}`;
+        const exact = (entity.findByName(name) ?? entity.findByName(mixamoName)) as Entity | null;
+        if (exact) {
+            return exact;
+        }
+
+        const matches = (candidate: string) => (
+            candidate.endsWith(`:${name}`) ||
+            candidate.endsWith(`:${mixamoName}`)
+        );
+        const stack = [entity];
+        while (stack.length) {
+            const current = stack.pop();
+            if (!current) {
+                continue;
+            }
+            if (matches(current.name)) {
+                return current;
+            }
+            stack.push(...current.children as Entity[]);
+        }
+        return null;
+    }
+
     private multiplayerRigBone(entity: Entity, name: string): MultiplayerAvatarRigBone | undefined {
-        const bone = entity.findByName(name) as Entity | null;
+        const bone = this.findMultiplayerRigBoneEntity(entity, name);
         if (!bone) {
             return undefined;
         }
@@ -795,6 +1089,8 @@ class SemanticAnnotationOverlay {
 
     private createMultiplayerAvatarRig(entity: Entity): MultiplayerAvatarRig {
         return {
+            leftShoulder: this.multiplayerRigBone(entity, 'LeftShoulder'),
+            rightShoulder: this.multiplayerRigBone(entity, 'RightShoulder'),
             leftArm: this.multiplayerRigBone(entity, 'LeftArm'),
             rightArm: this.multiplayerRigBone(entity, 'RightArm'),
             leftLeg: this.multiplayerRigBone(entity, 'LeftUpLeg'),
@@ -810,6 +1106,8 @@ class SemanticAnnotationOverlay {
         }
 
         return {
+            leftShoulder: rig.leftShoulder?.entity.name ?? null,
+            rightShoulder: rig.rightShoulder?.entity.name ?? null,
             leftArm: rig.leftArm?.entity.name ?? null,
             rightArm: rig.rightArm?.entity.name ?? null,
             leftLeg: rig.leftLeg?.entity.name ?? null,
@@ -830,28 +1128,41 @@ class SemanticAnnotationOverlay {
         );
     }
 
-    private animateMultiplayerAvatarRig(instance: MultiplayerAvatarInstance, dt: number) {
+    private animateMultiplayerAvatarRig(instance: MultiplayerAvatarInstance, dt: number, settleIdle = false) {
         const rig = instance.rig;
         if (!rig) {
             return;
         }
 
         const running = instance.state === 'run';
-        instance.phase += dt * (running ? 9.5 : 2.4);
-        const stride = Math.sin(instance.phase);
-        const counterStride = Math.sin(instance.phase + Math.PI);
-        const lift = Math.sin(instance.phase * 2);
+        if (!settleIdle) {
+            instance.phase += dt * (running ? 9.5 : 2.4);
+        }
+        const stride = settleIdle ? 0 : Math.sin(instance.phase);
+        const counterStride = settleIdle ? 0 : Math.sin(instance.phase + Math.PI);
+        const lift = settleIdle ? 0 : Math.sin(instance.phase * 2);
+
+        // Mixamo VRM avatars rest in a T-pose; rotate the upper arms near the
+        // sides while leaving clavicles neutral so the arms don't fold inward.
+        const shoulderDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_SHOULDER_DOWN_DEGREES : 0;
+        const armDown = instance.avatarIsVrm ? MULTIPLAYER_VRM_ARM_DOWN_DEGREES : 0;
+        const runArmSwing = instance.avatarIsVrm ? MULTIPLAYER_AVATAR_RUN_ARM_SWING_DEGREES : 28;
+        const idleArmSwing = instance.avatarIsVrm ? MULTIPLAYER_AVATAR_IDLE_ARM_SWING_DEGREES : 3;
 
         if (running) {
-            this.setMultiplayerRigBone(rig.leftArm, stride * 28, 0, 5);
-            this.setMultiplayerRigBone(rig.rightArm, counterStride * 28, 0, -5);
+            this.setMultiplayerRigBone(rig.leftShoulder, 0, 0, shoulderDown);
+            this.setMultiplayerRigBone(rig.rightShoulder, 0, 0, -shoulderDown);
+            this.setMultiplayerRigBone(rig.leftArm, stride * runArmSwing, 0, armDown);
+            this.setMultiplayerRigBone(rig.rightArm, counterStride * runArmSwing, 0, -armDown);
             this.setMultiplayerRigBone(rig.leftLeg, counterStride * 30, 0, 2);
             this.setMultiplayerRigBone(rig.rightLeg, stride * 30, 0, -2);
             this.setMultiplayerRigBone(rig.spine, lift * 2, 0, stride * 5);
             this.setMultiplayerRigBone(rig.head, lift * 1.2, stride * 4, 0);
         } else {
-            this.setMultiplayerRigBone(rig.leftArm, 3 + stride * 3, 0, 2);
-            this.setMultiplayerRigBone(rig.rightArm, 3 + counterStride * 3, 0, -2);
+            this.setMultiplayerRigBone(rig.leftShoulder, 0, 0, shoulderDown);
+            this.setMultiplayerRigBone(rig.rightShoulder, 0, 0, -shoulderDown);
+            this.setMultiplayerRigBone(rig.leftArm, stride * idleArmSwing, 0, armDown);
+            this.setMultiplayerRigBone(rig.rightArm, counterStride * idleArmSwing, 0, -armDown);
             this.setMultiplayerRigBone(rig.leftLeg);
             this.setMultiplayerRigBone(rig.rightLeg);
             this.setMultiplayerRigBone(rig.spine, lift * 0.7, 0, stride * 1.5);
@@ -860,13 +1171,23 @@ class SemanticAnnotationOverlay {
     }
 
     private ensureMultiplayerAvatar(player: MultiplayerOverlayPlayer) {
+        const avatarUrl = this.multiplayerAvatarUrl(player);
         const existing = this.multiplayerAvatarInstances.get(player.id);
+        if (!avatarUrl) {
+            if (existing) {
+                this.destroyMultiplayerAvatar(player.id);
+            }
+            return null;
+        }
         if (existing) {
-            return existing;
+            if (existing.avatarUrl === avatarUrl) {
+                return existing;
+            }
+            this.destroyMultiplayerAvatar(player.id);
         }
 
-        this.loadMultiplayerAvatarAsset();
-        const resource = this.multiplayerAvatarAsset?.resource as MultiplayerAvatarContainer | undefined;
+        this.loadMultiplayerAvatarAsset(avatarUrl);
+        const resource = this.multiplayerAvatarAssets.get(avatarUrl)?.resource as MultiplayerAvatarContainer | undefined;
         if (!resource) {
             return null;
         }
@@ -874,7 +1195,7 @@ class SemanticAnnotationOverlay {
         const entity = resource.instantiateRenderEntity?.({ castShadows: false, receiveShadows: false }) ??
             resource.instantiateModelEntity?.({ castShadows: false, receiveShadows: false });
         if (!entity) {
-            this.multiplayerAvatarFailed = true;
+            this.multiplayerAvatarFailedAt.set(avatarUrl, performance.now());
             return null;
         }
 
@@ -885,19 +1206,51 @@ class SemanticAnnotationOverlay {
         this.scene.contentRoot.addChild(entity);
 
         const rig = this.createMultiplayerAvatarRig(entity);
+        const mouthMorphKeys: MultiplayerAvatarInstance['mouthMorphKeys'] = [];
+        entity.findComponents('render').forEach((component) => {
+            ((component as { meshInstances?: { morphInstance?: MultiplayerMorph }[] }).meshInstances ?? []).forEach((meshInstance) => {
+                if (meshInstance.morphInstance) {
+                    const keys = this.resolveMultiplayerMouthMorphKeys(meshInstance.morphInstance);
+                    if (keys.length) {
+                        mouthMorphKeys.push({ morph: meshInstance.morphInstance, keys });
+                    }
+                }
+            });
+        });
         const instance = {
+            avatarUrl,
+            avatarIsVrm: this.multiplayerAvatarUsesMeetingVrmProfile(player, mouthMorphKeys),
             entity,
             rig,
             usesProceduralRig: !animationSetup.nativeAnimation,
+            proceduralRigSettled: false as boolean,
             state: 'idle',
             smoothedPlanarSpeed: 0,
             phase: Math.random() * Math.PI * 2,
             lastPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
-            lastUpdateMs: performance.now()
+            renderPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
+            lastTargetPosition: new Vec3(player.position[0], player.position[1], player.position[2]),
+            targetVelocity: new Vec3(),
+            lastUpdateMs: performance.now(),
+            lastTargetUpdateMs: performance.now(),
+            renderInitialized: false,
+            renderYawDeg: null as number | null,
+            mouthMorphKeys,
+            lastMouthWeight: 0,
+            speaking: false,
+            voiceLevel: 0,
+            smoothedVoiceLevel: 0
         } satisfies MultiplayerAvatarInstance;
         this.multiplayerAvatarInstances.set(player.id, instance);
+        if (instance.usesProceduralRig) {
+            this.animateMultiplayerAvatarRig(instance, 0, true);
+            instance.proceduralRigSettled = true;
+        }
         this.emitDiagnostic('multiplayer-avatar-rig-ready', {
             playerId: player.id,
+            avatarId: player.avatarId ?? null,
+            avatarName: player.avatarName ?? null,
+            avatarUrl,
             nativeAnimation: animationSetup.nativeAnimation,
             animPlayable: animationSetup.animPlayable ?? null,
             fallbackReason: animationSetup.fallbackReason ?? null,
@@ -915,10 +1268,23 @@ class SemanticAnnotationOverlay {
         }
 
         instance.state = state;
+        instance.proceduralRigSettled = false;
         if (!instance.usesProceduralRig) {
             const anim = (instance.entity as Entity & { anim?: MultiplayerAnimComponent }).anim;
             anim?.baseLayer?.transition(state === 'run' ? 'Run' : 'Idle', MULTIPLAYER_AVATAR_TRANSITION_SECONDS);
         }
+    }
+
+    private resetMultiplayerAvatarMotion(instance: MultiplayerAvatarInstance, player: MultiplayerOverlayPlayer, nowMs: number) {
+        instance.renderInitialized = false;
+        instance.renderYawDeg = null;
+        instance.proceduralRigSettled = false;
+        instance.targetVelocity.set(0, 0, 0);
+        instance.renderPosition.set(player.position[0], player.position[1], player.position[2]);
+        instance.lastPosition.set(player.position[0], player.position[1], player.position[2]);
+        instance.lastTargetPosition.set(player.position[0], player.position[1], player.position[2]);
+        instance.lastUpdateMs = nowMs;
+        instance.lastTargetUpdateMs = nowMs;
     }
 
     private updateMultiplayerAvatar(
@@ -928,11 +1294,57 @@ class SemanticAnnotationOverlay {
         nowMs: number
     ) {
         const feetX = player.position[0];
-        const feetY = player.position[1] - avatarWorldHeight;
+        const avatarEyeHeight = this.multiplayerAvatarEyeHeight(instance, avatarWorldHeight);
+        const feetY = player.position[1] - avatarEyeHeight;
         const feetZ = player.position[2];
-        const dx = feetX - instance.lastPosition.x;
-        const dz = feetZ - instance.lastPosition.z;
-        const dt = Math.max(1 / 60, (nowMs - instance.lastUpdateMs) / 1000);
+        const dt = Math.max(1 / 120, Math.min(1 / 15, (nowMs - instance.lastUpdateMs) / 1000));
+        const targetDx = feetX - instance.lastTargetPosition.x;
+        const targetDy = feetY - instance.lastTargetPosition.y;
+        const targetDz = feetZ - instance.lastTargetPosition.z;
+        const targetDistanceSq = targetDx * targetDx + targetDy * targetDy + targetDz * targetDz;
+        const shouldSnap = !instance.renderInitialized || targetDistanceSq > MULTIPLAYER_AVATAR_SNAP_DISTANCE * MULTIPLAYER_AVATAR_SNAP_DISTANCE;
+
+        if (shouldSnap) {
+            instance.renderInitialized = true;
+            instance.targetVelocity.set(0, 0, 0);
+            instance.renderPosition.set(feetX, feetY, feetZ);
+            instance.lastPosition.set(feetX, feetY, feetZ);
+            instance.lastTargetPosition.set(feetX, feetY, feetZ);
+            instance.lastTargetUpdateMs = nowMs;
+        } else if (targetDistanceSq > 1e-8) {
+            const targetDt = Math.max(1 / 120, (nowMs - instance.lastTargetUpdateMs) / 1000);
+            instance.targetVelocity.set(targetDx / targetDt, targetDy / targetDt, targetDz / targetDt);
+            instance.lastTargetPosition.set(feetX, feetY, feetZ);
+            instance.lastTargetUpdateMs = nowMs;
+        }
+
+        const targetAgeSeconds = Math.max(0, (nowMs - instance.lastTargetUpdateMs) / 1000);
+        const predictionSeconds = Math.max(0, MULTIPLAYER_AVATAR_PREDICTION_SECONDS - targetAgeSeconds);
+        let predictedX = feetX + instance.targetVelocity.x * predictionSeconds;
+        let predictedY = feetY + instance.targetVelocity.y * predictionSeconds;
+        let predictedZ = feetZ + instance.targetVelocity.z * predictionSeconds;
+        const predictionDx = predictedX - feetX;
+        const predictionDy = predictedY - feetY;
+        const predictionDz = predictedZ - feetZ;
+        const predictionDistance = Math.sqrt(predictionDx * predictionDx + predictionDy * predictionDy + predictionDz * predictionDz);
+        if (predictionDistance > MULTIPLAYER_AVATAR_MAX_PREDICTION_DISTANCE) {
+            const scale = MULTIPLAYER_AVATAR_MAX_PREDICTION_DISTANCE / predictionDistance;
+            predictedX = feetX + predictionDx * scale;
+            predictedY = feetY + predictionDy * scale;
+            predictedZ = feetZ + predictionDz * scale;
+        }
+
+        const previousX = instance.renderPosition.x;
+        const previousY = instance.renderPosition.y;
+        const previousZ = instance.renderPosition.z;
+        const positionBlend = shouldSnap ? 1 : 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_POSITION_SMOOTHING_SECONDS);
+        instance.renderPosition.set(
+            previousX + (predictedX - previousX) * positionBlend,
+            previousY + (predictedY - previousY) * positionBlend,
+            previousZ + (predictedZ - previousZ) * positionBlend
+        );
+        const dx = instance.renderPosition.x - instance.lastPosition.x;
+        const dz = instance.renderPosition.z - instance.lastPosition.z;
         const planarSpeed = Math.sqrt(dx * dx + dz * dz) / dt;
         const speedBlend = 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_SPEED_SMOOTHING_SECONDS);
         instance.smoothedPlanarSpeed += (planarSpeed - instance.smoothedPlanarSpeed) * speedBlend;
@@ -941,22 +1353,33 @@ class SemanticAnnotationOverlay {
             (instance.smoothedPlanarSpeed > MULTIPLAYER_AVATAR_RUN_START_SPEED ? 'run' : 'idle');
         this.transitionMultiplayerAvatar(instance, nextState);
 
-        let forwardX = dx;
-        let forwardZ = dz;
+        let forwardX = instance.targetVelocity.x || dx;
+        let forwardZ = instance.targetVelocity.z || dz;
         if (player.target) {
             forwardX = player.target[0] - player.position[0];
             forwardZ = player.target[2] - player.position[2];
         }
         if (forwardX * forwardX + forwardZ * forwardZ > 1e-6) {
-            const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES;
-            instance.entity.setEulerAngles(0, yaw, 0);
+            const vrmFlip = instance.avatarIsVrm ? 180 : 0;
+            const yaw = Math.atan2(forwardX, forwardZ) * 180 / Math.PI + MULTIPLAYER_AVATAR_FORWARD_YAW_DEGREES + vrmFlip;
+            const yawBlend = instance.renderYawDeg === null ? 1 : 1 - Math.exp(-dt / MULTIPLAYER_AVATAR_YAW_SMOOTHING_SECONDS);
+            instance.renderYawDeg = instance.renderYawDeg === null ? yaw : smoothAngleDegrees(instance.renderYawDeg, yaw, yawBlend);
+            instance.entity.setEulerAngles(0, instance.renderYawDeg, 0);
         }
 
-        const scale = avatarWorldHeight / MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
+        // VRM models are authored at roughly human metres (~1.6 tall) rather than
+        // the Kenney source height. Size VRMs to a consistent adult height so they
+        // never render child-sized when a scene's eye-to-floor height is short;
+        // feet still sit on the detected ground (feetY above).
+        const sourceHeight = instance.avatarIsVrm ? 1.6 : MULTIPLAYER_AVATAR_SOURCE_HEIGHT;
+        const targetHeight = this.multiplayerAvatarRenderedHeight(instance, avatarWorldHeight);
+        const scale = targetHeight / sourceHeight;
         instance.entity.enabled = true;
         instance.entity.setLocalScale(scale, scale, scale);
-        instance.entity.setPosition(feetX, feetY, feetZ);
-        instance.lastPosition.set(feetX, feetY, feetZ);
+        instance.entity.setPosition(instance.renderPosition.x, instance.renderPosition.y, instance.renderPosition.z);
+        instance.speaking = Boolean(player.speaking);
+        instance.voiceLevel = Number.isFinite(player.level) ? clamp01(player.level ?? 0) : 0;
+        instance.lastPosition.copy(instance.renderPosition);
         instance.lastUpdateMs = nowMs;
     }
 
@@ -1265,6 +1688,25 @@ class SemanticAnnotationOverlay {
         const existing = this.multiplayerHeightCalibrations.get(player.id);
         if (existing) {
             return existing;
+        }
+
+        if (player.avatarId) {
+            const calibration: MultiplayerHeightCalibration = {
+                height: MULTIPLAYER_DEFAULT_HEIGHT,
+                groundY: undefined
+            };
+            this.multiplayerHeightCalibrations.set(player.id, calibration);
+            this.emitDiagnostic('multiplayer-avatar-height-calibrated', {
+                playerId: player.id,
+                height: Number(calibration.height.toFixed(3)),
+                groundY: null,
+                source: 'meeting-avatar-default',
+                totalCenters: 0,
+                stride: 0,
+                sampled: 0,
+                calibrationMs: 0
+            });
+            return calibration;
         }
 
         const startedAt = performance.now();
@@ -1763,12 +2205,12 @@ class SemanticAnnotationOverlay {
             });
         }
 
-        this.updateMultiplayerPlayers(clientWidth, clientHeight, cameraPosition);
+        this.updateMultiplayerPlayers(clientWidth, clientHeight);
     }
 
-    private updateMultiplayerPlayers(clientWidth: number, clientHeight: number, cameraPosition: Vec3) {
-        if (this.multiplayerPlayers.length > 0) {
-            this.loadMultiplayerAvatarAsset('update');
+    private updateMultiplayerPlayers(clientWidth: number, clientHeight: number) {
+        if (this.roomWarmupBackground) {
+            return;
         }
 
         const nowMs = performance.now();
@@ -1777,6 +2219,19 @@ class SemanticAnnotationOverlay {
             if (!marker) {
                 continue;
             }
+            if (player.hidden) {
+                marker.hidden = true;
+                const avatar = this.multiplayerAvatarInstances.get(player.id);
+                if (avatar) {
+                    avatar.entity.enabled = false;
+                    this.transitionMultiplayerAvatar(avatar, 'idle');
+                    avatar.smoothedPlanarSpeed = 0;
+                    this.resetMultiplayerAvatarMotion(avatar, player, nowMs);
+                }
+                continue;
+            }
+            const avatarUrl = this.multiplayerAvatarUrl(player);
+            this.loadMultiplayerAvatarAsset(avatarUrl, 'update');
 
             this.multiplayerWorld.set(player.position[0], player.position[1], player.position[2]);
             this.scene.camera.worldToScreen(this.multiplayerWorld, this.screenPos);
@@ -1796,8 +2251,7 @@ class SemanticAnnotationOverlay {
                     avatar.entity.enabled = false;
                     this.transitionMultiplayerAvatar(avatar, 'idle');
                     avatar.smoothedPlanarSpeed = 0;
-                    avatar.lastPosition.set(player.position[0], player.position[1], player.position[2]);
-                    avatar.lastUpdateMs = nowMs;
+                    this.resetMultiplayerAvatarMotion(avatar, player, nowMs);
                 }
                 continue;
             }
@@ -1808,27 +2262,17 @@ class SemanticAnnotationOverlay {
             if (avatar) {
                 this.updateMultiplayerAvatar(player, avatar, avatarWorldHeight, nowMs);
             }
-            this.updateMultiplayerMarkerAvatarState(marker, avatar);
+            this.updateMultiplayerMarkerAvatarState(marker, player, avatar);
 
-            this.multiplayerFeetWorld.set(player.position[0], player.position[1] - avatarWorldHeight, player.position[2]);
-            this.scene.camera.worldToScreen(this.multiplayerFeetWorld, this.multiplayerFeetScreenPos);
+            const renderedAvatarHeight = avatar ? this.multiplayerAvatarRenderedHeight(avatar, avatarWorldHeight) : avatarWorldHeight;
+            const avatarEyeHeight = avatar ? this.multiplayerAvatarEyeHeight(avatar, avatarWorldHeight) : avatarWorldHeight;
+            const avatarFeetY = player.position[1] - avatarEyeHeight;
+            this.multiplayerLabelWorld.set(player.position[0], avatarFeetY + renderedAvatarHeight + MULTIPLAYER_AVATAR_LABEL_CLEARANCE, player.position[2]);
+            this.scene.camera.worldToScreen(this.multiplayerLabelWorld, this.multiplayerLabelScreenPos);
 
-            const headX = this.screenPos.x * clientWidth;
-            const headY = this.screenPos.y * clientHeight;
-            const feetY = this.multiplayerFeetScreenPos.y * clientHeight;
-            const projectedHeight = Math.abs(feetY - headY);
-            const distance = Math.max(0.1, this.multiplayerDelta.sub2(this.multiplayerWorld, cameraPosition).length());
-            const fallbackSpan = Math.max(150, Math.min(270, 310 / Math.sqrt(distance)));
-            const hasProjectedFeet = Number.isFinite(projectedHeight) && projectedHeight >= 48;
-            const avatarSpan = hasProjectedFeet ? Math.max(150, Math.min(330, projectedHeight)) : fallbackSpan;
-            const avatarHeight = avatarSpan / 0.87;
-            const anchorY = hasProjectedFeet ? feetY : headY + avatarSpan;
-
-            marker.style.setProperty('--multiplayer-avatar-height', `${avatarHeight.toFixed(1)}px`);
-            marker.style.setProperty('--multiplayer-avatar-width', `${(avatarHeight * 0.52).toFixed(1)}px`);
-            marker.style.transform = avatar || !this.multiplayerAvatarFailed ?
-                `translate(${headX.toFixed(1)}px, ${headY.toFixed(1)}px)` :
-                `translate(${headX.toFixed(1)}px, ${anchorY.toFixed(1)}px) translate(-50%, -100%)`;
+            const labelX = this.multiplayerLabelScreenPos.x * clientWidth;
+            const labelY = this.multiplayerLabelScreenPos.y * clientHeight;
+            marker.style.transform = `translate(${labelX.toFixed(1)}px, ${labelY.toFixed(1)}px)`;
             marker.style.zIndex = `${Math.max(1, Math.round((1 - this.screenPos.z) * 1000) + 20)}`;
 
             if (player.target) {

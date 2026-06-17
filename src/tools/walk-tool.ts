@@ -114,6 +114,10 @@ const COLLISION_MESH_GROUND_PROBE_RADIUS = 0.22;
 const COLLISION_MESH_GROUND_CACHE_DROP = 0.45;
 const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
 const COLLISION_MESH_BLOCKING_ENABLED = false;
+const COLLISION_MESH_FIRST_PERSON_DISTANCE = 0.035;
+const COLLISION_MESH_THIRD_PERSON_DISTANCE = 2.2;
+const COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE = 0.45;
+const COLLISION_MESH_VIEW_DISTANCE_STEP = 0.52;
 const COLLISION_MESH_DEPENETRATE_RADIUS = 0.9;
 const COLLISION_MESH_DEPENETRATE_STEP = 0.05;
 const COLLISION_MESH_REPORT_INTERVAL_MS = 900;
@@ -715,6 +719,7 @@ class WalkTool {
     private onPointerLockChangeBound: (() => void) | null = null;
     private onEmbeddedKeyDownBound: ((e: KeyboardEvent) => void) | null = null;
     private onEmbeddedKeyUpBound: ((e: KeyboardEvent) => void) | null = null;
+    private onEmbeddedWheelBound: ((e: WheelEvent) => void) | null = null;
     private onEmbeddedFocusLossBound: (() => void) | null = null;
     private onEmbeddedVisibilityChangeBound: (() => void) | null = null;
     private externalWalkInput: WalkInputState = {};
@@ -725,6 +730,7 @@ class WalkTool {
     private externalGroundY: number | null = null;
     private externalJumpWasPressed = false;
     private embeddedControls = false;
+    private warmupBackground = false;
     private lastArrowPositionAt = 0;
     private collisionMesh: WalkCollisionMesh | null = null;
     private collisionMeshUrl: string | null = null;
@@ -767,6 +773,7 @@ class WalkTool {
         this.events.on('walk.pointerLook', this.onExternalPointerLook, this);
         this.events.on('walk.input', this.onExternalWalkInput, this);
         this.events.on('walk.embeddedControls', this.onEmbeddedControls, this);
+        this.events.on('walk.warmupBackground', this.onWarmupBackground, this);
         this.events.on('walk.collisionMeshLoad', this.loadCollisionMesh, this);
         this.events.on('walk.collisionMeshClear', this.clearCollisionMesh, this);
         this.events.on('walk.saveFloorHeight', this.saveCollisionMeshFloorHeight, this);
@@ -906,10 +913,10 @@ class WalkTool {
         this.active = true;
         if (!this.embeddedControls) {
             this.createOverlay();
+            this.createHeightControls();
         } else {
             this.createEmbeddedKeyboardControls();
         }
-        this.createHeightControls();
         this.ensureUpdateLoop();
     }
 
@@ -1005,6 +1012,7 @@ class WalkTool {
                 document.exitPointerLock();
             }
             this.destroyOverlay();
+            this.destroyHeightControls();
             this.createEmbeddedKeyboardControls();
             return;
         }
@@ -1012,6 +1020,29 @@ class WalkTool {
         this.destroyEmbeddedKeyboardControls();
         if (this.active) {
             this.createOverlay();
+            this.createHeightControls();
+        }
+    }
+
+    private onWarmupBackground(enabled = false) {
+        this.warmupBackground = Boolean(enabled);
+        if (!this.warmupBackground) {
+            if (this.active || this.hasExternalWalkInput()) {
+                this.ensureUpdateLoop();
+            }
+            this.scene.forceRender = true;
+            return;
+        }
+
+        this.externalWalkInput = {};
+        this.embeddedKeyboardInput = {};
+        this.externalVerticalVelocity = 0;
+        this.externalJumpWasPressed = false;
+        this.clearNativeFlyInput();
+
+        if (this.animFrame !== null) {
+            cancelAnimationFrame(this.animFrame);
+            this.animFrame = null;
         }
     }
 
@@ -1023,6 +1054,7 @@ class WalkTool {
         this.clearNativeFlyInput();
         this.onEmbeddedKeyDownBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, true);
         this.onEmbeddedKeyUpBound = (e: KeyboardEvent) => this.onEmbeddedKey(e, false);
+        this.onEmbeddedWheelBound = (e: WheelEvent) => this.onEmbeddedWheel(e);
         const clearEmbeddedInput = () => {
             this.embeddedKeyboardInput = {};
             this.externalJumpWasPressed = false;
@@ -1036,6 +1068,7 @@ class WalkTool {
         };
         window.addEventListener('keydown', this.onEmbeddedKeyDownBound, { capture: true });
         window.addEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
+        this.container.addEventListener('wheel', this.onEmbeddedWheelBound, { passive: false });
         window.addEventListener('blur', this.onEmbeddedFocusLossBound);
         window.addEventListener('pagehide', this.onEmbeddedFocusLossBound);
         document.addEventListener('visibilitychange', this.onEmbeddedVisibilityChangeBound);
@@ -1050,6 +1083,10 @@ class WalkTool {
             window.removeEventListener('keyup', this.onEmbeddedKeyUpBound, { capture: true });
             this.onEmbeddedKeyUpBound = null;
         }
+        if (this.onEmbeddedWheelBound) {
+            this.container.removeEventListener('wheel', this.onEmbeddedWheelBound);
+            this.onEmbeddedWheelBound = null;
+        }
         if (this.onEmbeddedFocusLossBound) {
             window.removeEventListener('blur', this.onEmbeddedFocusLossBound);
             window.removeEventListener('pagehide', this.onEmbeddedFocusLossBound);
@@ -1061,6 +1098,61 @@ class WalkTool {
         }
         this.embeddedKeyboardInput = {};
         this.clearNativeFlyInput();
+    }
+
+    private onEmbeddedWheel(event: WheelEvent) {
+        if (!this.embeddedControls || !this.active || this.warmupBackground) {
+            return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        let pixelDeltaY = event.deltaY;
+        if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+            pixelDeltaY *= 40;
+        } else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+            pixelDeltaY *= 600;
+        }
+        if (pixelDeltaY === 0) {
+            return;
+        }
+
+        const currentDistance = this.embeddedViewDistance();
+        const direction = Math.sign(pixelDeltaY);
+        const magnitude = Math.min(3, Math.max(0.35, Math.abs(pixelDeltaY) / 80));
+        let nextDistance = currentDistance + direction * COLLISION_MESH_VIEW_DISTANCE_STEP * magnitude;
+        if (direction < 0 && nextDistance <= COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE) {
+            nextDistance = COLLISION_MESH_FIRST_PERSON_DISTANCE;
+        }
+        if (direction > 0 && currentDistance <= COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE) {
+            nextDistance = Math.max(nextDistance, COLLISION_MESH_THIRD_PERSON_DISTANCE);
+        }
+        this.setEmbeddedViewDistance(nextDistance);
+    }
+
+    private embeddedViewDistance() {
+        return this.camera.distance * this.camera.sceneRadius / this.camera.fovFactor;
+    }
+
+    private setEmbeddedViewDistance(worldDistance: number) {
+        const camera = this.camera;
+        const playerAnchor = camera.focalPoint.clone();
+        const currentHead = this.playerHead(camera);
+        const nextDistance = Math.max(
+            COLLISION_MESH_FIRST_PERSON_DISTANCE,
+            Math.min(COLLISION_MESH_THIRD_PERSON_DISTANCE, worldDistance)
+        );
+        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
+        const focalPoint = nextDistance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
+            playerAnchor :
+            currentHead.clone().sub(forwardVec.clone().mulScalar(nextDistance));
+        camera.setDistance(nextDistance / camera.sceneRadius * camera.fovFactor, 0);
+        camera.setFocalPoint(focalPoint, 0);
+        if (this.collisionMeshHeadY !== null) {
+            this.collisionMeshHeadY = nextDistance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
+                focalPoint.y :
+                currentHead.y;
+        }
+        this.scene.forceRender = true;
     }
 
     private clearNativeFlyInput() {
@@ -1083,7 +1175,7 @@ class WalkTool {
     }
 
     private onEmbeddedKey(event: KeyboardEvent, pressed: boolean) {
-        if (!this.embeddedControls || !this.active) {
+        if (!this.embeddedControls || !this.active || this.warmupBackground) {
             return;
         }
         if (pressed && this.isTypingTarget(event.target)) {
@@ -1134,6 +1226,9 @@ class WalkTool {
             return;
         }
 
+        if (window.parent && window.parent !== window) {
+            window.parent.postMessage({ type: 'supersplat:walk-key-state', code: event.code, pressed }, '*');
+        }
         event.preventDefault();
         event.stopPropagation();
         event.stopImmediatePropagation();
@@ -1253,7 +1348,7 @@ class WalkTool {
     }
 
     private onPointerLockMouseMove(event: MouseEvent) {
-        if (!this.active || document.pointerLockElement !== this.container) {
+        if (!this.active || this.warmupBackground || document.pointerLockElement !== this.container) {
             return;
         }
 
@@ -1268,11 +1363,22 @@ class WalkTool {
     }
 
     private onExternalPointerLook(dx = 0, dy = 0) {
+        if (this.warmupBackground) {
+            return;
+        }
         this.lastLookAt = performance.now();
         this.look(Math.max(-200, Math.min(200, dx)), Math.max(-200, Math.min(200, dy)));
     }
 
     private onExternalWalkInput(input: WalkInputState = {}) {
+        if (this.warmupBackground) {
+            this.externalWalkInput = {};
+            this.externalVerticalVelocity = 0;
+            this.externalJumpWasPressed = false;
+            this.clearNativeFlyInput();
+            return;
+        }
+
         this.externalWalkInput = {
             forward: Boolean(input.forward),
             backward: Boolean(input.backward),
@@ -1318,6 +1424,10 @@ class WalkTool {
     }
 
     private ensureUpdateLoop() {
+        if (this.warmupBackground) {
+            return;
+        }
+
         if (this.animFrame === null) {
             this.lastExternalMoveAt = performance.now();
             this.animFrame = requestAnimationFrame(() => this.updateLoop());
@@ -2081,6 +2191,9 @@ class WalkTool {
 
     private playerHead(camera = this.camera, focalPoint = camera.focalPoint) {
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
+        if (this.embeddedControls && distance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE) {
+            return focalPoint.clone();
+        }
         Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
         return focalPoint.clone().add(forwardVec.clone().mulScalar(distance));
     }
@@ -2353,15 +2466,16 @@ class WalkTool {
         const camera = this.camera;
         const distance = camera.distance * camera.sceneRadius / camera.fovFactor;
 
-        Camera.calcForwardVec(forwardVec, camera.azim, camera.elevation);
-        const cameraPosition = camera.focalPoint.add(forwardVec.clone().mulScalar(distance));
+        const playerHead = this.playerHead(camera);
 
         const sensitivity = camera.scene.config.controls.orbitSensitivity;
         const azim = camera.azim - dx * sensitivity;
         const elev = camera.elevation - dy * sensitivity;
 
         Camera.calcForwardVec(forwardVec, azim, elev);
-        const focalPoint = cameraPosition.clone().sub(forwardVec.clone().mulScalar(distance));
+        const focalPoint = this.embeddedControls && distance > COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE ?
+            playerHead :
+            playerHead.clone().sub(forwardVec.clone().mulScalar(distance));
 
         camera.setAzimElev(azim, elev, 0);
         camera.setFocalPoint(focalPoint, 0);
@@ -2369,6 +2483,11 @@ class WalkTool {
     }
 
     private updateLoop() {
+        if (this.warmupBackground) {
+            this.animFrame = null;
+            return;
+        }
+
         if (!this.active && !this.hasExternalWalkInput()) {
             this.animFrame = null;
             return;

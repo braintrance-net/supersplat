@@ -183,7 +183,6 @@ class RadialMenu extends Container {
             }
 
             const hasSplats = events.invoke('selection.splats');
-            console.log('[RadialMenu] checkSelection — hasSplats:', hasSplats, 'oneShotTool:', this.oneShotTool);
             if (hasSplats) {
                 // If the menu is already visible (e.g. shown at click point), keep it where it is
                 if (this.isVisible) return;
@@ -304,7 +303,6 @@ class RadialMenu extends Container {
         }
 
         const screenPos = this.events.invoke('selection.screenPosition') as { x: number; y: number } | null;
-        console.log('[RadialMenu] showNearSelection — screenPos:', screenPos);
 
         if (screenPos) {
             this.showAtPoint(screenPos.x, screenPos.y, allowSelectionTool);
