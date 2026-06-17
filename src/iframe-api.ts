@@ -1242,7 +1242,7 @@ const registerIframeApi = (events: Events) => {
                     }
                 };
                 events.on('walk.collisionMesh', onCollisionMesh);
-            }), 15000, `Collision mesh load timed out for ${url}`);
+            }), 45000, `Collision mesh load timed out for ${url}`);
         } finally {
             if (onCollisionMesh) {
                 events.off('walk.collisionMesh', onCollisionMesh);
