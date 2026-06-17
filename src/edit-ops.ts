@@ -34,6 +34,7 @@ const buildIndex = (total: number, pred: (i: number) => boolean) => {
 type filterFunc = (state: number, index: number) => boolean;
 type doFunc = (state: number) => number;
 type undoFunc = (state: number) => number;
+const selectionPreviewMask = State.removePreview | State.intersectPreview;
 
 class StateOp {
     splat: Splat;
@@ -132,17 +133,17 @@ class SelectOp extends StateOp {
         };
 
         const doIt = {
-            add: (state: number) => (state | State.selected) & (~State.removePreview),
-            remove: (state: number) => state & (~(State.selected | State.removePreview)),
-            set: (state: number) => (state ^ State.selected) & (~State.removePreview),
-            intersect: (state: number) => state & (~(State.selected | State.removePreview))
+            add: (state: number) => (state | State.selected) & (~selectionPreviewMask),
+            remove: (state: number) => state & (~(State.selected | selectionPreviewMask)),
+            set: (state: number) => (state ^ State.selected) & (~selectionPreviewMask),
+            intersect: (state: number) => state & (~(State.selected | selectionPreviewMask))
         };
 
         const undoIt = {
-            add: (state: number) => state & (~(State.selected | State.removePreview)),
-            remove: (state: number) => (state | State.selected) & (~State.removePreview),
-            set: (state: number) => (state ^ State.selected) & (~State.removePreview),
-            intersect: (state: number) => (state | State.selected) & (~State.removePreview)
+            add: (state: number) => state & (~(State.selected | selectionPreviewMask)),
+            remove: (state: number) => (state | State.selected) & (~selectionPreviewMask),
+            set: (state: number) => (state ^ State.selected) & (~selectionPreviewMask),
+            intersect: (state: number) => (state | State.selected) & (~selectionPreviewMask)
         };
 
         super(splat, filterFunc[op], doIt[op], undoIt[op]);

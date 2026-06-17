@@ -13,6 +13,8 @@ import { serializePly } from './splat-serialize';
 import { State } from './splat-state';
 import { Transform } from './transform';
 
+const selectionPreviewMask = State.removePreview | State.intersectPreview;
+
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
 };
@@ -650,18 +652,21 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
         for (let i = 0; i < previewState.length; ++i) {
             const selectedByBrush = hit(i);
-            const state = baseState[i];
+            const state = baseState[i] & (~selectionPreviewMask);
             const selected = (state & State.selected) !== 0;
             const editable = (state & (State.locked | State.deleted)) === 0;
 
             if (op === 'remove' && editable && selected && selectedByBrush) {
                 previewState[i] = state | State.removePreview;
+            } else if (op === 'intersect' && editable && selected && selectedByBrush) {
+                previewState[i] = state | State.intersectPreview;
             } else if (
                 (op === 'add' && editable && !selected && selectedByBrush) ||
-                (op === 'set' && editable && selected !== selectedByBrush) ||
-                (op === 'intersect' && editable && selected && !selectedByBrush)
+                (op === 'set' && editable && selected !== selectedByBrush)
             ) {
                 previewState[i] = state ^ State.selected;
+            } else {
+                previewState[i] = state;
             }
         }
 
@@ -677,21 +682,21 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
         for (let i = 0; i < nextState.length; ++i) {
             const selectedByBrush = hitMask[i] === 1;
-            const state = baseState[i];
+            const state = baseState[i] & (~selectionPreviewMask);
             const selected = (state & State.selected) !== 0;
             const editable = (state & (State.locked | State.deleted)) === 0;
 
-            nextState[i] = state & (~State.removePreview);
+            nextState[i] = state;
             if (
                 (op === 'add' && editable && !selected && selectedByBrush) ||
                 (op === 'set' && editable && selected !== selectedByBrush)
             ) {
-                nextState[i] = (state ^ State.selected) & (~State.removePreview);
+                nextState[i] = state ^ State.selected;
             } else if (
                 (op === 'remove' && editable && selected && selectedByBrush) ||
                 (op === 'intersect' && editable && selected && !selectedByBrush)
             ) {
-                nextState[i] = state & (~(State.selected | State.removePreview));
+                nextState[i] = state & (~State.selected);
             }
         }
 
@@ -785,17 +790,29 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         clearSelectionPreview();
 
         let splatCount = 0;
+        let selectedBefore = 0;
         let selectedAfter = 0;
+        let changedCount = 0;
         for (const splat of selectedSplats()) {
             splatCount++;
+            selectedBefore += splat.numSelected;
             const hit = await collectMaskHits(splat, op, canvas, context);
-            await editHistory.add(new SelectOp(splat, op, hit));
+            const selectOp = new SelectOp(splat, op, hit);
+            const changed = selectOp.indices.length;
+            changedCount += changed;
+            if (changed > 0) {
+                await editHistory.add(selectOp);
+            } else {
+                selectOp.destroy();
+            }
             selectedAfter += splat.numSelected;
         }
 
         return {
-            applied: splatCount > 0,
+            applied: changedCount > 0,
             splat_count: splatCount,
+            changed_count: changedCount,
+            selected_before: selectedBefore,
             selected_after: selectedAfter
         };
     });

@@ -6,12 +6,14 @@ uniform sampler2D splatState;
 uniform vec4 selectedClr;
 uniform vec4 lockedClr;
 uniform vec4 selectionRemovePreviewClr;
+uniform vec4 selectionIntersectPreviewClr;
 
 uniform vec3 clrOffset;
 uniform vec4 clrScale;
 
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
 varying mediump float removePreview;
+varying mediump float intersectPreview;
 varying mediump vec4 color;
 
 #if PICK_PASS
@@ -46,6 +48,7 @@ void main(void) {
     uint vertexState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5);
     uint editState = vertexState & 7u;
     bool isRemovePreview = (vertexState & 8u) != 0u;
+    bool isIntersectPreview = (vertexState & 16u) != 0u;
 
     #if PICK_PASS
         if (pickOp == 0u) {
@@ -111,6 +114,7 @@ void main(void) {
         (editState & 2u) != 0u ? 1.0 : 0.0          // locked
     );
     removePreview = isRemovePreview ? 1.0 : 0.0;
+    intersectPreview = isIntersectPreview ? 1.0 : 0.0;
 
     #if PICK_PASS
         if (pickMode == 1) {
@@ -170,10 +174,12 @@ void main(void) {
 const fragmentShader = /* glsl*/`
 varying mediump vec4 texCoord_flags;
 varying mediump float removePreview;
+varying mediump float intersectPreview;
 varying mediump vec4 color;
 
 uniform vec4 selectedClr;
 uniform vec4 selectionRemovePreviewClr;
+uniform vec4 selectionIntersectPreviewClr;
 uniform bool outlineMode;
 uniform float selectedSplatOverlay;
 uniform float ringSize;
@@ -225,12 +231,21 @@ void main(void) {
 
         bool selected = texCoord_flags.z != 0.0 && texCoord_flags.w == 0.0;
         bool removePreviewed = removePreview > 0.5 && selected;
+        bool intersectPreviewed = intersectPreview > 0.5 && selected;
 
         if (removePreviewed) {
             mediump float overlayAlpha = max(alpha, norm * max(selectionRemovePreviewClr.a, 0.85));
             vec3 overlayColor = mix(color.xyz, selectionRemovePreviewClr.xyz, 0.86);
             pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
             pcFragColor1 = vec4(selectionRemovePreviewClr.xyz * overlayAlpha, overlayAlpha);
+            return;
+        }
+
+        if (intersectPreviewed) {
+            mediump float overlayAlpha = max(alpha, norm * max(selectionIntersectPreviewClr.a, 0.85));
+            vec3 overlayColor = mix(color.xyz, selectionIntersectPreviewClr.xyz, 0.84);
+            pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
+            pcFragColor1 = vec4(selectionIntersectPreviewClr.xyz * overlayAlpha, overlayAlpha);
             return;
         }
 
