@@ -13,27 +13,33 @@ const fragmentShader = /* glsl*/ `
     void main(void) {
         ivec2 texel = ivec2(gl_FragCoord.xy);
 
-        float centerAlpha = texelFetch(srcTexture, texel, 0).a;
+        vec4 centerMask = texelFetch(srcTexture, texel, 0);
+        float centerAlpha = centerMask.a;
         bool inside = centerAlpha > alphaCutoff;
+        vec3 fallbackClr = clr.rgb;
 
         if (!inside) {
             // -- OUTSIDE: outer glow (radius 4, axis-aligned samples only) --
             float edgeDist = 0.0;
+            vec3 edgeClr = fallbackClr;
             for (int r = 1; r <= 4; r++) {
                 float d = 1.0 - float(r) / 5.0;
-                if (texelFetch(srcTexture, texel + ivec2( r,  0), 0).a > alphaCutoff ||
-                    texelFetch(srcTexture, texel + ivec2(-r,  0), 0).a > alphaCutoff ||
-                    texelFetch(srcTexture, texel + ivec2( 0,  r), 0).a > alphaCutoff ||
-                    texelFetch(srcTexture, texel + ivec2( 0, -r), 0).a > alphaCutoff) {
+                vec4 right = texelFetch(srcTexture, texel + ivec2( r,  0), 0);
+                vec4 left = texelFetch(srcTexture, texel + ivec2(-r,  0), 0);
+                vec4 up = texelFetch(srcTexture, texel + ivec2( 0,  r), 0);
+                vec4 down = texelFetch(srcTexture, texel + ivec2( 0, -r), 0);
+
+                if (right.a > alphaCutoff || left.a > alphaCutoff || up.a > alphaCutoff || down.a > alphaCutoff) {
                     edgeDist = max(edgeDist, d);
+                    vec4 edgeSample = right.a > alphaCutoff ? right : (left.a > alphaCutoff ? left : (up.a > alphaCutoff ? up : down));
+                    edgeClr = edgeSample.a > 0.0 && dot(edgeSample.rgb, edgeSample.rgb) > 0.0 ? edgeSample.rgb : fallbackClr;
                 }
             }
 
             if (edgeDist <= 0.0) discard;
 
-            vec3 glowClr = vec3(0.5, 0.8, 1.0);
             float glow = edgeDist * edgeDist;
-            gl_FragColor = vec4(glowClr, glow * 0.85);
+            gl_FragColor = vec4(edgeClr, glow * 0.85);
             return;
         }
 
@@ -63,10 +69,10 @@ const fragmentShader = /* glsl*/ `
         // bright edge band
         float edgeBand = 1.0 - smoothstep(0.0, 0.12, depth);
 
-        // glass tint
-        vec3 glassTint = vec3(0.55, 0.82, 1.0);
+        vec3 selectionClr = dot(centerMask.rgb, centerMask.rgb) > 0.0 ? centerMask.rgb : fallbackClr;
+        vec3 edgeHighlight = mix(selectionClr, vec3(1.0), 0.24);
 
-        vec3 result = glassTint * edge * 0.7 + vec3(0.85, 0.92, 1.0) * edgeBand * 0.5;
+        vec3 result = selectionClr * edge * 0.7 + edgeHighlight * edgeBand * 0.5;
         float alpha = edge * 0.6 + edgeBand * 0.65;
         alpha = clamp(alpha, 0.0, 0.85);
 
