@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-const outputPath = resolve('static/dev-assets/collision/meeting-prototype-room-layout-fallback-v1.collision.glb');
+const outputPath = resolve('static/dev-assets/collision/meeting-prototype-room-layout-fallback-v2.collision.glb');
 
 const vertices = [];
 const indices = [];
@@ -11,44 +11,58 @@ const addVertex = (x, y, z) => {
     return vertices.length / 3 - 1;
 };
 
-const addBox = ({ min, max }) => {
+const addTriangle = (a, b, c) => {
+    indices.push(a, b, c);
+};
+
+const addWalkableRect = ({ minX, maxX, minZ, maxZ, y }) => {
     const base = vertices.length / 3;
-    const corners = [
-        [min[0], min[1], min[2]],
-        [max[0], min[1], min[2]],
-        [max[0], max[1], min[2]],
-        [min[0], max[1], min[2]],
-        [min[0], min[1], max[2]],
-        [max[0], min[1], max[2]],
-        [max[0], max[1], max[2]],
-        [min[0], max[1], max[2]]
-    ];
-    for (const corner of corners) {
-        addVertex(corner[0], corner[1], corner[2]);
+    addVertex(minX, y, minZ);
+    addVertex(maxX, y, minZ);
+    addVertex(maxX, y, maxZ);
+    addVertex(minX, y, maxZ);
+    addTriangle(base + 0, base + 1, base + 2);
+    addTriangle(base + 0, base + 2, base + 3);
+};
+
+const addVerticalRect = ({ minX, maxX, x, minZ, maxZ, z, minY, maxY }) => {
+    const base = vertices.length / 3;
+    if (x !== undefined) {
+        addVertex(x, minY, minZ);
+        addVertex(x, minY, maxZ);
+        addVertex(x, maxY, maxZ);
+        addVertex(x, maxY, minZ);
+    } else {
+        addVertex(minX, minY, z);
+        addVertex(maxX, minY, z);
+        addVertex(maxX, maxY, z);
+        addVertex(minX, maxY, z);
     }
-    indices.push(
-        base + 0, base + 2, base + 1, base + 0, base + 3, base + 2,
-        base + 4, base + 5, base + 6, base + 4, base + 6, base + 7,
-        base + 0, base + 1, base + 5, base + 0, base + 5, base + 4,
-        base + 3, base + 6, base + 2, base + 3, base + 7, base + 6,
-        base + 1, base + 2, base + 6, base + 1, base + 6, base + 5,
-        base + 0, base + 4, base + 7, base + 0, base + 7, base + 3
-    );
+    addTriangle(base + 0, base + 1, base + 2);
+    addTriangle(base + 0, base + 2, base + 3);
+};
+
+const addPlatform = ({ min, max }) => {
+    addWalkableRect({ minX: min[0], maxX: max[0], minZ: min[2], maxZ: max[2], y: max[1] });
+    addVerticalRect({ minX: min[0], maxX: max[0], z: min[2], minY: min[1], maxY: max[1] });
+    addVerticalRect({ minX: min[0], maxX: max[0], z: max[2], minY: min[1], maxY: max[1] });
+    addVerticalRect({ x: min[0], minZ: min[2], maxZ: max[2], minY: min[1], maxY: max[1] });
+    addVerticalRect({ x: max[0], minZ: min[2], maxZ: max[2], minY: min[1], maxY: max[1] });
 };
 
 const addCenteredBox = ({ x, z, width, depth, minY, maxY }) => {
-    addBox({
+    addPlatform({
         min: [x - width / 2, minY, z - depth / 2],
         max: [x + width / 2, maxY, z + depth / 2]
     });
 };
 
-addBox({ min: [-5.5, -0.22, -3.7], max: [5.5, -0.08, 7.0] });
+addWalkableRect({ minX: -12, maxX: 12, minZ: -8, maxZ: 24, y: -0.08 });
 
-addBox({ min: [-5.6, -0.1, -3.7], max: [-5.35, 2.8, 7.0] });
-addBox({ min: [5.35, -0.1, -3.7], max: [5.6, 2.8, 7.0] });
-addBox({ min: [-5.5, -0.1, -3.7], max: [5.5, 2.8, -3.45] });
-addBox({ min: [-5.5, -0.1, 6.75], max: [5.5, 2.8, 7.0] });
+addVerticalRect({ x: -12, minZ: -8, maxZ: 24, minY: -0.08, maxY: 4.2 });
+addVerticalRect({ x: 12, minZ: -8, maxZ: 24, minY: -0.08, maxY: 4.2 });
+addVerticalRect({ minX: -12, maxX: 12, z: -8, minY: -0.08, maxY: 4.2 });
+addVerticalRect({ minX: -12, maxX: 12, z: 24, minY: -0.08, maxY: 4.2 });
 
 [
     { x: 0.59, z: -0.18, width: 0.9, depth: 0.9 },
