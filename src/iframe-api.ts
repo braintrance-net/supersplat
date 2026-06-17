@@ -55,6 +55,7 @@ const ROOM_WARMUP_MODE = 'supersplat:room-warmup-mode';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 const COLLISION_DEBUG_BUNDLE_GET = 'supersplat:collision-debug-bundle-get';
 const COLLISION_DEBUG_BUNDLE = 'supersplat:collision-debug-bundle';
+const COLLISION_MESH_PREVIEW = 'supersplat:collision-mesh-preview';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -326,6 +327,12 @@ interface ViewerPerfResetMessage {
 
 interface CollisionDebugBundleGetMessage {
     type: typeof COLLISION_DEBUG_BUNDLE_GET;
+    requestId?: RequestId;
+}
+
+interface CollisionMeshPreviewMessage {
+    type: typeof COLLISION_MESH_PREVIEW;
+    enabled: boolean;
     requestId?: RequestId;
 }
 
@@ -630,6 +637,10 @@ const isViewerPerfResetMessage = (data: any): data is ViewerPerfResetMessage => 
 
 const isCollisionDebugBundleGetMessage = (data: any): data is CollisionDebugBundleGetMessage => {
     return data && typeof data === 'object' && data.type === COLLISION_DEBUG_BUNDLE_GET && hasOptionalRequestId(data);
+};
+
+const isCollisionMeshPreviewMessage = (data: any): data is CollisionMeshPreviewMessage => {
+    return data && typeof data === 'object' && data.type === COLLISION_MESH_PREVIEW && typeof data.enabled === 'boolean' && hasOptionalRequestId(data);
 };
 
 const isMultiplayerPlayer = (player: any): player is MultiplayerPlayer => (
@@ -1965,10 +1976,11 @@ const registerIframeApi = (events: Events) => {
                     screenFrameBytes: true,
                     raycast: true,
                     collisionDebugBundle: true,
+                    collisionMeshPreview: true,
                     roomWarmupMode: true,
                     sceneManifest: true,
                     sceneManifestStream: true,
-                    version: 10
+                    version: 11
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1980,6 +1992,14 @@ const registerIframeApi = (events: Events) => {
                 result: events.invoke('walk.collisionDebugBundle') ?? null,
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
+        }
+
+        if (isCollisionMeshPreviewMessage(event.data)) {
+            events.fire('walk.collisionMeshPreview', event.data.enabled);
+            postDiagnostic(source, event.origin, 'collision-mesh-preview', {
+                enabled: event.data.enabled
+            }, event.data.requestId);
+            return;
         }
 
         if (isMultiplayerPlayersMessage(event.data)) {

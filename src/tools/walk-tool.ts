@@ -114,10 +114,16 @@ const COLLISION_MESH_SWEEP_STEP = 0.05;
 const COLLISION_DEBUG_TRIANGLE_RADIUS = 2.2;
 const COLLISION_DEBUG_TRIANGLE_LIMIT = 120;
 const COLLISION_DEBUG_HISTORY_LIMIT = 900;
+const COLLISION_MESH_PREVIEW_TARGET_SIZE = 1.25;
+const COLLISION_MESH_PREVIEW_TRIANGLE_LIMIT = 900;
+const COLLISION_MESH_PREVIEW_CANVAS_SIZE = 148;
+const COLLISION_MESH_PREVIEW_CANVAS_PADDING = 12;
 const COLLISION_DEBUG_PLAYER_COLOR = new Color(0.1, 0.72, 1, 1);
 const COLLISION_DEBUG_EYE_COLOR = new Color(0.82, 0.96, 1, 1);
 const COLLISION_DEBUG_FLOOR_COLOR = new Color(0.18, 1, 0.38, 1);
 const COLLISION_DEBUG_WALL_COLOR = new Color(1, 0.18, 0.12, 1);
+const COLLISION_DEBUG_PREVIEW_FLOOR_COLOR = new Color(0.18, 1, 0.48, 1);
+const COLLISION_DEBUG_PREVIEW_WALL_COLOR = new Color(1, 0.28, 0.18, 1);
 const COLLISION_DEBUG_HIT_COLOR = new Color(1, 0, 0.9, 1);
 const COLLISION_DEBUG_RAY_COLOR = new Color(1, 0.86, 0.18, 1);
 const COLLISION_DEBUG_DESIRED_MOVE_COLOR = new Color(1, 0.62, 0.12, 1);
@@ -145,6 +151,15 @@ type CollisionTriangle = {
     maxZ: number;
     normalY: number;
     blocking: boolean;
+};
+
+type CollisionMeshBounds = {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    minZ: number;
+    maxZ: number;
 };
 
 type GltfAccessor = {
@@ -193,6 +208,7 @@ class WalkCollisionMesh {
     readonly triangleCount: number;
     readonly blockingTriangleCount: number;
     readonly cellCount: number;
+    readonly bounds: CollisionMeshBounds;
     private readonly triangles: CollisionTriangle[];
     private readonly blockingCells = new Map<string, number[]>();
     private readonly groundCells = new Map<string, number[]>();
@@ -201,6 +217,7 @@ class WalkCollisionMesh {
         this.triangles = triangles;
         this.triangleCount = triangles.length;
         this.blockingTriangleCount = triangles.filter(triangle => triangle.blocking).length;
+        this.bounds = WalkCollisionMesh.triangleBounds(triangles);
         this.indexTriangles();
         this.cellCount = this.blockingCells.size;
     }
@@ -329,6 +346,19 @@ class WalkCollisionMesh {
         return this.triangles[index] ?? null;
     }
 
+    debugTriangles(limit = COLLISION_MESH_PREVIEW_TRIANGLE_LIMIT) {
+        if (this.triangles.length <= limit) {
+            return this.triangles.map((triangle, index) => ({ index, triangle }));
+        }
+
+        const stride = Math.ceil(this.triangles.length / limit);
+        const result: CollisionDebugTriangle[] = [];
+        for (let index = 0; index < this.triangles.length; index += stride) {
+            result.push({ index, triangle: this.triangles[index] });
+        }
+        return result;
+    }
+
     debugTrianglesNear(x: number, z: number, radius = COLLISION_DEBUG_TRIANGLE_RADIUS, limit = COLLISION_DEBUG_TRIANGLE_LIMIT) {
         const minCellX = Math.floor((x - radius) / COLLISION_MESH_CELL_SIZE);
         const maxCellX = Math.floor((x + radius) / COLLISION_MESH_CELL_SIZE);
@@ -396,6 +426,31 @@ class WalkCollisionMesh {
                 }
             }
         }
+    }
+
+    private static triangleBounds(triangles: CollisionTriangle[]): CollisionMeshBounds {
+        const bounds = {
+            minX: Infinity,
+            maxX: -Infinity,
+            minY: Infinity,
+            maxY: -Infinity,
+            minZ: Infinity,
+            maxZ: -Infinity
+        };
+
+        for (const triangle of triangles) {
+            bounds.minX = Math.min(bounds.minX, triangle.minX);
+            bounds.maxX = Math.max(bounds.maxX, triangle.maxX);
+            bounds.minY = Math.min(bounds.minY, triangle.minY);
+            bounds.maxY = Math.max(bounds.maxY, triangle.maxY);
+            bounds.minZ = Math.min(bounds.minZ, triangle.minZ);
+            bounds.maxZ = Math.max(bounds.maxZ, triangle.maxZ);
+        }
+
+        if (!Number.isFinite(bounds.minX)) {
+            return { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+        }
+        return bounds;
     }
 
     private static parseGlb(buffer: ArrayBuffer) {
@@ -736,6 +791,8 @@ class WalkTool {
     private collisionMeshLockedFloorY: number | null = null;
     private collisionMeshLockedFloorTriangle: number | null = null;
     private collisionDebugEnabled = WalkTool.defaultCollisionDebugEnabled();
+    private collisionMeshPreviewEnabled = WalkTool.defaultCollisionMeshPreviewEnabled();
+    private collisionMeshPreviewCanvas: HTMLCanvasElement | null = null;
     private lastCollisionDebugReason = 'idle';
     private lastCollisionDesiredMove = new Vec3();
     private lastCollisionResolvedMove: Vec3 | null = null;
@@ -766,8 +823,10 @@ class WalkTool {
         this.events.on('walk.saveFloorHeight', this.saveCollisionMeshFloorHeight, this);
         this.events.on('scene.clear', this.clearCollisionMesh, this);
         this.events.on('walk.collisionDebug', this.onCollisionDebug, this);
+        this.events.on('walk.collisionMeshPreview', this.onCollisionMeshPreview, this);
         this.events.on('prerender', this.drawCollisionDebug, this);
         this.events.function('walk.collisionDebug', () => this.collisionDebugEnabled);
+        this.events.function('walk.collisionMeshPreview', () => this.collisionMeshPreviewEnabled);
         this.events.function('walk.collisionDebugBundle', () => this.collisionDebugBundle());
         this.events.function('walk.saveFloorHeight', (source?: string) => this.saveCollisionMeshFloorHeight(source));
     }
@@ -782,8 +841,24 @@ class WalkTool {
             params.get('walkDebug') === '1';
     }
 
+    private static defaultCollisionMeshPreviewEnabled() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        const params = new URLSearchParams(window.location.search);
+        return params.get('collisionMeshPreview') === '1' ||
+            params.get('collisionMeshMini') === '1' ||
+            params.get('voxelDebug') === '1';
+    }
+
     private onCollisionDebug(enabled = true) {
         this.collisionDebugEnabled = Boolean(enabled);
+        this.scene.forceRender = true;
+    }
+
+    private onCollisionMeshPreview(enabled = true) {
+        this.collisionMeshPreviewEnabled = Boolean(enabled);
+        this.syncCollisionMeshPreviewOverlay();
         this.scene.forceRender = true;
     }
 
@@ -857,6 +932,7 @@ class WalkTool {
             toolActive: this.active,
             embeddedControls: this.embeddedControls,
             collisionDebugEnabled: this.collisionDebugEnabled,
+            collisionMeshPreviewEnabled: this.collisionMeshPreviewEnabled,
             activeTool: this.events.invoke('tool.active') as string | null,
             camera: this.events.invoke('camera.debugState') ?? null,
             mesh: {
@@ -1562,6 +1638,7 @@ class WalkTool {
                 this.collisionMeshSavedFloorY = null;
                 this.collisionMeshSavedFloorKey = null;
                 this.resetCollisionMeshFloorLock();
+                this.syncCollisionMeshPreviewOverlay();
                 this.events.fire('walk.collisionMesh', {
                     ok: false,
                     reason: 'empty',
@@ -1576,6 +1653,7 @@ class WalkTool {
             this.collisionMeshBlockingEnabled = blockingEnabled;
             this.collisionMeshLoadedKey = meshKey;
             this.collisionMeshHeadY = null;
+            this.syncCollisionMeshPreviewOverlay();
             const savedFloorY = this.collisionMeshSavedFloorKey === meshKey ?
                 this.collisionMeshSavedFloorY :
                 this.collisionMeshPendingSavedFloorY;
@@ -1631,6 +1709,7 @@ class WalkTool {
             this.collisionMeshSavedFloorY = null;
             this.collisionMeshSavedFloorKey = null;
             this.resetCollisionMeshFloorLock();
+            this.syncCollisionMeshPreviewOverlay();
             this.pushCollisionDebugSample('mesh-load-failed', {
                 url: details.url,
                 requestId: details.requestId ?? null,
@@ -1664,6 +1743,7 @@ class WalkTool {
         this.resetCollisionMeshFloorLock();
         this.resetCollisionDebugMove();
         this.lastCollisionFloorTriangle = null;
+        this.syncCollisionMeshPreviewOverlay();
         this.pushCollisionDebugSample('mesh-clear', {
             reason: details.reason ?? 'cleared',
             requestId: details.requestId ?? null
@@ -2188,13 +2268,126 @@ class WalkTool {
         return focalPoint.clone().add(forwardVec.clone().mulScalar(distance));
     }
 
+    private syncCollisionMeshPreviewOverlay() {
+        if (!this.collisionMeshPreviewEnabled || !this.collisionMesh || typeof document === 'undefined') {
+            this.removeCollisionMeshPreviewOverlay();
+            return;
+        }
+
+        const canvas = this.ensureCollisionMeshPreviewCanvas();
+        if (!canvas) {
+            return;
+        }
+
+        this.drawCollisionMeshPreviewCanvas(canvas, this.collisionMesh);
+    }
+
+    private ensureCollisionMeshPreviewCanvas() {
+        if (this.collisionMeshPreviewCanvas?.isConnected) {
+            return this.collisionMeshPreviewCanvas;
+        }
+        if (!document.body) {
+            return null;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.style.position = 'fixed';
+        canvas.style.left = '12px';
+        canvas.style.bottom = '12px';
+        canvas.style.width = `${COLLISION_MESH_PREVIEW_CANVAS_SIZE}px`;
+        canvas.style.height = `${COLLISION_MESH_PREVIEW_CANVAS_SIZE}px`;
+        canvas.style.zIndex = '2147483646';
+        canvas.style.pointerEvents = 'none';
+        canvas.style.background = 'rgba(2, 6, 8, 0.72)';
+        canvas.style.border = '1px solid rgba(180, 245, 255, 0.42)';
+        canvas.style.borderRadius = '6px';
+        canvas.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.38)';
+        document.body.appendChild(canvas);
+        this.collisionMeshPreviewCanvas = canvas;
+        return canvas;
+    }
+
+    private removeCollisionMeshPreviewOverlay() {
+        this.collisionMeshPreviewCanvas?.remove();
+        this.collisionMeshPreviewCanvas = null;
+    }
+
+    private drawCollisionMeshPreviewCanvas(canvas: HTMLCanvasElement, mesh: WalkCollisionMesh) {
+        const context = canvas.getContext('2d');
+        if (!context) {
+            return;
+        }
+
+        const pixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        const pixelSize = Math.round(COLLISION_MESH_PREVIEW_CANVAS_SIZE * pixelRatio);
+        if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
+            canvas.width = pixelSize;
+            canvas.height = pixelSize;
+        }
+
+        context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+        context.clearRect(0, 0, COLLISION_MESH_PREVIEW_CANVAS_SIZE, COLLISION_MESH_PREVIEW_CANVAS_SIZE);
+        context.fillStyle = 'rgba(2, 6, 8, 0.72)';
+        context.fillRect(0, 0, COLLISION_MESH_PREVIEW_CANVAS_SIZE, COLLISION_MESH_PREVIEW_CANVAS_SIZE);
+
+        const bounds = mesh.bounds;
+        const sizeX = Math.max(0.001, bounds.maxX - bounds.minX);
+        const sizeZ = Math.max(0.001, bounds.maxZ - bounds.minZ);
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+        const scale = (COLLISION_MESH_PREVIEW_CANVAS_SIZE - COLLISION_MESH_PREVIEW_CANVAS_PADDING * 2) / Math.max(sizeX, sizeZ);
+        const project = (x: number, z: number) => ({
+            x: COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 + (x - centerX) * scale,
+            y: COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - (z - centerZ) * scale
+        });
+
+        context.lineWidth = 1;
+        context.strokeStyle = 'rgba(180, 245, 255, 0.22)';
+        context.strokeRect(
+            COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - sizeX * scale / 2,
+            COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - sizeZ * scale / 2,
+            sizeX * scale,
+            sizeZ * scale
+        );
+
+        for (const { triangle } of mesh.debugTriangles()) {
+            const a = project(triangle.ax, triangle.az);
+            const b = project(triangle.bx, triangle.bz);
+            const c = project(triangle.cx, triangle.cz);
+            context.strokeStyle = triangle.blocking ? 'rgba(255, 82, 64, 0.78)' : 'rgba(78, 255, 146, 0.6)';
+            context.beginPath();
+            context.moveTo(a.x, a.y);
+            context.lineTo(b.x, b.y);
+            context.lineTo(c.x, c.y);
+            context.closePath();
+            context.stroke();
+        }
+
+        context.strokeStyle = 'rgba(255, 236, 128, 0.86)';
+        context.beginPath();
+        context.moveTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - 5, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2);
+        context.lineTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 + 5, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2);
+        context.moveTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - 5);
+        context.lineTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 + 5);
+        context.stroke();
+    }
+
     private drawCollisionDebug() {
-        if (!this.collisionDebugEnabled || !this.active || !this.collisionMesh) {
+        if ((!this.collisionDebugEnabled && !this.collisionMeshPreviewEnabled) || !this.active || !this.collisionMesh) {
             return;
         }
 
         const mesh = this.collisionMesh;
         const body = this.playerCollisionBodies()[0];
+        if (this.collisionMeshPreviewEnabled) {
+            this.drawDebugMeshPreview(mesh, body);
+        }
+
+        if (!this.collisionDebugEnabled) {
+            this.scene.forceRender = true;
+            return;
+        }
+
         const feetY = body.eye.y - body.eyeHeight;
         const floor = this.collisionMeshGroundHit(mesh,
             body.eye.x,
@@ -2212,6 +2405,65 @@ class WalkTool {
         this.drawDebugMoveVectors(body);
 
         this.scene.forceRender = true;
+    }
+
+    private drawDebugMeshPreview(mesh: WalkCollisionMesh, body: PlayerCollisionBody) {
+        const bounds = mesh.bounds;
+        const sizeX = Math.max(0.001, bounds.maxX - bounds.minX);
+        const sizeY = Math.max(0.001, bounds.maxY - bounds.minY);
+        const sizeZ = Math.max(0.001, bounds.maxZ - bounds.minZ);
+        const scale = COLLISION_MESH_PREVIEW_TARGET_SIZE / Math.max(sizeX, sizeY, sizeZ);
+        const center = new Vec3(
+            (bounds.minX + bounds.maxX) / 2,
+            (bounds.minY + bounds.maxY) / 2,
+            (bounds.minZ + bounds.maxZ) / 2
+        );
+
+        const forward = this.camera.forward.clone();
+        forward.y = 0;
+        const forwardLen = Math.hypot(forward.x, forward.z);
+        if (forwardLen > 0.0001) {
+            forward.mulScalar(1 / forwardLen);
+        } else {
+            forward.set(0, 0, -1);
+        }
+        const right = new Vec3(forward.z, 0, -forward.x);
+        const anchor = body.eye.clone()
+        .add(forward.mulScalar(1.45))
+        .add(right.mulScalar(0.82));
+        anchor.y -= 0.42;
+
+        const project = (x: number, y: number, z: number) => new Vec3(
+            anchor.x + (x - center.x) * scale,
+            anchor.y + (y - center.y) * scale,
+            anchor.z + (z - center.z) * scale
+        );
+
+        for (const { triangle } of mesh.debugTriangles()) {
+            const color = triangle.blocking ? COLLISION_DEBUG_PREVIEW_WALL_COLOR : COLLISION_DEBUG_PREVIEW_FLOOR_COLOR;
+            const a = project(triangle.ax, triangle.ay, triangle.az);
+            const b = project(triangle.bx, triangle.by, triangle.bz);
+            const c = project(triangle.cx, triangle.cy, triangle.cz);
+            this.drawDebugLine(a, b, color);
+            this.drawDebugLine(b, c, color);
+            this.drawDebugLine(c, a, color);
+        }
+
+        this.drawDebugLine(
+            new Vec3(anchor.x - 0.08, anchor.y, anchor.z),
+            new Vec3(anchor.x + 0.08, anchor.y, anchor.z),
+            COLLISION_DEBUG_RAY_COLOR
+        );
+        this.drawDebugLine(
+            new Vec3(anchor.x, anchor.y - 0.08, anchor.z),
+            new Vec3(anchor.x, anchor.y + 0.08, anchor.z),
+            COLLISION_DEBUG_RAY_COLOR
+        );
+        this.drawDebugLine(
+            new Vec3(anchor.x, anchor.y, anchor.z - 0.08),
+            new Vec3(anchor.x, anchor.y, anchor.z + 0.08),
+            COLLISION_DEBUG_RAY_COLOR
+        );
     }
 
     private drawDebugTriangles(mesh: WalkCollisionMesh, body: PlayerCollisionBody, floor: GroundMeshHit | null) {
