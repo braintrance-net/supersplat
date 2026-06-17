@@ -1055,6 +1055,7 @@ const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
 
 type ActiveSceneManifestStream = {
     camera?: CameraState;
+    collisionMeshSrc?: string | null;
     finished: boolean;
     importedCount: number;
     manifest: LoadSceneManifestMessage['manifest'];
@@ -1102,6 +1103,7 @@ const registerIframeApi = (events: Events) => {
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
     let activeCollisionMeshSrc: string | null = null;
+    let activeCollisionMeshReadySrc: string | null = null;
     let lastGameModeSignature = '';
     let renderWarmupFrame: number | null = null;
     let activeRenderFrame: number | null = null;
@@ -1206,6 +1208,39 @@ const registerIframeApi = (events: Events) => {
         postSceneManifestLoaded(source, origin, error, false, requestId);
     };
 
+    const waitForCollisionMeshReady = async (url: string, requestId?: RequestId) => {
+        if (activeCollisionMeshReadySrc === url) {
+            return;
+        }
+
+        let onCollisionMesh: ((details: Record<string, unknown>) => void) | null = null;
+        try {
+            await withTimeout(new Promise<void>((resolve, reject) => {
+                onCollisionMesh = (details: Record<string, unknown>) => {
+                    if (details.url !== url) {
+                        return;
+                    }
+
+                    if (details.ok === true && details.reason === 'ready') {
+                        resolve();
+                        return;
+                    }
+
+                    if (details.reason === 'empty' || details.reason === 'load-failed') {
+                        reject(new Error(typeof details.error === 'string' ? details.error : 'Collision mesh load failed'));
+                    }
+                };
+                events.on('walk.collisionMesh', onCollisionMesh);
+            }), 15000, `Collision mesh load timed out for ${url}`);
+        } finally {
+            if (onCollisionMesh) {
+                events.off('walk.collisionMesh', onCollisionMesh);
+            }
+        }
+
+        postDiagnostic(window.parent, '*', 'collision-mesh-ready', { url }, requestId);
+    };
+
     const finalizeSceneManifestLoad = async (
         source: Window,
         origin: string,
@@ -1213,6 +1248,7 @@ const registerIframeApi = (events: Events) => {
         manifest: LoadSceneManifestMessage['manifest'],
         importedCount: number,
         camera?: CameraState,
+        collisionMeshSrc?: string | null,
         requestId?: RequestId
     ) => {
         let rendered = false;
@@ -1223,10 +1259,21 @@ const registerIframeApi = (events: Events) => {
                 empty: events.invoke('scene.empty') as boolean
             }, requestId);
 
-            events.fire('walk.collisionMeshClear', {
-                reason: 'manifest-disabled',
-                requestId: requestId ?? null
-            });
+            activeCollisionMeshSrc = collisionMeshSrc ?? null;
+            if (collisionMeshSrc) {
+                const collisionMeshReady = waitForCollisionMeshReady(collisionMeshSrc, requestId);
+                events.fire('walk.collisionMeshLoad', {
+                    url: collisionMeshSrc,
+                    blockingEnabled: true,
+                    requestId: requestId ?? null
+                });
+                await collisionMeshReady;
+            } else {
+                events.fire('walk.collisionMeshClear', {
+                    reason: 'manifest-disabled',
+                    requestId: requestId ?? null
+                });
+            }
             applyCameraState(events, camera);
             startRenderWarmup(roomWarmupBackground ? 3 : 8, { allowBackground: true });
             rendered = await waitForPostRender(events);
@@ -1286,6 +1333,7 @@ const registerIframeApi = (events: Events) => {
                     stream.manifest,
                     stream.importedCount,
                     stream.camera,
+                    stream.collisionMeshSrc,
                     stream.requestId
                 );
             }
@@ -1846,6 +1894,13 @@ const registerIframeApi = (events: Events) => {
     });
 
     events.on('walk.collisionMesh', (details: Record<string, unknown>) => {
+        const url = typeof details.url === 'string' ? details.url : null;
+        if (url && details.ok === true && details.reason === 'ready') {
+            activeCollisionMeshReadySrc = url;
+        } else if (!url || details.reason === 'cleared' || details.reason === 'empty' || details.reason === 'load-failed') {
+            activeCollisionMeshReadySrc = null;
+        }
+
         if (window.parent && window.parent !== window) {
             window.parent.postMessage({
                 type: DIAGNOSTIC,
@@ -2246,11 +2301,13 @@ const registerIframeApi = (events: Events) => {
                 id: event.data.manifest.id,
                 layerCount: layers.length,
                 totalBytes: event.data.manifest.totalBytes ?? layers.reduce((total, layer) => total + (layer.data?.byteLength ?? layer.byteLength ?? 0), 0),
-                strategy: event.data.manifest.strategy ?? null
+                strategy: event.data.manifest.strategy ?? null,
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null
             }, event.data.requestId);
             try {
                 events.fire('scene.clear');
                 activeCollisionMeshSrc = null;
+                activeCollisionMeshReadySrc = null;
                 let importedCount = 0;
                 for (const [layerIndex, layer] of layers.entries()) {
                     const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
@@ -2273,6 +2330,7 @@ const registerIframeApi = (events: Events) => {
                     event.data.manifest,
                     importedCount,
                     event.data.camera,
+                    event.data.collisionMeshSrc ?? null,
                     event.data.requestId
                 );
             } catch (err) {
@@ -2292,8 +2350,10 @@ const registerIframeApi = (events: Events) => {
             events.fire('multiplayer.players', []);
             events.fire('scene.clear');
             activeCollisionMeshSrc = null;
+            activeCollisionMeshReadySrc = null;
             activeSceneManifestStream = {
                 camera: event.data.camera,
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null,
                 finished: false,
                 importedCount: 0,
                 manifest: event.data.manifest,
@@ -2308,7 +2368,8 @@ const registerIframeApi = (events: Events) => {
                 id: event.data.manifest.id,
                 layerCount: event.data.manifest.layers.length,
                 totalBytes: event.data.manifest.totalBytes ?? event.data.manifest.layers.reduce((total, layer) => total + (layer.byteLength ?? 0), 0),
-                strategy: event.data.manifest.strategy ?? null
+                strategy: event.data.manifest.strategy ?? null,
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null
             }, event.data.requestId);
             return;
         }
