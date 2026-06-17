@@ -2,7 +2,8 @@ enum State {
     selected = 1,
     locked = 2,
     deleted = 4,
-    removePreview = 8
+    removePreview = 8,
+    intersectPreview = 16
 }
 
 export { State };

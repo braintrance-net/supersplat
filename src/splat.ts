@@ -26,6 +26,7 @@ const vec = new Vec3();
 const veca = new Vec3();
 const vecb = new Vec3();
 const selectionRemovePreviewClr = [1, 0.12, 0.08, 0.95];
+const selectionIntersectPreviewClr = [1, 0.82, 0.1, 0.96];
 
 const boundingPoints =
     [-1, 1].map((x) => {
@@ -104,6 +105,7 @@ class Splat extends Element {
         // bit 2: locked
         // bit 3: deleted
         // bit 4: transient remove preview
+        // bit 5: transient intersect overlap preview
         if (!this.splatData.getProp('state')) {
             this.splatData.getElement('vertex').properties.push({
                 type: 'uchar',
@@ -359,6 +361,7 @@ class Splat extends Element {
         }
         material.setParameter('selectedSplatOverlay', selectedSplatOverlay ? 1 : 0);
         material.setParameter('selectionRemovePreviewClr', selectionRemovePreviewClr);
+        material.setParameter('selectionIntersectPreviewClr', selectionIntersectPreviewClr);
         material.setParameter('unselectedClr', [unselectedClr.r, unselectedClr.g, unselectedClr.b, unselectedClr.a]);
         material.setParameter('lockedClr', [lockedClr.r, lockedClr.g, lockedClr.b, lockedClr.a]);
 

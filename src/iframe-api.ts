@@ -1251,7 +1251,11 @@ const registerIframeApi = (events: Events) => {
 
         stream.processing = true;
         try {
-            while (activeSceneManifestStream === stream) {
+            while (true) {
+                if (activeSceneManifestStream !== stream) {
+                    break;
+                }
+
                 const layer = stream.pendingLayers.get(stream.nextLayerIndex);
                 if (!layer) {
                     break;
@@ -2332,7 +2336,9 @@ const registerIframeApi = (events: Events) => {
                 layerIndex: event.data.layerIndex,
                 layerCount: stream.manifest.layers.length
             }, stream.requestId);
-            void processSceneManifestStream();
+            processSceneManifestStream().catch((err) => {
+                console.warn('[iframe-api] Scene manifest stream processing failed', err);
+            });
             return;
         }
 
@@ -2352,7 +2358,9 @@ const registerIframeApi = (events: Events) => {
                 layerCount: stream.manifest.layers.length,
                 pendingLayers: stream.pendingLayers.size
             }, stream.requestId);
-            void processSceneManifestStream();
+            processSceneManifestStream().catch((err) => {
+                console.warn('[iframe-api] Scene manifest stream processing failed', err);
+            });
             return;
         }
 

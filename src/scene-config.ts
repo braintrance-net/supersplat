@@ -1,8 +1,8 @@
 type Color = { r: number, g: number, b: number, a: number };
 
 const DEFAULT_BG_CLR: Color = { r: 0, g: 0, b: 0, a: 1 };
-const DEFAULT_SELECTED_CLR: Color = { r: 0.6, g: 0.85, b: 1.0, a: 1.0 };
-const DEFAULT_UNSELECTED_CLR: Color = { r: 0, g: 0, b: 1, a: 0.5 };
+const DEFAULT_SELECTED_CLR: Color = { r: 0.08, g: 0.78, b: 0.52, a: 1.0 };
+const DEFAULT_UNSELECTED_CLR: Color = { r: 0, g: 0, b: 0, a: 0 };
 const DEFAULT_LOCKED_CLR: Color = { r: 0, g: 0, b: 0, a: 0.05 };
 
 // default config

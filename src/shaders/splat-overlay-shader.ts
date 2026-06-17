@@ -32,6 +32,7 @@ const vertexShader = /* glsl */ `
     uniform vec4 selectedClr;
     uniform vec4 unselectedClr;
     uniform vec4 selectionRemovePreviewClr;
+    uniform vec4 selectionIntersectPreviewClr;
 
     varying vec4 varying_color;
 
@@ -100,6 +101,7 @@ const vertexShader = /* glsl */ `
         uint splatState = uint(texelFetch(splatState, splatUV, 0).r * 255.0);
         bool isSelected = (splatState & 1u) != 0u;
         bool isRemovePreview = (splatState & 8u) != 0u;
+        bool isIntersectPreview = (splatState & 16u) != 0u;
 
         // check for locked splats (deleted splats are already excluded from order texture)
         if ((splatState & 2u) != 0u) {
@@ -151,11 +153,13 @@ const vertexShader = /* glsl */ `
             }
 
             // choose between selection colors and gaussian color
-            vec3 selectionClr = isRemovePreview ? selectionRemovePreviewClr.xyz : selectedClr.xyz;
-            float selectionMix = isRemovePreview ? selectionRemovePreviewClr.w : (isSelected ? selectedClr.w : 0.0);
+            bool showIntersectPreview = isIntersectPreview && isSelected;
+            vec3 selectionClr = isRemovePreview ? selectionRemovePreviewClr.xyz : (showIntersectPreview ? selectionIntersectPreviewClr.xyz : selectedClr.xyz);
+            float selectionMix = isRemovePreview ? selectionRemovePreviewClr.w : (showIntersectPreview ? selectionIntersectPreviewClr.w : (isSelected ? selectedClr.w : 0.0));
+            float pointAlpha = selectionMix > 0.0 ? max(unselectedClr.w, selectionMix) : unselectedClr.w;
             varying_color = vec4(
                 mix(gaussianClr, selectionClr, selectionMix),
-                unselectedClr.w
+                pointAlpha
             );
 
             gl_Position = matrix_viewProjection * model * vec4(center, 1.0);

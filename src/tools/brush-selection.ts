@@ -62,6 +62,8 @@ class BrushSelection {
         let finalStrokeTimer: number | undefined;
         let strokeSelectionOp: BrushSelectionOp | null = null;
         let strokeRawMode: RawBrushMode | null = null;
+        let strokeVariant: BrushSelectionVariant | null = null;
+        let strokeHadGaussianSelection: boolean | null = null;
 
         // 3D brush mode: when a collision surface is loaded for the scene, the
         // brush keeps a constant world-space radius and the cursor conforms to
@@ -107,20 +109,24 @@ class BrushSelection {
             return op === 'remove' || op === 'intersect';
         };
 
-        const isRawBrushVariant = () => {
-            return variant === 'raw' || variant === 'raw3d';
+        const isRawBrushVariant = (value = variant) => {
+            return value === 'raw' || value === 'raw3d';
         };
 
-        const is2DRawBrush = () => {
-            return variant === 'raw';
+        const is2DRawBrush = (value = variant) => {
+            return value === 'raw';
         };
 
-        const usesSurfaceBrush = () => {
-            return variant === 'raw3d' || variant === 'boxer' || variant === 'sam';
+        const usesSurfaceBrush = (value = variant) => {
+            return value === 'raw3d' || value === 'boxer' || value === 'sam';
         };
 
         const hasCurrentGaussianSelection = () => {
             return events.invoke('selection.splats') === true;
+        };
+
+        const hasStrokeGaussianSelection = () => {
+            return strokeHadGaussianSelection ?? hasCurrentGaussianSelection();
         };
 
         const toastRawModeNeedsSelection = () => {
@@ -307,7 +313,7 @@ class BrushSelection {
             }
         };
 
-        const buildBrushPrompt = () => {
+        const buildBrushPrompt = (promptVariant = strokeVariant ?? variant) => {
             if (points.length === 0) return null;
             const promptRawMode = strokeRawMode ?? rawBrushMode;
             const bounds = points.reduce((acc, point) => {
@@ -342,7 +348,7 @@ class BrushSelection {
             //   boxer -> brush_boxer   (real Boxer model lift, no fallback)
             //   sam   -> brush_sam     (real SAM mask, no fallback)
             return {
-                type: variant === 'sam' ? 'brush_sam' : variant === 'boxer' ? 'brush_boxer' : 'client_brush',
+                type: promptVariant === 'sam' ? 'brush_sam' : promptVariant === 'boxer' ? 'brush_boxer' : 'client_brush',
                 click_xy: center,
                 brush: {
                     shape: 'stroke',
@@ -350,13 +356,13 @@ class BrushSelection {
                     radius: promptRadius,
                     bb2d,
                     points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
-                    ...(isRawBrushVariant() ? {
+                    ...(isRawBrushVariant(promptVariant) ? {
                         mode: 'raw' as const,
                         selection_mode: promptRawMode,
-                        brush_space: is2DRawBrush() ? '2d' as const : '3d' as const
+                        brush_space: is2DRawBrush(promptVariant) ? '2d' as const : '3d' as const
                     } : {}),
-                    ...(usesSurfaceBrush() && radiusWorld !== null ? { radius_world: radiusWorld } : {}),
-                    ...(usesSurfaceBrush() && strokeTrace.length ? { probe_trace: strokeTrace } : {})
+                    ...(usesSurfaceBrush(promptVariant) && radiusWorld !== null ? { radius_world: radiusWorld } : {}),
+                    ...(usesSurfaceBrush(promptVariant) && strokeTrace.length ? { probe_trace: strokeTrace } : {})
                 }
             };
         };
@@ -396,6 +402,7 @@ class BrushSelection {
                 window.clearTimeout(finalStrokeTimer);
                 finalStrokeTimer = undefined;
             }
+            canvas.style.display = 'none';
         };
 
         const repaintMaskStroke = (color: string) => {
@@ -404,7 +411,7 @@ class BrushSelection {
             context.fillStyle = color;
             context.fillRect(0, 0, canvas.width, canvas.height);
             context.restore();
-            context.globalCompositeOperation = 'copy';
+            context.globalCompositeOperation = 'source-over';
         };
 
         const holdFinalStroke = (color = BRUSH_STROKE_FINAL_COLOR) => {
@@ -446,10 +453,11 @@ class BrushSelection {
             if (!livePreviewEnabled || dragId === undefined) {
                 return;
             }
-            if (is2DRawBrush() && !rawModeAllows2DPreview(op)) {
+            const previewVariant = strokeVariant ?? variant;
+            if (is2DRawBrush(previewVariant) && !rawModeAllows2DPreview(op)) {
                 return;
             }
-            if (isRawBrushVariant() && selectionOpNeedsExistingSelection(op) && !hasCurrentGaussianSelection()) {
+            if (isRawBrushVariant(previewVariant) && selectionOpNeedsExistingSelection(op) && !hasStrokeGaussianSelection()) {
                 return;
             }
 
@@ -477,10 +485,12 @@ class BrushSelection {
 
             if (dragId !== undefined) {
                 const selectionOp = strokeSelectionOp ?? selectionOpFromPointer(e);
+                const activeStrokeVariant = strokeVariant ?? variant;
+                context.globalCompositeOperation = 'source-over';
                 context.beginPath();
-                context.strokeStyle = is2DRawBrush() && selectionOp === 'remove' ?
+                context.strokeStyle = is2DRawBrush(activeStrokeVariant) && selectionOp === 'remove' ?
                     BRUSH_STROKE_REMOVE_COLOR :
-                    (is2DRawBrush() ? BRUSH_STROKE_ACTIVE_COLOR : '#f60');
+                    (is2DRawBrush(activeStrokeVariant) ? BRUSH_STROKE_ACTIVE_COLOR : '#f60');
                 context.lineCap = 'round';
                 context.lineWidth = radius * 2;
                 context.moveTo(prev.x, prev.y);
@@ -500,12 +510,15 @@ class BrushSelection {
                 e.preventDefault();
                 e.stopPropagation();
                 const selectionOp = selectionOpFromPointer(e);
-                if (isRawBrushVariant() && selectionOpNeedsExistingSelection(selectionOp) && !hasCurrentGaussianSelection()) {
+                const hadGaussianSelection = hasCurrentGaussianSelection();
+                if (isRawBrushVariant() && selectionOpNeedsExistingSelection(selectionOp) && !hadGaussianSelection) {
                     toastRawModeNeedsSelection();
                     return;
                 }
                 strokeSelectionOp = selectionOp;
                 strokeRawMode = rawBrushMode;
+                strokeVariant = variant;
+                strokeHadGaussianSelection = hadGaussianSelection;
                 events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
                 dragId = e.pointerId;
@@ -519,6 +532,7 @@ class BrushSelection {
                 }
 
                 // clear canvas
+                context.globalCompositeOperation = 'source-over';
                 context.clearRect(0, 0, canvas.width, canvas.height);
 
                 // display it
@@ -558,6 +572,8 @@ class BrushSelection {
             clearLivePreview();
             strokeSelectionOp = null;
             strokeRawMode = null;
+            strokeVariant = null;
+            strokeHadGaussianSelection = null;
         };
 
         const pointerup = async (e: PointerEvent) => {
@@ -566,26 +582,36 @@ class BrushSelection {
                 e.stopPropagation();
                 cancelLivePreview();
                 const selectionOp = strokeSelectionOp ?? selectionOpFromPointer(e);
-                if (isRawBrushVariant() && selectionOpNeedsExistingSelection(selectionOp) && !hasCurrentGaussianSelection()) {
+                const commitVariant = strokeVariant ?? variant;
+                if (isRawBrushVariant(commitVariant) && selectionOpNeedsExistingSelection(selectionOp) && !hasStrokeGaussianSelection()) {
                     toastRawModeNeedsSelection();
                     dragEnd();
                     return;
                 }
 
-                let selectionResult: { selected_after?: number; splat_count?: number } | undefined;
+                let selectionResult: { applied?: boolean; selected_after?: number; splat_count?: number } | undefined;
                 let prompt: ReturnType<typeof buildBrushPrompt> = null;
                 try {
-                    const previewCommit = await events.invoke('select.commitMaskPreview', selectionOp) as
-                        ({ applied?: boolean; preview?: boolean; selected_after?: number; splat_count?: number } | undefined);
-                    selectionResult = previewCommit?.preview ?
-                        previewCommit :
-                        await events.invoke(
+                    if (isRawBrushVariant(commitVariant)) {
+                        selectionResult = await events.invoke(
                             'select.byMask',
                             selectionOp,
                             canvas,
                             context
                         ) as { selected_after?: number; splat_count?: number } | undefined;
-                    prompt = buildBrushPrompt();
+                    } else {
+                        const previewCommit = await events.invoke('select.commitMaskPreview', selectionOp) as
+                            ({ applied?: boolean; preview?: boolean; selected_after?: number; splat_count?: number } | undefined);
+                        selectionResult = previewCommit?.preview ?
+                            previewCommit :
+                            await events.invoke(
+                                'select.byMask',
+                                selectionOp,
+                                canvas,
+                                context
+                            ) as { selected_after?: number; splat_count?: number } | undefined;
+                    }
+                    prompt = buildBrushPrompt(commitVariant);
                 } catch (err) {
                     console.warn('[BrushSelection] mask selection failed', err);
                     events.fire('toast', 'Brush selection failed', 'error');
@@ -593,16 +619,16 @@ class BrushSelection {
                     dragEnd();
                 }
 
-                if (selectionResult && is2DRawBrush()) {
+                if (selectionResult?.applied && is2DRawBrush(commitVariant)) {
                     events.fire('setSelectedClr', BRUSH_SELECTION_FINAL_COLOR);
                     events.fire('view.setSelectedSplatsOverlay', true);
                     holdFinalStroke(selectionOp === 'remove' ? BRUSH_STROKE_REMOVE_COLOR : BRUSH_STROKE_FINAL_COLOR);
                 }
 
-                if (selectionResult) {
-                    events.fire('selection.commit', { source: 'brushSelection', variant, result: selectionResult });
+                if (selectionResult?.applied) {
+                    events.fire('selection.commit', { source: 'brushSelection', variant: commitVariant, result: selectionResult });
                 }
-                if (prompt) {
+                if (prompt && (!isRawBrushVariant(commitVariant) || selectionResult?.applied)) {
                     events.fire('boxer.brushPromptCaptured', prompt);
                 }
             }
