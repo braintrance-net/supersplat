@@ -60,6 +60,8 @@ class BrushSelection {
         let livePreviewRunId = 0;
         let lastLivePreviewAt = 0;
         let finalStrokeTimer: number | undefined;
+        let strokeSelectionOp: BrushSelectionOp | null = null;
+        let strokeRawMode: RawBrushMode | null = null;
 
         // 3D brush mode: when a collision surface is loaded for the scene, the
         // brush keeps a constant world-space radius and the cursor conforms to
@@ -98,7 +100,7 @@ class BrushSelection {
         };
 
         const selectionOpNeedsExistingSelection = (op: BrushSelectionOp) => {
-            return op !== 'set';
+            return op === 'remove' || op === 'intersect';
         };
 
         const rawModeAllows2DPreview = (op: BrushSelectionOp) => {
@@ -122,7 +124,7 @@ class BrushSelection {
         };
 
         const toastRawModeNeedsSelection = () => {
-            events.fire('toast', 'Raw brush Add, Remove, and Intersect need an existing selection', 'warning');
+            events.fire('toast', 'Raw brush Remove and Intersect need an existing selection', 'warning');
         };
 
         const setRawBrushMode = (value: RawBrushMode) => {
@@ -307,6 +309,7 @@ class BrushSelection {
 
         const buildBrushPrompt = () => {
             if (points.length === 0) return null;
+            const promptRawMode = strokeRawMode ?? rawBrushMode;
             const bounds = points.reduce((acc, point) => {
                 acc[0] = Math.min(acc[0], point[0]);
                 acc[1] = Math.min(acc[1], point[1]);
@@ -349,7 +352,7 @@ class BrushSelection {
                     points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
                     ...(isRawBrushVariant() ? {
                         mode: 'raw' as const,
-                        selection_mode: rawBrushMode,
+                        selection_mode: promptRawMode,
                         brush_space: is2DRawBrush() ? '2d' as const : '3d' as const
                     } : {}),
                     ...(usesSurfaceBrush() && radiusWorld !== null ? { radius_world: radiusWorld } : {}),
@@ -473,8 +476,9 @@ class BrushSelection {
             circle.setAttribute('cy', y.toString());
 
             if (dragId !== undefined) {
+                const selectionOp = strokeSelectionOp ?? selectionOpFromPointer(e);
                 context.beginPath();
-                context.strokeStyle = is2DRawBrush() && selectionOpFromPointer(e) === 'remove' ?
+                context.strokeStyle = is2DRawBrush() && selectionOp === 'remove' ?
                     BRUSH_STROKE_REMOVE_COLOR :
                     (is2DRawBrush() ? BRUSH_STROKE_ACTIVE_COLOR : '#f60');
                 context.lineCap = 'round';
@@ -487,7 +491,7 @@ class BrushSelection {
                 prev.x = x;
                 prev.y = y;
 
-                requestLivePreview(selectionOpFromPointer(e));
+                requestLivePreview(selectionOp);
             }
         };
 
@@ -500,6 +504,8 @@ class BrushSelection {
                     toastRawModeNeedsSelection();
                     return;
                 }
+                strokeSelectionOp = selectionOp;
+                strokeRawMode = rawBrushMode;
                 events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
                 dragId = e.pointerId;
@@ -550,6 +556,8 @@ class BrushSelection {
             }
             canvas.style.display = 'none';
             clearLivePreview();
+            strokeSelectionOp = null;
+            strokeRawMode = null;
         };
 
         const pointerup = async (e: PointerEvent) => {
@@ -557,7 +565,7 @@ class BrushSelection {
                 e.preventDefault();
                 e.stopPropagation();
                 cancelLivePreview();
-                const selectionOp = selectionOpFromPointer(e);
+                const selectionOp = strokeSelectionOp ?? selectionOpFromPointer(e);
                 if (isRawBrushVariant() && selectionOpNeedsExistingSelection(selectionOp) && !hasCurrentGaussianSelection()) {
                     toastRawModeNeedsSelection();
                     dragEnd();
@@ -567,12 +575,16 @@ class BrushSelection {
                 let selectionResult: { selected_after?: number; splat_count?: number } | undefined;
                 let prompt: ReturnType<typeof buildBrushPrompt> = null;
                 try {
-                    selectionResult = await events.invoke(
-                        'select.byMask',
-                        selectionOp,
-                        canvas,
-                        context
-                    ) as { selected_after?: number; splat_count?: number } | undefined;
+                    const previewCommit = await events.invoke('select.commitMaskPreview', selectionOp) as
+                        ({ applied?: boolean; preview?: boolean; selected_after?: number; splat_count?: number } | undefined);
+                    selectionResult = previewCommit?.preview ?
+                        previewCommit :
+                        await events.invoke(
+                            'select.byMask',
+                            selectionOp,
+                            canvas,
+                            context
+                        ) as { selected_after?: number; splat_count?: number } | undefined;
                     prompt = buildBrushPrompt();
                 } catch (err) {
                     console.warn('[BrushSelection] mask selection failed', err);

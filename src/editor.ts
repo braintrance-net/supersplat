@@ -463,6 +463,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     let maskTexture: Texture = null;
     let selectionPreviewGeneration = 0;
     const selectionPreviewOriginals = new Map<Splat, Uint8Array>();
+    const selectionPreviewHits = new Map<Splat, { op: SelectionOp; hitMask: Uint8Array }>();
 
     const summarizeState = (state: Uint8Array) => {
         let numSelected = 0;
@@ -506,6 +507,33 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         scene.events.fire('splat.stateChanged', splat);
     };
 
+    const refreshSelectionBoundsLater = (splat: Splat) => {
+        splat.updateLocalBounds().then(() => {
+            scene.forceRender = true;
+            scene.events.fire('splat.stateChanged', splat);
+        }).catch((err) => {
+            console.warn('[Selection] async bounds refresh failed', err);
+        });
+    };
+
+    const createFastStateEditOp = (splat: Splat, beforeState: Uint8Array, afterState: Uint8Array) => {
+        return {
+            name: 'selectOp',
+            splat,
+            do() {
+                applySplatStateFast(splat, afterState);
+                refreshSelectionBoundsLater(splat);
+            },
+            undo() {
+                applySplatStateFast(splat, beforeState);
+                refreshSelectionBoundsLater(splat);
+            },
+            destroy() {
+                this.splat = null;
+            }
+        };
+    };
+
     const clearSelectionPreview = () => {
         selectionPreviewGeneration++;
         if (selectionPreviewOriginals.size === 0) {
@@ -516,6 +544,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             applySplatStateFast(splat, originalState);
         }
         selectionPreviewOriginals.clear();
+        selectionPreviewHits.clear();
         return true;
     };
 
@@ -561,7 +590,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             let sawMaskPixel = false;
             for (let y = 0; y < mask.height; ++y) {
                 for (let x = 0; x < mask.width; ++x) {
-                    if (mask.data[(y * mask.width + x) * 4 + 3] === 255) {
+                    if (mask.data[(y * mask.width + x) * 4 + 3] > 0) {
                         sawMaskPixel = true;
                         mx0 = Math.min(mx0, x);
                         my0 = Math.min(my0, y);
@@ -596,8 +625,12 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 for (let x = 0; x < pw; ++x) {
                     const mx = Math.floor((nx0 + x / width) * mask.width);
                     const my = Math.floor((ny0 + y / height) * mask.height);
-                    if (mask.data[(my * mask.width + mx) * 4] === 255) {
-                        selected.add(pick[(ph - y) * pw + x]);
+                    const maskIndex = (my * mask.width + mx) * 4;
+                    if (mask.data[maskIndex + 3] > 0) {
+                        const pickId = pick[(ph - 1 - y) * pw + x];
+                        if (pickId !== undefined && pickId !== 0xffffffff) {
+                            selected.add(pickId);
+                        }
                     }
                 }
             }
@@ -635,6 +668,36 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return previewState;
     };
 
+    const applySelectionOpToState = (
+        baseState: Uint8Array,
+        hitMask: Uint8Array,
+        op: SelectionOp
+    ) => {
+        const nextState = new Uint8Array(baseState);
+
+        for (let i = 0; i < nextState.length; ++i) {
+            const selectedByBrush = hitMask[i] === 1;
+            const state = baseState[i];
+            const selected = (state & State.selected) !== 0;
+            const editable = (state & (State.locked | State.deleted)) === 0;
+
+            nextState[i] = state & (~State.removePreview);
+            if (
+                (op === 'add' && editable && !selected && selectedByBrush) ||
+                (op === 'set' && editable && selected !== selectedByBrush)
+            ) {
+                nextState[i] = (state ^ State.selected) & (~State.removePreview);
+            } else if (
+                (op === 'remove' && editable && selected && selectedByBrush) ||
+                (op === 'intersect' && editable && selected && !selectedByBrush)
+            ) {
+                nextState[i] = state & (~(State.selected | State.removePreview));
+            }
+        }
+
+        return nextState;
+    };
+
     events.function('select.previewByMask', async (op: SelectionOp, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
         const generation = selectionPreviewGeneration;
         const updates: { splat: Splat; state: Uint8Array }[] = [];
@@ -650,11 +713,19 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             if (generation !== selectionPreviewGeneration) {
                 return { applied: false, stale: true };
             }
+            const hitMask = new Uint8Array(originalState.length);
 
             updates.push({
                 splat,
-                state: applySelectionOpToPreview(originalState, hit, op)
+                state: applySelectionOpToPreview(originalState, (index) => {
+                    const selectedByBrush = hit(index);
+                    if (selectedByBrush) {
+                        hitMask[index] = 1;
+                    }
+                    return selectedByBrush;
+                }, op)
             });
+            selectionPreviewHits.set(splat, { op, hitMask });
         }
 
         for (const update of updates) {
@@ -667,6 +738,46 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return {
             applied: updates.length > 0,
             selected_after: updates.reduce((sum, update) => sum + summarizeState(update.state).numSelected, 0)
+        };
+    });
+
+    events.function('select.commitMaskPreview', async (op: SelectionOp) => {
+        if (selectionPreviewOriginals.size === 0) {
+            return { applied: false, preview: false };
+        }
+
+        const updates: { splat: Splat; originalState: Uint8Array; hitMask: Uint8Array }[] = [];
+        for (const splat of selectedSplats()) {
+            const originalState = selectionPreviewOriginals.get(splat);
+            const preview = selectionPreviewHits.get(splat);
+            if (!originalState || !preview || preview.op !== op) {
+                return { applied: false, preview: false };
+            }
+            updates.push({ splat, originalState, hitMask: preview.hitMask });
+        }
+
+        if (updates.length === 0) {
+            return { applied: false, preview: false };
+        }
+
+        selectionPreviewGeneration++;
+        selectionPreviewOriginals.clear();
+        selectionPreviewHits.clear();
+
+        let selectedAfter = 0;
+        for (const { splat, originalState, hitMask } of updates) {
+            const nextState = applySelectionOpToState(originalState, hitMask, op);
+            applySplatStateFast(splat, nextState);
+            refreshSelectionBoundsLater(splat);
+            await editHistory.add(createFastStateEditOp(splat, originalState, nextState), true);
+            selectedAfter += splat.numSelected;
+        }
+
+        return {
+            applied: true,
+            preview: true,
+            splat_count: updates.length,
+            selected_after: selectedAfter
         };
     });
 

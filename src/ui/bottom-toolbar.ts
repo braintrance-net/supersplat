@@ -222,6 +222,9 @@ class BottomToolbar extends Container {
         const rawBrushModeWrap = document.createElement('div');
         rawBrushModeWrap.id = 'raw-brush-mode-wrap';
         rawBrushModeWrap.className = 'hidden';
+        rawBrushModeWrap.addEventListener('pointerdown', event => event.stopPropagation());
+        rawBrushModeWrap.addEventListener('pointerup', event => event.stopPropagation());
+        rawBrushModeWrap.addEventListener('click', event => event.stopPropagation());
 
         const rawBrushModeButtons = [
             { mode: 'new', label: 'New', key: 'N' },
@@ -242,10 +245,16 @@ class BottomToolbar extends Container {
             const labelText = document.createElement('span');
             labelText.textContent = label;
             button.append(keyBadge, labelText);
-            button.addEventListener('click', (event) => {
+            const activateMode = (event: Event) => {
                 event.stopPropagation();
                 events.fire('brushSelection.rawMode', mode);
+            };
+            button.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                activateMode(event);
             });
+            button.addEventListener('pointerup', event => event.stopPropagation());
+            button.addEventListener('click', activateMode);
             rawBrushModeWrap.appendChild(button);
         }
 
