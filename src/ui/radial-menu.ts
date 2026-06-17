@@ -240,6 +240,12 @@ class RadialMenu extends Container {
             this.hide();
         });
 
+        events.on('brushSelection.rawMode.changed', () => {
+            if (events.invoke('tool.active') === 'brushSelection') {
+                this.hide();
+            }
+        });
+
         // When selection is cleared, hide
         events.on('selection.deselect', () => {
             this.selectionToolCommitVisible = false;
