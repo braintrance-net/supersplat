@@ -1065,11 +1065,37 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         setCameraOverlay(!events.invoke('camera.overlay'));
     });
 
-    // Selected splats debug highlighting. Boxer/Brush can force this on after
-    // selection so selected Gaussians are tinted with their real footprint.
+    // outline selection
+
+    let outlineSelection = false;
     let selectedSplatsOverlay = false;
 
+    const setOutlineSelection = (value: boolean) => {
+        if (value && selectedSplatsOverlay) {
+            selectedSplatsOverlay = false;
+            events.fire('view.selectedSplatsOverlay', selectedSplatsOverlay);
+        }
+        if (value !== outlineSelection) {
+            outlineSelection = value;
+            events.fire('view.outlineSelection', outlineSelection);
+        }
+    };
+
+    events.function('view.outlineSelection', () => {
+        return outlineSelection;
+    });
+
+    events.on('view.setOutlineSelection', (value: boolean) => {
+        setOutlineSelection(value);
+    });
+
+    // Selected splats debug highlighting. Boxer/Brush can force this on after
+    // selection so selected Gaussians are tinted with their real footprint.
     const setSelectedSplatsOverlay = (enabled: boolean) => {
+        if (enabled && outlineSelection) {
+            outlineSelection = false;
+            events.fire('view.outlineSelection', outlineSelection);
+        }
         if (enabled !== selectedSplatsOverlay) {
             selectedSplatsOverlay = enabled;
             events.fire('view.selectedSplatsOverlay', selectedSplatsOverlay);
@@ -1118,25 +1144,6 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('camera.setFlySpeed', (value: number) => {
         setFlySpeed(value);
-    });
-
-    // outline selection
-
-    let outlineSelection = true;
-
-    const setOutlineSelection = (value: boolean) => {
-        if (value !== outlineSelection) {
-            outlineSelection = value;
-            events.fire('view.outlineSelection', outlineSelection);
-        }
-    };
-
-    events.function('view.outlineSelection', () => {
-        return outlineSelection;
-    });
-
-    events.on('view.setOutlineSelection', (value: boolean) => {
-        setOutlineSelection(value);
     });
 
     // view spherical harmonic bands
