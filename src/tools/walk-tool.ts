@@ -114,7 +114,6 @@ const COLLISION_MESH_SWEEP_STEP = 0.05;
 const COLLISION_DEBUG_TRIANGLE_RADIUS = 2.2;
 const COLLISION_DEBUG_TRIANGLE_LIMIT = 120;
 const COLLISION_DEBUG_HISTORY_LIMIT = 900;
-const COLLISION_MESH_PREVIEW_TARGET_SIZE = 1.25;
 const COLLISION_MESH_PREVIEW_TRIANGLE_LIMIT = 900;
 const COLLISION_MESH_PREVIEW_CANVAS_SIZE = 148;
 const COLLISION_MESH_PREVIEW_CANVAS_PADDING = 12;
@@ -792,6 +791,7 @@ class WalkTool {
     private collisionMeshLockedFloorTriangle: number | null = null;
     private collisionDebugEnabled = WalkTool.defaultCollisionDebugEnabled();
     private collisionMeshPreviewEnabled = WalkTool.defaultCollisionMeshPreviewEnabled();
+    private collisionMeshMiniOverlayEnabled = WalkTool.defaultCollisionMeshMiniOverlayEnabled();
     private collisionMeshPreviewCanvas: HTMLCanvasElement | null = null;
     private lastCollisionDebugReason = 'idle';
     private lastCollisionDesiredMove = new Vec3();
@@ -849,6 +849,14 @@ class WalkTool {
         return params.get('collisionMeshPreview') === '1' ||
             params.get('collisionMeshMini') === '1' ||
             params.get('voxelDebug') === '1';
+    }
+
+    private static defaultCollisionMeshMiniOverlayEnabled() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        const params = new URLSearchParams(window.location.search);
+        return params.get('collisionMeshMini') === '1';
     }
 
     private onCollisionDebug(enabled = true) {
@@ -933,6 +941,7 @@ class WalkTool {
             embeddedControls: this.embeddedControls,
             collisionDebugEnabled: this.collisionDebugEnabled,
             collisionMeshPreviewEnabled: this.collisionMeshPreviewEnabled,
+            collisionMeshMiniOverlayEnabled: this.collisionMeshMiniOverlayEnabled,
             activeTool: this.events.invoke('tool.active') as string | null,
             camera: this.events.invoke('camera.debugState') ?? null,
             mesh: {
@@ -2269,7 +2278,7 @@ class WalkTool {
     }
 
     private syncCollisionMeshPreviewOverlay() {
-        if (!this.collisionMeshPreviewEnabled || !this.collisionMesh || typeof document === 'undefined') {
+        if (!this.collisionMeshMiniOverlayEnabled || !this.collisionMesh || typeof document === 'undefined') {
             this.removeCollisionMeshPreviewOverlay();
             return;
         }
@@ -2380,7 +2389,7 @@ class WalkTool {
         const mesh = this.collisionMesh;
         const body = this.playerCollisionBodies()[0];
         if (this.collisionMeshPreviewEnabled) {
-            this.drawDebugMeshPreview(mesh, body);
+            this.drawDebugMeshPreview(mesh);
         }
 
         if (!this.collisionDebugEnabled) {
@@ -2407,63 +2416,16 @@ class WalkTool {
         this.scene.forceRender = true;
     }
 
-    private drawDebugMeshPreview(mesh: WalkCollisionMesh, body: PlayerCollisionBody) {
-        const bounds = mesh.bounds;
-        const sizeX = Math.max(0.001, bounds.maxX - bounds.minX);
-        const sizeY = Math.max(0.001, bounds.maxY - bounds.minY);
-        const sizeZ = Math.max(0.001, bounds.maxZ - bounds.minZ);
-        const scale = COLLISION_MESH_PREVIEW_TARGET_SIZE / Math.max(sizeX, sizeY, sizeZ);
-        const center = new Vec3(
-            (bounds.minX + bounds.maxX) / 2,
-            (bounds.minY + bounds.maxY) / 2,
-            (bounds.minZ + bounds.maxZ) / 2
-        );
-
-        const forward = this.camera.forward.clone();
-        forward.y = 0;
-        const forwardLen = Math.hypot(forward.x, forward.z);
-        if (forwardLen > 0.0001) {
-            forward.mulScalar(1 / forwardLen);
-        } else {
-            forward.set(0, 0, -1);
-        }
-        const right = new Vec3(forward.z, 0, -forward.x);
-        const anchor = body.eye.clone()
-        .add(forward.mulScalar(1.45))
-        .add(right.mulScalar(0.82));
-        anchor.y -= 0.42;
-
-        const project = (x: number, y: number, z: number) => new Vec3(
-            anchor.x + (x - center.x) * scale,
-            anchor.y + (y - center.y) * scale,
-            anchor.z + (z - center.z) * scale
-        );
-
+    private drawDebugMeshPreview(mesh: WalkCollisionMesh) {
         for (const { triangle } of mesh.debugTriangles()) {
             const color = triangle.blocking ? COLLISION_DEBUG_PREVIEW_WALL_COLOR : COLLISION_DEBUG_PREVIEW_FLOOR_COLOR;
-            const a = project(triangle.ax, triangle.ay, triangle.az);
-            const b = project(triangle.bx, triangle.by, triangle.bz);
-            const c = project(triangle.cx, triangle.cy, triangle.cz);
-            this.drawDebugLine(a, b, color);
-            this.drawDebugLine(b, c, color);
-            this.drawDebugLine(c, a, color);
+            const a = new Vec3(triangle.ax, triangle.ay, triangle.az);
+            const b = new Vec3(triangle.bx, triangle.by, triangle.bz);
+            const c = new Vec3(triangle.cx, triangle.cy, triangle.cz);
+            this.drawCollisionMeshPreviewLine(a, b, color);
+            this.drawCollisionMeshPreviewLine(b, c, color);
+            this.drawCollisionMeshPreviewLine(c, a, color);
         }
-
-        this.drawDebugLine(
-            new Vec3(anchor.x - 0.08, anchor.y, anchor.z),
-            new Vec3(anchor.x + 0.08, anchor.y, anchor.z),
-            COLLISION_DEBUG_RAY_COLOR
-        );
-        this.drawDebugLine(
-            new Vec3(anchor.x, anchor.y - 0.08, anchor.z),
-            new Vec3(anchor.x, anchor.y + 0.08, anchor.z),
-            COLLISION_DEBUG_RAY_COLOR
-        );
-        this.drawDebugLine(
-            new Vec3(anchor.x, anchor.y, anchor.z - 0.08),
-            new Vec3(anchor.x, anchor.y, anchor.z + 0.08),
-            COLLISION_DEBUG_RAY_COLOR
-        );
     }
 
     private drawDebugTriangles(mesh: WalkCollisionMesh, body: PlayerCollisionBody, floor: GroundMeshHit | null) {
@@ -2598,6 +2560,10 @@ class WalkTool {
 
     private drawDebugLine(a: Vec3, b: Vec3, color: Color) {
         this.scene.app.drawLine(a, b, color, true, this.scene.worldLayer);
+    }
+
+    private drawCollisionMeshPreviewLine(a: Vec3, b: Vec3, color: Color) {
+        this.scene.app.drawLine(a, b, color, false, this.scene.worldLayer);
     }
 
     private applyCollisionHeadHeightLock(camera: Camera, focalPoint: Vec3) {
