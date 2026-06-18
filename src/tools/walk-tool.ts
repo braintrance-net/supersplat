@@ -36,6 +36,7 @@ type PresetTransform = {
 type CollisionMeshLoadDetails = {
     url: string;
     blockingEnabled?: boolean;
+    floorY?: number | null;
     requestId?: number | string | null;
     transform?: PresetTransform;
 };
@@ -159,7 +160,10 @@ const COLLISION_DEBUG_DESIRED_MOVE_COLOR = new Color(1, 0.62, 0.12, 1);
 const COLLISION_DEBUG_RESOLVED_MOVE_COLOR = new Color(0.35, 1, 0.95, 1);
 const COLLISION_MESH_FLOOR_STORAGE_PREFIX = 'supersplat:walk-floor-height:v1';
 const COLLISION_MESH_DEFAULT_FLOOR_HEIGHTS = new Map<string, number>([
-    ['/static/dev-assets/collision/elegant-kitchen-living-room-1.collision.glb?v=20260605-raw-mesh-v1|{"position":{"x":0,"y":0,"z":0},"rotationEuler":{"x":178.5392,"y":6.3398,"z":178.4648},"scale":{"x":1,"y":1,"z":1}}', -0.6559780054854247]
+    ['/static/dev-assets/collision/elegant-kitchen-living-room-1.collision.glb?v=20260605-raw-mesh-v1|{"position":{"x":0,"y":0,"z":0},"rotationEuler":{"x":178.5392,"y":6.3398,"z":178.4648},"scale":{"x":1,"y":1,"z":1}}', -0.6559780054854247],
+    ['/static/dev-assets/collision/meeting-prototype-room-splat-voxel-v1.collision.glb|null', -0.05],
+    ['/static/dev-assets/collision/meeting-prototype-room-splat-transform-outdoor-floor-fill-v1.collision.glb|null', -0.05],
+    ['/static/dev-assets/collision/meeting-prototype-room-splat-transform-indoor-external-fill-v1.collision.glb|null', -0.05]
 ]);
 
 type CollisionTriangle = {
@@ -1095,6 +1099,14 @@ class WalkTool {
         };
     }
 
+    private activeToolName() {
+        try {
+            return this.events.invoke('tool.active') as string | null;
+        } catch {
+            return null;
+        }
+    }
+
     private static cloneCollisionBody(body: PlayerCollisionBody) {
         return {
             ...body,
@@ -1127,7 +1139,7 @@ class WalkTool {
             collisionDebugEnabled: this.collisionDebugEnabled,
             collisionMeshPreviewEnabled: this.collisionMeshPreviewEnabled,
             collisionMeshMiniOverlayEnabled: this.collisionMeshMiniOverlayEnabled,
-            activeTool: this.events.invoke('tool.active') as string | null,
+            activeTool: this.activeToolName(),
             camera: this.events.invoke('camera.debugState') ?? null,
             mesh: {
                 loaded: Boolean(mesh),
@@ -1788,12 +1800,16 @@ class WalkTool {
         this.collisionMeshAbort = abortController;
         this.collisionMeshUrl = details.url;
         this.collisionMeshKey = meshKey;
-        this.collisionMeshPendingSavedFloorY = this.readSavedCollisionMeshFloorY(meshKey);
+        const configuredFloorY = typeof details.floorY === 'number' && Number.isFinite(details.floorY) ?
+            details.floorY :
+            null;
+        this.collisionMeshPendingSavedFloorY = this.readSavedCollisionMeshFloorY(meshKey, configuredFloorY);
         const blockingEnabled = details.blockingEnabled ?? COLLISION_MESH_BLOCKING_ENABLED;
         const startedAt = performance.now();
         this.pushCollisionDebugSample('mesh-load-start', {
             url: details.url,
             requestId: details.requestId ?? null,
+            configuredFloorY,
             savedFloorY: this.collisionMeshPendingSavedFloorY
         });
         this.events.fire('walk.collisionMesh', {
@@ -1801,6 +1817,7 @@ class WalkTool {
             reason: 'load-start',
             url: details.url,
             requestId: details.requestId ?? null,
+            configuredFloorY,
             savedFloorY: this.collisionMeshPendingSavedFloorY
         });
 
@@ -1871,6 +1888,7 @@ class WalkTool {
                 blockingTriangles: mesh.blockingTriangleCount,
                 blockingEnabled: this.collisionMeshBlockingEnabled,
                 floorLock,
+                configuredFloorY,
                 savedFloorY: this.collisionMeshSavedFloorY,
                 floorStorageKey: this.collisionMeshFloorStorageKey(meshKey),
                 cells: mesh.cellCount,
@@ -1888,6 +1906,7 @@ class WalkTool {
                 blockingTriangles: mesh.blockingTriangleCount,
                 blockingEnabled: this.collisionMeshBlockingEnabled,
                 floorLock,
+                configuredFloorY,
                 savedFloorY: this.collisionMeshSavedFloorY,
                 floorStorageKey: this.collisionMeshFloorStorageKey(meshKey),
                 cells: mesh.cellCount,
@@ -2017,8 +2036,8 @@ class WalkTool {
         return meshKey ? `${COLLISION_MESH_FLOOR_STORAGE_PREFIX}:${meshKey}` : null;
     }
 
-    private readSavedCollisionMeshFloorY(meshKey: string) {
-        const defaultFloorY = COLLISION_MESH_DEFAULT_FLOOR_HEIGHTS.get(meshKey) ?? null;
+    private readSavedCollisionMeshFloorY(meshKey: string, configuredFloorY: number | null = null) {
+        const defaultFloorY = configuredFloorY ?? COLLISION_MESH_DEFAULT_FLOOR_HEIGHTS.get(meshKey) ?? null;
         if (typeof window === 'undefined') {
             return defaultFloorY;
         }

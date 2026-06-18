@@ -706,6 +706,14 @@ const collisionSurfaceBaseForFilename = (filename: string | undefined | null) =>
     return basename ? `/static/dev-assets/collision/${basename}` : null;
 };
 
+const shouldDisableCollisionSurfaceSidecars = () => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('hideEditorChrome') === '1' ||
+        params.get('collisionSurfaceSidecars') === '0' ||
+        params.has('timeTrialPlayer');
+};
+
 const loadVoxelSurface = async (baseUrl: string): Promise<VoxelCollisionSurface | null> => {
     const jsonUrl = `${baseUrl}.voxel.json`;
     const metadataResponse = await fetch(jsonUrl);
@@ -747,8 +755,16 @@ const getActiveCollisionSurface = () => activeSurface;
 const waitForCollisionSurface = () => activeSurfacePending;
 
 const registerCollisionSurfaceLoader = (events: Events, scene: Scene) => {
+    const sidecarsDisabled = shouldDisableCollisionSurfaceSidecars();
+
     events.on('scene.elementAdded', (element: Element) => {
         if (element.type !== ElementType.splat) return;
+        if (sidecarsDisabled) {
+            activeSurface = null;
+            activeSurfaceFilename = null;
+            activeSurfacePending = Promise.resolve(null);
+            return;
+        }
         const splat = element as Splat;
         const baseUrl = collisionSurfaceBaseForFilename(splat.filename ?? splat.name);
         if (!baseUrl) return;

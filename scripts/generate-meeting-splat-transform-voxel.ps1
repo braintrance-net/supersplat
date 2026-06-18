@@ -4,7 +4,12 @@ param(
     [string]$OutputName = "meeting-prototype-room-splat-transform-outdoor-floor-fill-v1",
     [string]$SplatTransformVersion = "2.6.0",
     [string]$Gpu = "0",
-    [string]$Decimate = "15%"
+    [string]$Decimate = "15%",
+    [ValidateSet("floor", "external", "none")]
+    [string]$FillMode = "floor",
+    [string]$FillSize = "1.6",
+    [string]$SeedPos = "",
+    [string]$VoxelCarve = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -75,9 +80,23 @@ foreach ($layer in $layers) {
     }
 }
 
+$argsList += @("--voxel-params", "0.18,0.02")
+
+if ($FillMode -eq "floor") {
+    $argsList += @("--voxel-floor-fill", $FillSize)
+} elseif ($FillMode -eq "external") {
+    $argsList += @("--voxel-external-fill", $FillSize)
+}
+
+if ($SeedPos) {
+    $argsList += @("--seed-pos", $SeedPos)
+}
+
+if ($VoxelCarve) {
+    $argsList += @("--voxel-carve", $VoxelCarve)
+}
+
 $argsList += @(
-    "--voxel-params", "0.18,0.02",
-    "--voxel-floor-fill", "1.6",
     $output,
     "-K", "faces",
     "--verbose",

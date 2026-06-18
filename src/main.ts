@@ -150,6 +150,7 @@ const getFilenameFromUrl = (value: string) => {
 const main = async () => {
     // root events object
     const events = new Events();
+    events.function('tool.active', () => null);
 
     // url
     const url = new URL(window.location.href);

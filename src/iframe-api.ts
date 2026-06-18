@@ -107,6 +107,7 @@ interface LoadFileMessage {
     camera?: CameraState;
     transform?: PresetTransform;
     collisionMeshSrc?: string | null;
+    collisionMeshFloorY?: number | null;
     requestId?: RequestId;
 }
 
@@ -135,6 +136,7 @@ interface LoadSceneManifestMessage {
     };
     camera?: CameraState;
     collisionMeshSrc?: string | null;
+    collisionMeshFloorY?: number | null;
     requestId?: RequestId;
 }
 
@@ -143,6 +145,7 @@ interface LoadSceneManifestStreamStartMessage {
     manifest: LoadSceneManifestMessage['manifest'];
     camera?: CameraState;
     collisionMeshSrc?: string | null;
+    collisionMeshFloorY?: number | null;
     requestId?: RequestId;
 }
 
@@ -1066,6 +1069,7 @@ const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
 
 type ActiveSceneManifestStream = {
     camera?: CameraState;
+    collisionMeshFloorY?: number | null;
     collisionMeshSrc?: string | null;
     finished: boolean;
     importedCount: number;
@@ -1134,6 +1138,14 @@ const registerIframeApi = (events: Events) => {
     let longTaskSamples: Array<Record<string, unknown>> = [];
     let lastLongTaskReportAt = performance.now();
     let activeSceneManifestStream: ActiveSceneManifestStream | null = null;
+
+    const activeToolName = () => {
+        try {
+            return events.invoke('tool.active') as string | null;
+        } catch {
+            return null;
+        }
+    };
 
     const resetLongTaskStats = () => {
         longTaskCount = 0;
@@ -1260,6 +1272,7 @@ const registerIframeApi = (events: Events) => {
         importedCount: number,
         camera?: CameraState,
         collisionMeshSrc?: string | null,
+        collisionMeshFloorY?: number | null,
         requestId?: RequestId
     ) => {
         let rendered = false;
@@ -1276,6 +1289,7 @@ const registerIframeApi = (events: Events) => {
                 events.fire('walk.collisionMeshLoad', {
                     url: collisionMeshSrc,
                     blockingEnabled: true,
+                    floorY: collisionMeshFloorY ?? null,
                     requestId: requestId ?? null
                 });
                 await collisionMeshReady;
@@ -1349,6 +1363,7 @@ const registerIframeApi = (events: Events) => {
                     stream.importedCount,
                     stream.camera,
                     stream.collisionMeshSrc,
+                    stream.collisionMeshFloorY,
                     stream.requestId
                 );
             }
@@ -1580,7 +1595,7 @@ const registerIframeApi = (events: Events) => {
                 totalMs: Number(longTaskTotalMs.toFixed(1)),
                 maxMs: Number(longTaskMaxMs.toFixed(1)),
                 samples: longTaskSamples,
-                activeTool: events.invoke('tool.active') as string | null
+                activeTool: activeToolName()
             });
             resetLongTaskStats();
         };
@@ -1641,12 +1656,12 @@ const registerIframeApi = (events: Events) => {
 
     const restoreGameModeTool = () => {
         const restoreTool = gameModePreviousTool;
-        const shouldRestoreTool = gameModeActivatedWalk && events.invoke('tool.active') === 'walk';
+        const shouldRestoreTool = gameModeActivatedWalk && activeToolName() === 'walk';
         gameModeActive = false;
         gameModePreviousTool = null;
         gameModeActivatedWalk = false;
         setGameModeRenderChrome(false);
-        const activeTool = events.invoke('tool.active') as string | null;
+        const activeTool = activeToolName();
         if (shouldRestoreTool && restoreTool && activeTool !== restoreTool) {
             events.fire(`tool.${restoreTool}`);
         } else if (shouldRestoreTool && !restoreTool && activeTool) {
@@ -1731,7 +1746,7 @@ const registerIframeApi = (events: Events) => {
             maxLongGapMs: Number(pointerLookStats.maxLongGapMs.toFixed(1)),
             avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
             maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
-            activeTool: events.invoke('tool.active') as string | null,
+            activeTool: activeToolName(),
             idleResets: pointerLookIdleResetCount
         });
         pointerLookIdleResetCount = 0;
@@ -1764,7 +1779,7 @@ const registerIframeApi = (events: Events) => {
                         activeRenderWalkHeld,
                         visibilityState: document.visibilityState,
                         hasFocus: document.hasFocus(),
-                        activeTool: events.invoke('tool.active') as string | null,
+                        activeTool: activeToolName(),
                         annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0,
                         renderNextFrame: scene?.app?.renderNextFrame ?? null,
                         canvas: canvas ? { width: canvas.clientWidth, height: canvas.clientHeight } : null,
@@ -1823,7 +1838,7 @@ const registerIframeApi = (events: Events) => {
             visibilityState: document.visibilityState,
             hasFocus: document.hasFocus(),
             renderNextFrame: (window.scene as any)?.app?.renderNextFrame ?? null,
-            activeTool: events.invoke('tool.active') as string | null,
+            activeTool: activeToolName(),
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
         });
 
@@ -1842,7 +1857,7 @@ const registerIframeApi = (events: Events) => {
             activeRenderWalkHeld,
             visibilityState: document.visibilityState,
             hasFocus: document.hasFocus(),
-            activeTool: events.invoke('tool.active') as string | null
+            activeTool: activeToolName()
         });
 
         perfFrameCount = 0;
@@ -2263,7 +2278,7 @@ const registerIframeApi = (events: Events) => {
                 cameraReset: Boolean(event.data.camera)
             });
             if (event.data.enabled) {
-                const activeTool = events.invoke('tool.active') as string | null;
+                const activeTool = activeToolName();
                 const startingGameMode = !gameModeActive;
                 if (startingGameMode) {
                     gameModePreviousTool = activeTool;
@@ -2326,7 +2341,8 @@ const registerIframeApi = (events: Events) => {
                 layerCount: layers.length,
                 totalBytes: event.data.manifest.totalBytes ?? layers.reduce((total, layer) => total + (layer.data?.byteLength ?? layer.byteLength ?? 0), 0),
                 strategy: event.data.manifest.strategy ?? null,
-                collisionMeshSrc: event.data.collisionMeshSrc ?? null
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null,
+                collisionMeshFloorY: event.data.collisionMeshFloorY ?? null
             }, event.data.requestId);
             try {
                 events.fire('scene.clear');
@@ -2355,6 +2371,7 @@ const registerIframeApi = (events: Events) => {
                     importedCount,
                     event.data.camera,
                     event.data.collisionMeshSrc ?? null,
+                    event.data.collisionMeshFloorY ?? null,
                     event.data.requestId
                 );
             } catch (err) {
@@ -2377,6 +2394,7 @@ const registerIframeApi = (events: Events) => {
             activeCollisionMeshReadySrc = null;
             activeSceneManifestStream = {
                 camera: event.data.camera,
+                collisionMeshFloorY: event.data.collisionMeshFloorY ?? null,
                 collisionMeshSrc: event.data.collisionMeshSrc ?? null,
                 finished: false,
                 importedCount: 0,
@@ -2393,7 +2411,8 @@ const registerIframeApi = (events: Events) => {
                 layerCount: event.data.manifest.layers.length,
                 totalBytes: event.data.manifest.totalBytes ?? event.data.manifest.layers.reduce((total, layer) => total + (layer.byteLength ?? 0), 0),
                 strategy: event.data.manifest.strategy ?? null,
-                collisionMeshSrc: event.data.collisionMeshSrc ?? null
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null,
+                collisionMeshFloorY: event.data.collisionMeshFloorY ?? null
             }, event.data.requestId);
             return;
         }
@@ -2477,6 +2496,7 @@ const registerIframeApi = (events: Events) => {
                 if (collisionMeshSrc) {
                     events.fire('walk.collisionMeshLoad', {
                         url: collisionMeshSrc,
+                        floorY: event.data.collisionMeshFloorY ?? null,
                         requestId: event.data.requestId ?? null,
                         transform: event.data.transform
                     });
