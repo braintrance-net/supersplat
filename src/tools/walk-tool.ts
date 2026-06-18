@@ -161,6 +161,7 @@ const COLLISION_DEBUG_RESOLVED_MOVE_COLOR = new Color(0.35, 1, 0.95, 1);
 const COLLISION_MESH_FLOOR_STORAGE_PREFIX = 'supersplat:walk-floor-height:v1';
 const COLLISION_MESH_DEFAULT_FLOOR_HEIGHTS = new Map<string, number>([
     ['/static/dev-assets/collision/elegant-kitchen-living-room-1.collision.glb?v=20260605-raw-mesh-v1|{"position":{"x":0,"y":0,"z":0},"rotationEuler":{"x":178.5392,"y":6.3398,"z":178.4648},"scale":{"x":1,"y":1,"z":1}}', -0.6559780054854247],
+    ['/static/dev-assets/collision/meeting-prototype-room-splat-voxel-v1.collision.glb|null', -0.05],
     ['/static/dev-assets/collision/meeting-prototype-room-splat-transform-outdoor-floor-fill-v1.collision.glb|null', -0.05],
     ['/static/dev-assets/collision/meeting-prototype-room-splat-transform-indoor-external-fill-v1.collision.glb|null', -0.05]
 ]);
