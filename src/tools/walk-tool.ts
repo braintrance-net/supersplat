@@ -35,6 +35,7 @@ type PresetTransform = {
 
 type CollisionMeshLoadDetails = {
     url: string;
+    blockingEnabled?: boolean;
     requestId?: number | string | null;
     transform?: PresetTransform;
 };
@@ -53,6 +54,14 @@ type GroundMeshHit = {
 type CollisionDebugTriangle = {
     index: number;
     triangle: CollisionTriangle;
+};
+
+type CollisionDebugVoxel = {
+    x: number;
+    y: number;
+    z: number;
+    size: number;
+    blocking: boolean;
 };
 
 type CollisionDebugSample = {
@@ -113,7 +122,7 @@ const COLLISION_MESH_GROUND_SNAP = 0.42;
 const COLLISION_MESH_GROUND_PROBE_RADIUS = 0.22;
 const COLLISION_MESH_GROUND_CACHE_DROP = 0.45;
 const COLLISION_MESH_GROUND_CACHE_RISE = 0.16;
-const COLLISION_MESH_BLOCKING_ENABLED = false;
+const COLLISION_MESH_BLOCKING_ENABLED = true;
 const COLLISION_MESH_FIRST_PERSON_DISTANCE = 0.035;
 const COLLISION_MESH_THIRD_PERSON_DISTANCE = 2.2;
 const COLLISION_MESH_FIRST_PERSON_SNAP_DISTANCE = 0.45;
@@ -128,10 +137,22 @@ const COLLISION_MESH_SWEEP_STEP = 0.05;
 const COLLISION_DEBUG_TRIANGLE_RADIUS = 2.2;
 const COLLISION_DEBUG_TRIANGLE_LIMIT = 120;
 const COLLISION_DEBUG_HISTORY_LIMIT = 900;
+const COLLISION_MESH_PREVIEW_TRIANGLE_LIMIT = 900;
+const COLLISION_MESH_DEBUG_DEFAULT_VOXEL_SIZE = 0.18;
+const COLLISION_MESH_DEBUG_VOXEL_MAX_CELLS = 1800;
+const COLLISION_MESH_DEBUG_VOXEL_TRIANGLE_LIMIT = 1200;
+const COLLISION_MESH_DEBUG_VOXEL_TRIANGLE_SAMPLE_LIMIT = 36;
+const COLLISION_MESH_PREVIEW_VOXEL_LIMIT = 460;
+const COLLISION_MESH_PREVIEW_MINI_VOXEL_LIMIT = 1200;
+const COLLISION_MESH_DEBUG_VOXEL_VISUAL_SCALE = 0.72;
+const COLLISION_MESH_PREVIEW_CANVAS_SIZE = 148;
+const COLLISION_MESH_PREVIEW_CANVAS_PADDING = 12;
 const COLLISION_DEBUG_PLAYER_COLOR = new Color(0.1, 0.72, 1, 1);
 const COLLISION_DEBUG_EYE_COLOR = new Color(0.82, 0.96, 1, 1);
 const COLLISION_DEBUG_FLOOR_COLOR = new Color(0.18, 1, 0.38, 1);
 const COLLISION_DEBUG_WALL_COLOR = new Color(1, 0.18, 0.12, 1);
+const COLLISION_DEBUG_PREVIEW_FLOOR_COLOR = new Color(0.18, 1, 0.48, 1);
+const COLLISION_DEBUG_PREVIEW_WALL_COLOR = new Color(1, 0.28, 0.18, 1);
 const COLLISION_DEBUG_HIT_COLOR = new Color(1, 0, 0.9, 1);
 const COLLISION_DEBUG_RAY_COLOR = new Color(1, 0.86, 0.18, 1);
 const COLLISION_DEBUG_DESIRED_MOVE_COLOR = new Color(1, 0.62, 0.12, 1);
@@ -159,6 +180,15 @@ type CollisionTriangle = {
     maxZ: number;
     normalY: number;
     blocking: boolean;
+};
+
+type CollisionMeshBounds = {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    minZ: number;
+    maxZ: number;
 };
 
 type GltfAccessor = {
@@ -207,19 +237,25 @@ class WalkCollisionMesh {
     readonly triangleCount: number;
     readonly blockingTriangleCount: number;
     readonly cellCount: number;
+    readonly bounds: CollisionMeshBounds;
+    readonly debugVoxelSize: number;
     private readonly triangles: CollisionTriangle[];
+    private readonly debugVoxelCells: CollisionDebugVoxel[];
     private readonly blockingCells = new Map<string, number[]>();
     private readonly groundCells = new Map<string, number[]>();
 
-    private constructor(triangles: CollisionTriangle[]) {
+    private constructor(triangles: CollisionTriangle[], debugVoxelSize: number) {
         this.triangles = triangles;
         this.triangleCount = triangles.length;
         this.blockingTriangleCount = triangles.filter(triangle => triangle.blocking).length;
+        this.bounds = WalkCollisionMesh.triangleBounds(triangles);
+        this.debugVoxelSize = debugVoxelSize;
+        this.debugVoxelCells = WalkCollisionMesh.buildDebugVoxelCells(triangles, debugVoxelSize);
         this.indexTriangles();
         this.cellCount = this.blockingCells.size;
     }
 
-    static fromGlb(buffer: ArrayBuffer, transform?: PresetTransform) {
+    static fromGlb(buffer: ArrayBuffer, transform?: PresetTransform, debugVoxelSize = COLLISION_MESH_DEBUG_DEFAULT_VOXEL_SIZE) {
         const startedAt = performance.now();
         const { json, bin } = WalkCollisionMesh.parseGlb(buffer);
         const worldTransform = WalkCollisionMesh.transformFromPreset(transform);
@@ -230,7 +266,7 @@ class WalkCollisionMesh {
             WalkCollisionMesh.collectNodeTriangles(json, bin, nodeIndex, worldTransform.clone(), triangles, visitedNodes);
         }
 
-        const mesh = new WalkCollisionMesh(triangles);
+        const mesh = new WalkCollisionMesh(triangles, debugVoxelSize);
         return {
             mesh,
             parseMs: Number((performance.now() - startedAt).toFixed(1))
@@ -343,6 +379,32 @@ class WalkCollisionMesh {
         return this.triangles[index] ?? null;
     }
 
+    debugTriangles(limit = COLLISION_MESH_PREVIEW_TRIANGLE_LIMIT) {
+        if (this.triangles.length <= limit) {
+            return this.triangles.map((triangle, index) => ({ index, triangle }));
+        }
+
+        const stride = Math.ceil(this.triangles.length / limit);
+        const result: CollisionDebugTriangle[] = [];
+        for (let index = 0; index < this.triangles.length; index += stride) {
+            result.push({ index, triangle: this.triangles[index] });
+        }
+        return result;
+    }
+
+    debugVoxels(limit = COLLISION_MESH_PREVIEW_VOXEL_LIMIT) {
+        if (this.debugVoxelCells.length <= limit) {
+            return this.debugVoxelCells;
+        }
+
+        const stride = Math.ceil(this.debugVoxelCells.length / limit);
+        const result: CollisionDebugVoxel[] = [];
+        for (let index = 0; index < this.debugVoxelCells.length; index += stride) {
+            result.push(this.debugVoxelCells[index]);
+        }
+        return result;
+    }
+
     debugTrianglesNear(x: number, z: number, radius = COLLISION_DEBUG_TRIANGLE_RADIUS, limit = COLLISION_DEBUG_TRIANGLE_LIMIT) {
         const minCellX = Math.floor((x - radius) / COLLISION_MESH_CELL_SIZE);
         const maxCellX = Math.floor((x + radius) / COLLISION_MESH_CELL_SIZE);
@@ -389,6 +451,144 @@ class WalkCollisionMesh {
         .slice(0, limit);
     }
 
+    private static buildDebugVoxelCells(triangles: CollisionTriangle[], voxelSize: number) {
+        const cells = new Map<string, CollisionDebugVoxel>();
+        const triangleStride = Math.max(1, Math.ceil(triangles.length / COLLISION_MESH_DEBUG_VOXEL_TRIANGLE_LIMIT));
+
+        for (let triangleIndex = 0; triangleIndex < triangles.length && cells.size < COLLISION_MESH_DEBUG_VOXEL_MAX_CELLS; triangleIndex += triangleStride) {
+            WalkCollisionMesh.addTriangleDebugVoxels(cells, triangles[triangleIndex], voxelSize);
+        }
+
+        return Array.from(cells.values());
+    }
+
+    private static addTriangleDebugVoxels(cells: Map<string, CollisionDebugVoxel>, triangle: CollisionTriangle, voxelSize: number) {
+        const normal = WalkCollisionMesh.triangleNormal(triangle);
+        const axis = WalkCollisionMesh.dominantNormalAxis(normal);
+        if (axis === null) {
+            return;
+        }
+
+        const uAxis = axis === 0 ? 1 : 0;
+        const vAxis = axis === 2 ? 1 : 2;
+        const normalValue = normal[axis];
+        const normalSign = normalValue < 0 ? -1 : 1;
+        const plane = (
+            WalkCollisionMesh.triangleCoord(triangle, 0, axis) +
+            WalkCollisionMesh.triangleCoord(triangle, 1, axis) +
+            WalkCollisionMesh.triangleCoord(triangle, 2, axis)
+        ) / 3;
+        const axisCenter = plane - normalSign * voxelSize * 0.5;
+        const minU = Math.min(
+            WalkCollisionMesh.triangleCoord(triangle, 0, uAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 1, uAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 2, uAxis)
+        );
+        const maxU = Math.max(
+            WalkCollisionMesh.triangleCoord(triangle, 0, uAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 1, uAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 2, uAxis)
+        );
+        const minV = Math.min(
+            WalkCollisionMesh.triangleCoord(triangle, 0, vAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 1, vAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 2, vAxis)
+        );
+        const maxV = Math.max(
+            WalkCollisionMesh.triangleCoord(triangle, 0, vAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 1, vAxis),
+            WalkCollisionMesh.triangleCoord(triangle, 2, vAxis)
+        );
+        const minCellU = Math.floor(minU / voxelSize);
+        const maxCellU = Math.floor(maxU / voxelSize);
+        const minCellV = Math.floor(minV / voxelSize);
+        const maxCellV = Math.floor(maxV / voxelSize);
+        const cellCount = Math.max(1, (maxCellU - minCellU + 1) * (maxCellV - minCellV + 1));
+        const step = Math.max(1, Math.ceil(Math.sqrt(cellCount / COLLISION_MESH_DEBUG_VOXEL_TRIANGLE_SAMPLE_LIMIT)));
+        const epsilon = voxelSize * voxelSize * 0.04;
+
+        for (let uCell = minCellU; uCell <= maxCellU && cells.size < COLLISION_MESH_DEBUG_VOXEL_MAX_CELLS; uCell += step) {
+            for (let vCell = minCellV; vCell <= maxCellV && cells.size < COLLISION_MESH_DEBUG_VOXEL_MAX_CELLS; vCell += step) {
+                const u = (uCell + 0.5) * voxelSize;
+                const v = (vCell + 0.5) * voxelSize;
+                if (!WalkCollisionMesh.pointInProjectedTriangle(u, v, triangle, uAxis, vAxis, epsilon)) {
+                    continue;
+                }
+
+                const coords = [0, 0, 0];
+                coords[axis] = axisCenter;
+                coords[uAxis] = u;
+                coords[vAxis] = v;
+                const key = [
+                    Math.floor(coords[0] / voxelSize),
+                    Math.floor(coords[1] / voxelSize),
+                    Math.floor(coords[2] / voxelSize)
+                ].join(',');
+
+                cells.set(key, {
+                    x: coords[0],
+                    y: coords[1],
+                    z: coords[2],
+                    size: voxelSize,
+                    blocking: triangle.blocking
+                });
+            }
+        }
+    }
+
+    private static triangleNormal(triangle: CollisionTriangle) {
+        const abx = triangle.bx - triangle.ax;
+        const aby = triangle.by - triangle.ay;
+        const abz = triangle.bz - triangle.az;
+        const acx = triangle.cx - triangle.ax;
+        const acy = triangle.cy - triangle.ay;
+        const acz = triangle.cz - triangle.az;
+        return [
+            aby * acz - abz * acy,
+            abz * acx - abx * acz,
+            abx * acy - aby * acx
+        ];
+    }
+
+    private static dominantNormalAxis(normal: number[]) {
+        const absX = Math.abs(normal[0]);
+        const absY = Math.abs(normal[1]);
+        const absZ = Math.abs(normal[2]);
+        const max = Math.max(absX, absY, absZ);
+        if (max <= 0.000001) {
+            return null;
+        }
+        if (max === absX) {
+            return 0;
+        }
+        return max === absY ? 1 : 2;
+    }
+
+    private static triangleCoord(triangle: CollisionTriangle, vertex: number, axis: number) {
+        if (vertex === 0) {
+            return axis === 0 ? triangle.ax : axis === 1 ? triangle.ay : triangle.az;
+        }
+        if (vertex === 1) {
+            return axis === 0 ? triangle.bx : axis === 1 ? triangle.by : triangle.bz;
+        }
+        return axis === 0 ? triangle.cx : axis === 1 ? triangle.cy : triangle.cz;
+    }
+
+    private static pointInProjectedTriangle(u: number, v: number, triangle: CollisionTriangle, uAxis: number, vAxis: number, epsilon: number) {
+        const au = WalkCollisionMesh.triangleCoord(triangle, 0, uAxis);
+        const av = WalkCollisionMesh.triangleCoord(triangle, 0, vAxis);
+        const bu = WalkCollisionMesh.triangleCoord(triangle, 1, uAxis);
+        const bv = WalkCollisionMesh.triangleCoord(triangle, 1, vAxis);
+        const cu = WalkCollisionMesh.triangleCoord(triangle, 2, uAxis);
+        const cv = WalkCollisionMesh.triangleCoord(triangle, 2, vAxis);
+        const d1 = WalkCollisionMesh.sign2d(u, v, au, av, bu, bv);
+        const d2 = WalkCollisionMesh.sign2d(u, v, bu, bv, cu, cv);
+        const d3 = WalkCollisionMesh.sign2d(u, v, cu, cv, au, av);
+        const hasNeg = d1 < -epsilon || d2 < -epsilon || d3 < -epsilon;
+        const hasPos = d1 > epsilon || d2 > epsilon || d3 > epsilon;
+        return !(hasNeg && hasPos);
+    }
+
     private indexTriangles() {
         for (let i = 0; i < this.triangles.length; i += 1) {
             const triangle = this.triangles[i];
@@ -410,6 +610,31 @@ class WalkCollisionMesh {
                 }
             }
         }
+    }
+
+    private static triangleBounds(triangles: CollisionTriangle[]): CollisionMeshBounds {
+        const bounds = {
+            minX: Infinity,
+            maxX: -Infinity,
+            minY: Infinity,
+            maxY: -Infinity,
+            minZ: Infinity,
+            maxZ: -Infinity
+        };
+
+        for (const triangle of triangles) {
+            bounds.minX = Math.min(bounds.minX, triangle.minX);
+            bounds.maxX = Math.max(bounds.maxX, triangle.maxX);
+            bounds.minY = Math.min(bounds.minY, triangle.minY);
+            bounds.maxY = Math.max(bounds.maxY, triangle.maxY);
+            bounds.minZ = Math.min(bounds.minZ, triangle.minZ);
+            bounds.maxZ = Math.max(bounds.maxZ, triangle.maxZ);
+        }
+
+        if (!Number.isFinite(bounds.minX)) {
+            return { minX: 0, maxX: 0, minY: 0, maxY: 0, minZ: 0, maxZ: 0 };
+        }
+        return bounds;
     }
 
     private static parseGlb(buffer: ArrayBuffer) {
@@ -739,6 +964,7 @@ class WalkTool {
     private collisionMeshBuffer: ArrayBuffer | null = null;
     private collisionMeshBufferUrl: string | null = null;
     private collisionMeshAbort: AbortController | null = null;
+    private collisionMeshBlockingEnabled = COLLISION_MESH_BLOCKING_ENABLED;
     private lastCollisionMeshReportAt = 0;
     private lastCollisionMeshBlockReportAt = 0;
     private collisionMeshBlockedSince: number | null = null;
@@ -749,6 +975,9 @@ class WalkTool {
     private collisionMeshLockedFloorY: number | null = null;
     private collisionMeshLockedFloorTriangle: number | null = null;
     private collisionDebugEnabled = WalkTool.defaultCollisionDebugEnabled();
+    private collisionMeshPreviewEnabled = WalkTool.defaultCollisionMeshPreviewEnabled();
+    private collisionMeshMiniOverlayEnabled = WalkTool.defaultCollisionMeshMiniOverlayEnabled();
+    private collisionMeshPreviewCanvas: HTMLCanvasElement | null = null;
     private lastCollisionDebugReason = 'idle';
     private lastCollisionDesiredMove = new Vec3();
     private lastCollisionResolvedMove: Vec3 | null = null;
@@ -779,8 +1008,10 @@ class WalkTool {
         this.events.on('walk.saveFloorHeight', this.saveCollisionMeshFloorHeight, this);
         this.events.on('scene.clear', this.clearCollisionMesh, this);
         this.events.on('walk.collisionDebug', this.onCollisionDebug, this);
+        this.events.on('walk.collisionMeshPreview', this.onCollisionMeshPreview, this);
         this.events.on('prerender', this.drawCollisionDebug, this);
         this.events.function('walk.collisionDebug', () => this.collisionDebugEnabled);
+        this.events.function('walk.collisionMeshPreview', () => this.collisionMeshPreviewEnabled);
         this.events.function('walk.collisionDebugBundle', () => this.collisionDebugBundle());
         this.events.function('walk.saveFloorHeight', (source?: string) => this.saveCollisionMeshFloorHeight(source));
     }
@@ -795,8 +1026,32 @@ class WalkTool {
             params.get('walkDebug') === '1';
     }
 
+    private static defaultCollisionMeshPreviewEnabled() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        const params = new URLSearchParams(window.location.search);
+        return params.get('collisionMeshPreview') === '1' ||
+            params.get('collisionMeshMini') === '1' ||
+            params.get('voxelDebug') === '1';
+    }
+
+    private static defaultCollisionMeshMiniOverlayEnabled() {
+        if (typeof window === 'undefined') {
+            return false;
+        }
+        const params = new URLSearchParams(window.location.search);
+        return params.get('collisionMeshMini') === '1';
+    }
+
     private onCollisionDebug(enabled = true) {
         this.collisionDebugEnabled = Boolean(enabled);
+        this.scene.forceRender = true;
+    }
+
+    private onCollisionMeshPreview(enabled = true) {
+        this.collisionMeshPreviewEnabled = Boolean(enabled);
+        this.syncCollisionMeshPreviewOverlay();
         this.scene.forceRender = true;
     }
 
@@ -870,6 +1125,8 @@ class WalkTool {
             toolActive: this.active,
             embeddedControls: this.embeddedControls,
             collisionDebugEnabled: this.collisionDebugEnabled,
+            collisionMeshPreviewEnabled: this.collisionMeshPreviewEnabled,
+            collisionMeshMiniOverlayEnabled: this.collisionMeshMiniOverlayEnabled,
             activeTool: this.events.invoke('tool.active') as string | null,
             camera: this.events.invoke('camera.debugState') ?? null,
             mesh: {
@@ -879,7 +1136,7 @@ class WalkTool {
                 loadedKey: this.collisionMeshLoadedKey,
                 triangles: mesh?.triangleCount ?? null,
                 blockingTriangles: mesh?.blockingTriangleCount ?? null,
-                blockingEnabled: COLLISION_MESH_BLOCKING_ENABLED,
+                blockingEnabled: this.collisionMeshBlockingEnabled,
                 cells: mesh?.cellCount ?? null,
                 cellSize: mesh ? COLLISION_MESH_CELL_SIZE : null,
                 capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
@@ -1532,6 +1789,7 @@ class WalkTool {
         this.collisionMeshUrl = details.url;
         this.collisionMeshKey = meshKey;
         this.collisionMeshPendingSavedFloorY = this.readSavedCollisionMeshFloorY(meshKey);
+        const blockingEnabled = details.blockingEnabled ?? COLLISION_MESH_BLOCKING_ENABLED;
         const startedAt = performance.now();
         this.pushCollisionDebugSample('mesh-load-start', {
             url: details.url,
@@ -1547,6 +1805,7 @@ class WalkTool {
         });
 
         try {
+            const debugVoxelSizePromise = this.loadCollisionMeshDebugVoxelSize(details.url, abortController.signal);
             let buffer = details.url === this.collisionMeshBufferUrl ? this.collisionMeshBuffer : null;
             if (!buffer) {
                 const response = await fetch(details.url, { signal: abortController.signal, cache: 'force-cache' });
@@ -1562,7 +1821,12 @@ class WalkTool {
                 this.collisionMeshBufferUrl = details.url;
             }
 
-            const { mesh, parseMs } = WalkCollisionMesh.fromGlb(buffer, details.transform);
+            const debugVoxelSize = await debugVoxelSizePromise;
+            if (details.url !== this.collisionMeshUrl) {
+                return;
+            }
+
+            const { mesh, parseMs } = WalkCollisionMesh.fromGlb(buffer, details.transform, debugVoxelSize ?? undefined);
             if (meshKey !== this.collisionMeshKey) {
                 return;
             }
@@ -1574,6 +1838,7 @@ class WalkTool {
                 this.collisionMeshSavedFloorY = null;
                 this.collisionMeshSavedFloorKey = null;
                 this.resetCollisionMeshFloorLock();
+                this.syncCollisionMeshPreviewOverlay();
                 this.events.fire('walk.collisionMesh', {
                     ok: false,
                     reason: 'empty',
@@ -1585,8 +1850,10 @@ class WalkTool {
                 return;
             }
             this.collisionMesh = mesh;
+            this.collisionMeshBlockingEnabled = blockingEnabled;
             this.collisionMeshLoadedKey = meshKey;
             this.collisionMeshHeadY = null;
+            this.syncCollisionMeshPreviewOverlay();
             const savedFloorY = this.collisionMeshSavedFloorKey === meshKey ?
                 this.collisionMeshSavedFloorY :
                 this.collisionMeshPendingSavedFloorY;
@@ -1602,11 +1869,12 @@ class WalkTool {
                 parseMs,
                 triangles: mesh.triangleCount,
                 blockingTriangles: mesh.blockingTriangleCount,
-                blockingEnabled: COLLISION_MESH_BLOCKING_ENABLED,
+                blockingEnabled: this.collisionMeshBlockingEnabled,
                 floorLock,
                 savedFloorY: this.collisionMeshSavedFloorY,
                 floorStorageKey: this.collisionMeshFloorStorageKey(meshKey),
-                cells: mesh.cellCount
+                cells: mesh.cellCount,
+                debugVoxelSize: mesh.debugVoxelSize
             });
             this.events.fire('walk.collisionMesh', {
                 ok: true,
@@ -1618,12 +1886,13 @@ class WalkTool {
                 parseMs,
                 triangles: mesh.triangleCount,
                 blockingTriangles: mesh.blockingTriangleCount,
-                blockingEnabled: COLLISION_MESH_BLOCKING_ENABLED,
+                blockingEnabled: this.collisionMeshBlockingEnabled,
                 floorLock,
                 savedFloorY: this.collisionMeshSavedFloorY,
                 floorStorageKey: this.collisionMeshFloorStorageKey(meshKey),
                 cells: mesh.cellCount,
                 cellSize: COLLISION_MESH_CELL_SIZE,
+                debugVoxelSize: mesh.debugVoxelSize,
                 capsuleRadius: COLLISION_MESH_CAPSULE_RADIUS,
                 playerHeight: COLLISION_MESH_PLAYER_HEIGHT,
                 eyeHeight: COLLISION_MESH_EYE_HEIGHT,
@@ -1642,6 +1911,7 @@ class WalkTool {
             this.collisionMeshSavedFloorY = null;
             this.collisionMeshSavedFloorKey = null;
             this.resetCollisionMeshFloorLock();
+            this.syncCollisionMeshPreviewOverlay();
             this.pushCollisionDebugSample('mesh-load-failed', {
                 url: details.url,
                 requestId: details.requestId ?? null,
@@ -1657,6 +1927,40 @@ class WalkTool {
         }
     }
 
+    private async loadCollisionMeshDebugVoxelSize(url: string, signal: AbortSignal) {
+        const voxelJsonUrl = this.collisionMeshVoxelJsonUrl(url);
+        if (!voxelJsonUrl) {
+            return null;
+        }
+
+        try {
+            const response = await fetch(voxelJsonUrl, { signal, cache: 'force-cache' });
+            if (!response.ok) {
+                return null;
+            }
+            const json = await response.json() as { voxelResolution?: unknown };
+            return typeof json.voxelResolution === 'number' && Number.isFinite(json.voxelResolution) && json.voxelResolution > 0 ?
+                json.voxelResolution :
+                null;
+        } catch {
+            return null;
+        }
+    }
+
+    private collisionMeshVoxelJsonUrl(url: string) {
+        try {
+            const parsed = new URL(url, window.location.href);
+            if (!parsed.pathname.endsWith('.collision.glb')) {
+                return null;
+            }
+            parsed.pathname = parsed.pathname.replace(/\.collision\.glb$/, '.voxel.json');
+            parsed.search = '';
+            return parsed.toString();
+        } catch {
+            return null;
+        }
+    }
+
     private clearCollisionMesh(details: Record<string, unknown> = {}) {
         this.collisionMeshAbort?.abort();
         this.collisionMeshAbort = null;
@@ -1666,6 +1970,7 @@ class WalkTool {
         this.collisionMeshLoadedKey = null;
         this.collisionMeshBuffer = null;
         this.collisionMeshBufferUrl = null;
+        this.collisionMeshBlockingEnabled = COLLISION_MESH_BLOCKING_ENABLED;
         this.collisionMeshHeadY = null;
         this.collisionMeshBlockedSince = null;
         this.collisionMeshPendingSavedFloorY = null;
@@ -1674,6 +1979,7 @@ class WalkTool {
         this.resetCollisionMeshFloorLock();
         this.resetCollisionDebugMove();
         this.lastCollisionFloorTriangle = null;
+        this.syncCollisionMeshPreviewOverlay();
         this.pushCollisionDebugSample('mesh-clear', {
             reason: details.reason ?? 'cleared',
             requestId: details.requestId ?? null
@@ -1870,7 +2176,7 @@ class WalkTool {
             return fullMove;
         }
 
-        if (!COLLISION_MESH_BLOCKING_ENABLED) {
+        if (!this.collisionMeshBlockingEnabled) {
             this.collisionMeshBlockedSince = null;
             this.lastCollisionDebugReason = 'floor-only';
             this.lastCollisionResolvedMove = fullMove.clone();
@@ -2085,7 +2391,7 @@ class WalkTool {
 
     private resolveCollisionMeshPenetration(camera: Camera, focalPoint: Vec3) {
         const mesh = this.collisionMesh;
-        if (!mesh || !COLLISION_MESH_BLOCKING_ENABLED) {
+        if (!mesh || !this.collisionMeshBlockingEnabled) {
             return false;
         }
 
@@ -2198,13 +2504,120 @@ class WalkTool {
         return focalPoint.clone().add(forwardVec.clone().mulScalar(distance));
     }
 
+    private syncCollisionMeshPreviewOverlay() {
+        if (!this.collisionMeshMiniOverlayEnabled || !this.collisionMesh || typeof document === 'undefined') {
+            this.removeCollisionMeshPreviewOverlay();
+            return;
+        }
+
+        const canvas = this.ensureCollisionMeshPreviewCanvas();
+        if (!canvas) {
+            return;
+        }
+
+        this.drawCollisionMeshPreviewCanvas(canvas, this.collisionMesh);
+    }
+
+    private ensureCollisionMeshPreviewCanvas() {
+        if (this.collisionMeshPreviewCanvas?.isConnected) {
+            return this.collisionMeshPreviewCanvas;
+        }
+        if (!document.body) {
+            return null;
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.style.position = 'fixed';
+        canvas.style.left = '12px';
+        canvas.style.bottom = '12px';
+        canvas.style.width = `${COLLISION_MESH_PREVIEW_CANVAS_SIZE}px`;
+        canvas.style.height = `${COLLISION_MESH_PREVIEW_CANVAS_SIZE}px`;
+        canvas.style.zIndex = '2147483646';
+        canvas.style.pointerEvents = 'none';
+        canvas.style.background = 'rgba(2, 6, 8, 0.72)';
+        canvas.style.border = '1px solid rgba(180, 245, 255, 0.42)';
+        canvas.style.borderRadius = '6px';
+        canvas.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.38)';
+        document.body.appendChild(canvas);
+        this.collisionMeshPreviewCanvas = canvas;
+        return canvas;
+    }
+
+    private removeCollisionMeshPreviewOverlay() {
+        this.collisionMeshPreviewCanvas?.remove();
+        this.collisionMeshPreviewCanvas = null;
+    }
+
+    private drawCollisionMeshPreviewCanvas(canvas: HTMLCanvasElement, mesh: WalkCollisionMesh) {
+        const context = canvas.getContext('2d');
+        if (!context) {
+            return;
+        }
+
+        const pixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+        const pixelSize = Math.round(COLLISION_MESH_PREVIEW_CANVAS_SIZE * pixelRatio);
+        if (canvas.width !== pixelSize || canvas.height !== pixelSize) {
+            canvas.width = pixelSize;
+            canvas.height = pixelSize;
+        }
+
+        context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+        context.clearRect(0, 0, COLLISION_MESH_PREVIEW_CANVAS_SIZE, COLLISION_MESH_PREVIEW_CANVAS_SIZE);
+        context.fillStyle = 'rgba(2, 6, 8, 0.72)';
+        context.fillRect(0, 0, COLLISION_MESH_PREVIEW_CANVAS_SIZE, COLLISION_MESH_PREVIEW_CANVAS_SIZE);
+
+        const bounds = mesh.bounds;
+        const sizeX = Math.max(0.001, bounds.maxX - bounds.minX);
+        const sizeZ = Math.max(0.001, bounds.maxZ - bounds.minZ);
+        const centerX = (bounds.minX + bounds.maxX) / 2;
+        const centerZ = (bounds.minZ + bounds.maxZ) / 2;
+        const scale = (COLLISION_MESH_PREVIEW_CANVAS_SIZE - COLLISION_MESH_PREVIEW_CANVAS_PADDING * 2) / Math.max(sizeX, sizeZ);
+        const project = (x: number, z: number) => ({
+            x: COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 + (x - centerX) * scale,
+            y: COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - (z - centerZ) * scale
+        });
+
+        context.lineWidth = 1;
+        context.strokeStyle = 'rgba(180, 245, 255, 0.22)';
+        context.strokeRect(
+            COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - sizeX * scale / 2,
+            COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - sizeZ * scale / 2,
+            sizeX * scale,
+            sizeZ * scale
+        );
+
+        for (const voxel of mesh.debugVoxels(COLLISION_MESH_PREVIEW_MINI_VOXEL_LIMIT)) {
+            const center = project(voxel.x, voxel.z);
+            const size = Math.max(1.2, voxel.size * scale * COLLISION_MESH_DEBUG_VOXEL_VISUAL_SCALE);
+            context.fillStyle = voxel.blocking ? 'rgba(255, 82, 64, 0.58)' : 'rgba(78, 255, 146, 0.48)';
+            context.fillRect(center.x - size / 2, center.y - size / 2, size, size);
+        }
+
+        context.strokeStyle = 'rgba(255, 236, 128, 0.86)';
+        context.beginPath();
+        context.moveTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - 5, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2);
+        context.lineTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 + 5, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2);
+        context.moveTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 - 5);
+        context.lineTo(COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2, COLLISION_MESH_PREVIEW_CANVAS_SIZE / 2 + 5);
+        context.stroke();
+    }
+
     private drawCollisionDebug() {
-        if (!this.collisionDebugEnabled || !this.active || !this.collisionMesh) {
+        if ((!this.collisionDebugEnabled && !this.collisionMeshPreviewEnabled) || !this.active || !this.collisionMesh) {
             return;
         }
 
         const mesh = this.collisionMesh;
         const body = this.playerCollisionBodies()[0];
+        if (this.collisionMeshPreviewEnabled) {
+            this.drawDebugMeshPreview(mesh);
+        }
+
+        if (!this.collisionDebugEnabled) {
+            this.scene.forceRender = true;
+            return;
+        }
+
         const feetY = body.eye.y - body.eyeHeight;
         const floor = this.collisionMeshGroundHit(mesh,
             body.eye.x,
@@ -2222,6 +2635,41 @@ class WalkTool {
         this.drawDebugMoveVectors(body);
 
         this.scene.forceRender = true;
+    }
+
+    private drawDebugMeshPreview(mesh: WalkCollisionMesh) {
+        for (const voxel of mesh.debugVoxels()) {
+            this.drawDebugVoxel(voxel, voxel.blocking ? COLLISION_DEBUG_PREVIEW_WALL_COLOR : COLLISION_DEBUG_PREVIEW_FLOOR_COLOR);
+        }
+    }
+
+    private drawDebugVoxel(voxel: CollisionDebugVoxel, color: Color) {
+        const half = voxel.size * COLLISION_MESH_DEBUG_VOXEL_VISUAL_SCALE / 2;
+        const x0 = voxel.x - half;
+        const x1 = voxel.x + half;
+        const y0 = voxel.y - half;
+        const y1 = voxel.y + half;
+        const z0 = voxel.z - half;
+        const z1 = voxel.z + half;
+        const corners = [
+            new Vec3(x0, y0, z0),
+            new Vec3(x1, y0, z0),
+            new Vec3(x1, y0, z1),
+            new Vec3(x0, y0, z1),
+            new Vec3(x0, y1, z0),
+            new Vec3(x1, y1, z0),
+            new Vec3(x1, y1, z1),
+            new Vec3(x0, y1, z1)
+        ];
+        const edges = [
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7]
+        ];
+
+        for (const [from, to] of edges) {
+            this.drawCollisionMeshPreviewLine(corners[from], corners[to], color);
+        }
     }
 
     private drawDebugTriangles(mesh: WalkCollisionMesh, body: PlayerCollisionBody, floor: GroundMeshHit | null) {
@@ -2356,6 +2804,10 @@ class WalkTool {
 
     private drawDebugLine(a: Vec3, b: Vec3, color: Color) {
         this.scene.app.drawLine(a, b, color, true, this.scene.worldLayer);
+    }
+
+    private drawCollisionMeshPreviewLine(a: Vec3, b: Vec3, color: Color) {
+        this.scene.app.drawLine(a, b, color, false, this.scene.worldLayer);
     }
 
     private applyCollisionHeadHeightLock(camera: Camera, focalPoint: Vec3) {
