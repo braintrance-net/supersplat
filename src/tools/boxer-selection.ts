@@ -6569,6 +6569,14 @@ const scoreDirectLiftCandidate = (
     return confidence * 0.55 + score2d * 0.45 + pointScore + projectionScore * projectionWeight + geometryScore * geometryWeight + clickScore - areaPenalty - broadPenalty;
 };
 
+const shouldDisableBoxerPrewarm = () => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('hideEditorChrome') === '1' ||
+        params.get('boxerPrewarm') === '0' ||
+        params.has('timeTrialPlayer');
+};
+
 class BoxerSelection {
     activate: () => void;
     deactivate: () => void;
@@ -6588,8 +6596,16 @@ class BoxerSelection {
         let stickyEvalTargetLabel: string | null = null;
         let prewarmSerial = 0;
         let prewarmPromise: Promise<boolean> | null = null;
+        const prewarmDisabled = shouldDisableBoxerPrewarm();
 
         const scheduleBoxerFramePrewarm = (reason: string) => {
+            if (prewarmDisabled) {
+                (window as any).__boxerPrewarmReady = false;
+                prewarmPromise = Promise.resolve(false);
+                (window as any).__boxerPrewarmPromise = prewarmPromise;
+                return;
+            }
+
             const serial = ++prewarmSerial;
             (window as any).__boxerPrewarmReady = false;
             prewarmPromise = new Promise<boolean>((resolve) => {
@@ -6638,12 +6654,16 @@ class BoxerSelection {
 
         (window as any).__boxerWaitForPrewarm = async () => (prewarmPromise ? await prewarmPromise : !!(window as any).__boxerPrewarmReady);
 
-        events.on('scene.elementAdded', (element: unknown) => {
-            if (element instanceof Splat) {
-                scheduleBoxerFramePrewarm('splat-loaded');
-            }
-        });
-        scheduleBoxerFramePrewarm('tool-ready');
+        if (prewarmDisabled) {
+            scheduleBoxerFramePrewarm('disabled');
+        } else {
+            events.on('scene.elementAdded', (element: unknown) => {
+                if (element instanceof Splat) {
+                    scheduleBoxerFramePrewarm('splat-loaded');
+                }
+            });
+            scheduleBoxerFramePrewarm('tool-ready');
+        }
 
         // SVG overlay for 2D evidence and final 3D projection sanity checks.
         const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');

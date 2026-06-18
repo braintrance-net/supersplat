@@ -17,7 +17,7 @@ class ToolManager {
             this.activate(null);
         });
 
-        this.events.function('tool.active', () => {
+        this.events.replaceFunction('tool.active', () => {
             return this.active;
         });
 
