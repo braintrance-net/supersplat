@@ -270,6 +270,7 @@ class Camera extends Element {
         this.mainCamera.camera.layers = [
             scene.worldLayer.id,
             scene.splatLayer.id,
+            scene.boxVolumeLayer.id,
             scene.gizmoLayer.id
         ];
 
@@ -513,6 +514,8 @@ class Camera extends Element {
 
             // configure gizmo pass
             this.gizmoPass.init(this.mainTarget);
+            this.gizmoPass.addLayer(this.camera, scene.boxVolumeLayer, false, false);
+            this.gizmoPass.addLayer(this.camera, scene.boxVolumeLayer, true, false);
             this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, false, false);
             this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, true, false);
             this.gizmoPass.renderActions[0].clearDepth = true;
