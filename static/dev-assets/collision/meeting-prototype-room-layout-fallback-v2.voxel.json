@@ -1,0 +1,7 @@
+{
+  "version": "debug-resolution-only",
+  "asset": {
+    "generator": "layout fallback collision mesh"
+  },
+  "voxelResolution": 0.18
+}
