@@ -34,6 +34,15 @@ const DEBUG_FACE_INDICES = [
     [3, 7, 4, 0]
 ] as const;
 const DEBUG_FACE_LABELS = ['bottom', 'top', 'depth-', 'width+', 'depth+', 'width-'];
+const BOX_VOLUME_VISUAL_VERSION = 'far-boxlayer-preview-selection-20260618p';
+const FAR_FACE_RANK_COLORS = [
+    'rgba(16, 156, 73, 0.98)',
+    'rgba(16, 156, 73, 0.98)',
+    'rgba(16, 156, 73, 0.98)',
+    'rgba(16, 156, 73, 0.98)',
+    'rgba(16, 156, 73, 0.98)',
+    'rgba(16, 156, 73, 0.98)'
+];
 
 const rayPlane = (origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3, out: Vec3) => {
     const denom = normal.dot(dir);
@@ -53,6 +62,12 @@ const polygonArea = (points: [number, number][]) => {
         area += points[i][0] * points[next][1] - points[next][0] * points[i][1];
     }
     return Math.abs(area) * 0.5;
+};
+
+const averagePoint = (points: [number, number][]): [number, number] => {
+    const x = points.reduce((sum, point) => sum + point[0], 0) / points.length;
+    const y = points.reduce((sum, point) => sum + point[1], 0) / points.length;
+    return [x, y];
 };
 
 class BoxVolumeTool {
@@ -90,6 +105,7 @@ class BoxVolumeTool {
         let heightLen = MIN_EXTENT;
         let lastDebugSignature = '';
         let lastDebugLogAt = 0;
+        let lastParentDebugPostAt = 0;
         let debugEnabled = localStorage.getItem('boxVolumeDebugAuto') === '1';
         let syncingInputs = false;
         let selectionRefreshQueued = false;
@@ -102,6 +118,7 @@ class BoxVolumeTool {
         const screenMath = createScreenMath(scene);
 
         gizmo.on('render:update', () => {
+            updateVolumeShape();
             scene.forceRender = true;
         });
         gizmo.on('transform:move', () => {
@@ -192,8 +209,10 @@ class BoxVolumeTool {
             });
         };
 
+        const canRefreshLiveSelection = () => active && boxAdded && (phase === 'height' || phase === 'placed');
+
         async function runSelectionRefresh() {
-            if (!active || phase !== 'placed' || !boxAdded) {
+            if (!canRefreshLiveSelection()) {
                 selectionRefreshQueued = false;
                 return;
             }
@@ -210,7 +229,7 @@ class BoxVolumeTool {
                 console.warn('[BoxVolume] live selection refresh failed', err);
             } finally {
                 selectionRefreshInFlight = false;
-                if (selectionRefreshQueued && active && phase === 'placed' && boxAdded) {
+                if (selectionRefreshQueued && canRefreshLiveSelection()) {
                     queueSelectionRefresh();
                 } else if (showRadialAfterSelectionRefresh) {
                     showRadialAfterSelectionRefresh = false;
@@ -220,10 +239,10 @@ class BoxVolumeTool {
         }
 
         function queueSelectionRefresh(immediate = false, showRadial = false) {
-            if (!active || phase !== 'placed' || !boxAdded) {
+            if (!canRefreshLiveSelection()) {
                 return;
             }
-            if (showRadial) {
+            if (showRadial && phase === 'placed') {
                 showRadialAfterSelectionRefresh = true;
             }
             selectionRefreshQueued = true;
@@ -255,6 +274,7 @@ class BoxVolumeTool {
             updateVolumeShape();
             updateOverlay();
             updateResizeHandles();
+            maybePostBoxVolumeDebugSnapshot('box-visual-update');
             scene.forceRender = true;
         }
 
@@ -396,7 +416,8 @@ class BoxVolumeTool {
             updateVolumeShape();
             updateOverlay();
             updateResizeHandles();
-            if (phase === 'placed') {
+            maybePostBoxVolumeDebugSnapshot('box-visual-update');
+            if (phase === 'height' || phase === 'placed') {
                 queueSelectionRefresh();
             }
             scene.forceRender = true;
@@ -466,13 +487,15 @@ class BoxVolumeTool {
 
         const buildBoxVolumeDebugSnapshot = (reason = 'manual') => {
             const rect = canvasContainer.dom.getBoundingClientRect();
-            const overlayFaces = overlaySvg.querySelectorAll('[data-face-index], [data-face-depth], polygon').length;
+            const shapeSnapshot = volumeShape.getDebugSnapshot() as BoxVolumeDebugSnapshot | null;
+            const overlayRankDots = overlaySvg.querySelectorAll('[data-face-relation="far-rank"]').length;
             const overlayEdges = overlaySvg.querySelectorAll('line').length;
             const visibleHandles = resizeHandles.filter(handle => handle.dom.style.display !== 'none').length;
-            const shapeSnapshot = volumeShape.getDebugSnapshot() as BoxVolumeDebugSnapshot | null;
+            const webglFarFaceCount = shapeSnapshot?.faces.filter(face => face.relation === 'far' && face.material.visible).length ?? 0;
 
             return {
                 reason,
+                implementationVersion: BOX_VOLUME_VISUAL_VERSION,
                 timestamp: new Date().toISOString(),
                 active,
                 phase,
@@ -507,7 +530,9 @@ class BoxVolumeTool {
                 renderer: readRendererInfo(),
                 overlay: {
                     svgDisplay: overlaySvg.style.display,
-                    faceCount: overlayFaces,
+                    faceCount: overlayRankDots,
+                    webglFarFaceCount,
+                    svgRankDotCount: overlayRankDots,
                     edgeCount: overlayEdges,
                     visibleHandles,
                     containerRect: {
@@ -521,32 +546,85 @@ class BoxVolumeTool {
                 projectedFaces: projectedFaceDebug(),
                 diagnosisHints: {
                     nearFacesShouldBeTransparent: shapeSnapshot?.nearFaces ?? [],
-                    farFacesShouldBeOpaque: shapeSnapshot?.farFaces ?? [],
+                    farFacesShouldBeHighlighted: shapeSnapshot?.farFaces ?? [],
                     expectedNearCount: 3,
                     expectedFarCount: 3,
-                    svgShouldNotContainFaces: overlayFaces === 0,
+                    webglFarFaceHighlightCount: webglFarFaceCount,
+                    svgFarFaceRankDotCount: overlayRankDots,
                     compositeCanStillLookOpaque: shapeSnapshot?.compositeRisk ?? null
                 }
             };
         };
 
-        const printBoxVolumeDebug = (reason = 'manual') => {
-            const snapshot = buildBoxVolumeDebugSnapshot(reason);
-            (window as any).__lastBoxVolumeDebug = snapshot;
-            console.groupCollapsed(`[BoxVolumeDebug] ${reason} phase=${phase}`);
-            console.log(snapshot);
-            if (snapshot.shape?.faces) {
-                console.table(snapshot.shape.faces.map(face => ({
+        function postBoxVolumeDebugSnapshot(snapshot: ReturnType<typeof buildBoxVolumeDebugSnapshot>, force = false) {
+            if (window.parent === window) return;
+            const now = performance.now();
+            if (!force && now - lastParentDebugPostAt < 250) return;
+            lastParentDebugPostAt = now;
+            window.parent.postMessage({
+                type: 'supersplat:box-volume-debug',
+                result: snapshot
+            }, '*');
+        }
+
+        function maybePostBoxVolumeDebugSnapshot(reason: string) {
+            if (!boxAdded || (phase !== 'height' && phase !== 'placed')) return;
+            const now = performance.now();
+            if (now - lastParentDebugPostAt < 250) return;
+            postBoxVolumeDebugSnapshot(buildBoxVolumeDebugSnapshot(reason), true);
+        }
+
+        const faceColorRows = (snapshot = buildBoxVolumeDebugSnapshot('face-colors')) => {
+            const projected = new Map((snapshot.projectedFaces ?? []).map(face => [face.faceIndex, face]));
+            return (snapshot.shape?.faces ?? []).map((face) => {
+                const [r, g, b] = face.material.diffuse;
+                const projectedFace = projected.get(face.faceIndex);
+                return {
                     face: `${face.faceIndex}:${face.label}`,
                     relation: face.relation,
+                    visual: face.relation === 'far' ? 'boxlayer-opaque-green-face' : 'hidden',
+                    distanceRank: face.distanceRank,
+                    color: `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`,
+                    diffuse: face.material.diffuse.join(', '),
                     opacity: face.material.opacity,
+                    visible: face.material.visible,
+                    inset: face.material.inset,
+                    cull: face.material.cull,
+                    sided: face.material.doubleSided ? 'dual-sided' : 'culled',
+                    renderedSide: face.material.renderedGeometricSide,
+                    renderedWindingSide: face.material.renderedWindingSide,
                     blendType: face.material.blendType,
                     depthWrite: face.material.depthWrite,
                     depthTest: face.material.depthTest,
                     drawOrder: face.material.drawOrder,
+                    drawBucket: face.material.drawBucket,
+                    renderLayer: face.material.renderLayer,
+                    normal: face.normal.join(', '),
+                    facingDot: face.facingDot,
+                    windingFacingCamera: face.windingFacingCamera,
+                    outsideNormal: face.outsideNormal.join(', '),
+                    outsideFacingDot: face.outsideFacingDot,
+                    geometricSideFacingCamera: face.geometricSideFacingCamera,
+                    sideFacingCamera: face.sideFacingCamera,
+                    basisHandedness: snapshot.shape?.basisHandedness,
+                    frontWindingIsOutside: snapshot.shape?.frontWindingIsOutside,
+                    insideCull: snapshot.shape?.insideCull,
                     sideDot: face.sideDot,
-                    distanceToCamera: face.distanceToCamera
-                })));
+                    distanceToCamera: face.distanceToCamera,
+                    projectedAreaPx: projectedFace?.areaPx ?? null,
+                    projectedBbox: projectedFace?.bbox.join(', ') ?? null
+                };
+            });
+        };
+
+        const printBoxVolumeDebug = (reason = 'manual') => {
+            const snapshot = buildBoxVolumeDebugSnapshot(reason);
+            (window as any).__lastBoxVolumeDebug = snapshot;
+            postBoxVolumeDebugSnapshot(snapshot, true);
+            console.groupCollapsed(`[BoxVolumeDebug] ${reason} phase=${phase}`);
+            console.log(snapshot);
+            if (snapshot.shape?.faces) {
+                console.table(faceColorRows(snapshot));
             }
             if (snapshot.shape?.compositeRisk) {
                 console.table([snapshot.shape.compositeRisk]);
@@ -562,6 +640,29 @@ class BoxVolumeTool {
             return snapshot;
         };
 
+        const printBoxVolumeFaceColors = (reason = 'manual') => {
+            const snapshot = buildBoxVolumeDebugSnapshot(reason);
+            const rows = faceColorRows(snapshot);
+            (window as any).__lastBoxVolumeFaceColors = rows;
+            console.groupCollapsed(`[BoxVolumeFaceColors] ${reason} phase=${snapshot.phase}`);
+            console.table(rows);
+            console.groupEnd();
+            return rows;
+        };
+
+        const copyBoxVolumeDebug = async (reason = 'manual') => {
+            const snapshot = buildBoxVolumeDebugSnapshot(reason);
+            const text = JSON.stringify(snapshot, null, 2);
+            try {
+                await navigator.clipboard?.writeText(text);
+                console.info('[BoxVolumeDebug] copied snapshot JSON to clipboard');
+            } catch (err) {
+                console.warn('[BoxVolumeDebug] clipboard write failed; returning JSON text instead', err);
+            }
+            console.log(text);
+            return text;
+        };
+
         const maybePrintBoxVolumeDebug = (reason: string) => {
             if (!debugEnabled || !boxAdded || (phase !== 'height' && phase !== 'placed')) return;
             const shapeSnapshot = volumeShape.getDebugSnapshot();
@@ -572,6 +673,7 @@ class BoxVolumeTool {
                 far: shapeSnapshot?.farFaces,
                 opacity: shapeSnapshot?.faces.map(face => face.material.opacity),
                 drawOrder: shapeSnapshot?.faces.map(face => face.material.drawOrder),
+                drawBucket: shapeSnapshot?.faces.map(face => face.material.drawBucket),
                 camera: buildBoxVolumeDebugSnapshot(reason).camera.position
             });
             const now = performance.now();
@@ -585,6 +687,8 @@ class BoxVolumeTool {
         (window as any).__boxVolumeDebug = {
             snapshot: buildBoxVolumeDebugSnapshot,
             print: printBoxVolumeDebug,
+            faces: printBoxVolumeFaceColors,
+            copy: copyBoxVolumeDebug,
             enableAuto: () => {
                 debugEnabled = true;
                 localStorage.setItem('boxVolumeDebugAuto', '1');
@@ -597,7 +701,19 @@ class BoxVolumeTool {
                 return buildBoxVolumeDebugSnapshot('auto-disabled');
             }
         };
-        console.info('[BoxVolumeDebug] installed: window.__boxVolumeDebug.print() / .snapshot() / .enableAuto() / .disableAuto()');
+        console.info(`[BoxVolumeDebug] installed ${BOX_VOLUME_VISUAL_VERSION}: window.__boxVolumeDebug.print() / .snapshot() / .faces() / .copy() / .enableAuto() / .disableAuto()`);
+
+        window.addEventListener('message', (event: MessageEvent) => {
+            if (event.data?.type !== 'supersplat:box-volume-debug-request') return;
+            const source = event.source as Window | null;
+            if (!source) return;
+            const snapshot = buildBoxVolumeDebugSnapshot(event.data.reason ?? 'message-request');
+            source.postMessage({
+                type: 'supersplat:box-volume-debug',
+                requestId: event.data.requestId,
+                result: snapshot
+            }, event.origin);
+        });
 
         function updateVolumeShape() {
             if (!boxAdded || (phase !== 'height' && phase !== 'placed')) {
@@ -660,6 +776,7 @@ class BoxVolumeTool {
             }
             const rect = canvasContainer.dom.getBoundingClientRect();
             overlaySvg.style.display = '';
+            overlaySvg.setAttribute('data-box-volume-version', BOX_VOLUME_VISUAL_VERSION);
             overlaySvg.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
             overlaySvg.setAttribute('width', `${rect.width}`);
             overlaySvg.setAttribute('height', `${rect.height}`);
@@ -673,6 +790,47 @@ class BoxVolumeTool {
             const pts = projected.map(point => [point![0] - rect.left, point![1] - rect.top] as [number, number]);
             faceGroup.replaceChildren();
             edgeGroup.replaceChildren();
+            const shapeSnapshot = volumeShape.getDebugSnapshot();
+            const farFaces = new Set(shapeSnapshot?.farFaces ?? []);
+            const faceDebug = new Map((shapeSnapshot?.faces ?? []).map(face => [face.faceIndex, face]));
+
+            for (const faceIndex of farFaces) {
+                const face = DEBUG_FACE_INDICES[faceIndex];
+                if (!face) continue;
+                const rankColor = FAR_FACE_RANK_COLORS[faceIndex] ?? FAR_FACE_RANK_COLORS[0];
+                const facePoints = face.map(index => pts[index]);
+                const rank = faceDebug.get(faceIndex)?.distanceRank;
+                if (rank) {
+                    const [labelX, labelY] = averagePoint(facePoints);
+                    const badge = document.createElementNS(overlaySvg.namespaceURI, 'g');
+                    badge.setAttribute('data-face-index', String(faceIndex));
+                    badge.setAttribute('data-face-relation', 'far-rank');
+                    badge.setAttribute('transform', `translate(${labelX.toFixed(1)} ${labelY.toFixed(1)})`);
+
+                    const halo = document.createElementNS(overlaySvg.namespaceURI, 'circle');
+                    halo.setAttribute('r', '11');
+                    halo.setAttribute('fill', 'rgba(4, 10, 18, 0.82)');
+                    halo.setAttribute('stroke', rankColor);
+                    halo.setAttribute('stroke-width', '2');
+                    badge.appendChild(halo);
+
+                    const label = document.createElementNS(overlaySvg.namespaceURI, 'text');
+                    label.textContent = String(rank);
+                    label.setAttribute('x', '0');
+                    label.setAttribute('y', '0');
+                    label.setAttribute('fill', '#ffffff');
+                    label.setAttribute('font-size', '12');
+                    label.setAttribute('font-weight', '700');
+                    label.setAttribute('text-anchor', 'middle');
+                    label.setAttribute('dominant-baseline', 'central');
+                    label.setAttribute('paint-order', 'stroke');
+                    label.setAttribute('stroke', 'rgba(4, 10, 18, 0.8)');
+                    label.setAttribute('stroke-width', '2');
+                    badge.appendChild(label);
+
+                    faceGroup.appendChild(badge);
+                }
+            }
             const edges = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
             for (const [a, b] of edges) {
                 const line = document.createElementNS(overlaySvg.namespaceURI, 'line');
@@ -855,6 +1013,7 @@ class BoxVolumeTool {
             updateVolumeShape();
             updateOverlay();
             updateResizeHandles();
+            maybePostBoxVolumeDebugSnapshot('box-visual-update');
         });
 
         const previewWidth = (nx: number, ny: number) => {
@@ -1039,8 +1198,8 @@ class BoxVolumeTool {
                     const render = (box.pivot as any).render;
                     if (render) render.enabled = false;
                 }
-                updateBox();
                 phase = 'height';
+                updateBox();
             } else if (phase === 'height') {
                 previewHeight(nx, ny);
                 phase = 'placed';
