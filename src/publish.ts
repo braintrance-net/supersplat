@@ -3,7 +3,7 @@ import type { FileSystem, Writer } from '@playcanvas/splat-transform';
 import { Events } from './events';
 import { GZipWriter } from './io';
 import { serializePly, ExperienceSettings, SerializeSettings } from './splat-serialize';
-import { localize } from './ui/localization';
+import { i18n } from './ui/localization';
 
 /**
  * Simple FileSystem wrapper around a single Writer.
@@ -21,8 +21,12 @@ class WriterFileSystem implements FileSystem {
     createWriter(_filename: string): Writer {
         // Return a wrapper that delegates write but makes close a no-op
         // The caller is responsible for closing the underlying writer
+        const inner = this.writer;
         return {
-            write: (data: Uint8Array) => this.writer.write(data),
+            get bytesWritten() {
+                return inner.bytesWritten;
+            },
+            write: (data: Uint8Array) => inner.write(data),
             close: () => Promise.resolve()
         };
     }
@@ -40,7 +44,6 @@ type User = {
 };
 
 type Scene = {
-    id: string;
     hash: string;
     title: string;
     description: string;
@@ -59,10 +62,10 @@ type PublishSettings = {
     listed: boolean;
     serializeSettings: SerializeSettings;
     experienceSettings: ExperienceSettings;
-    overwriteId?: string;
     overwriteHash?: string;
     overrideModel?: boolean;
     overrideAnimation?: boolean;
+    generateLods: boolean;
 };
 
 const origin = location.origin;
@@ -92,8 +95,8 @@ const fetchSceneList = async (user: User) => {
     return (await response.json()).result as Scene[];
 };
 
-const fetchSceneSettings = async (user: User, sceneId: string): Promise<ExperienceSettings> => {
-    const response = await fetch(`${user.apiServer}/splats/${sceneId}/settings`, {
+const fetchSceneSettings = async (user: User, sceneHash: string): Promise<ExperienceSettings> => {
+    const response = await fetch(`${user.apiServer}/splats/${sceneHash}/settings`, {
         method: 'GET',
         headers: {
             'Authorization': `Bearer ${user.token}`
@@ -105,8 +108,8 @@ const fetchSceneSettings = async (user: User, sceneId: string): Promise<Experien
     return await response.json() as ExperienceSettings;
 };
 
-const updateSceneSettings = async (user: User, sceneId: string, settings: ExperienceSettings) => {
-    const response = await fetch(`${user.apiServer}/splats/${sceneId}/settings`, {
+const updateSceneSettings = async (user: User, sceneHash: string, settings: ExperienceSettings) => {
+    const response = await fetch(`${user.apiServer}/splats/${sceneHash}/settings`, {
         method: 'PUT',
         body: JSON.stringify(settings),
         headers: {
@@ -123,6 +126,12 @@ const updateSceneSettings = async (user: User, sceneId: string, settings: Experi
 class PublishWriter implements Writer {
     write: (data: Uint8Array) => void;
     close: () => Promise<any>;
+
+    private cursor = 0;
+
+    get bytesWritten(): number {
+        return this.cursor;
+    }
 
     static async create(publishSettings: PublishSettings) {
         const { user } = publishSettings;
@@ -210,6 +219,7 @@ class PublishWriter implements Writer {
                     await upload();
                 }
             }
+            result.cursor += data.byteLength;
         };
 
         result.close = async () => {
@@ -236,6 +246,8 @@ class PublishWriter implements Writer {
 
             const completeJson = await completeResult.json();
 
+            const publishFormat = publishSettings.generateLods ? 'ssog' : 'sog';
+
             const doPublish = () => fetch(`${user.apiServer}/splats/publish`, {
                 method: 'POST',
                 body: JSON.stringify({
@@ -245,7 +257,7 @@ class PublishWriter implements Writer {
                     listed: publishSettings.listed,
                     settings: publishSettings.experienceSettings,
                     sourceFormat: 'ply',
-                    publishFormat: 'sog'
+                    publishFormat
                 }),
                 headers: {
                     'Authorization': `Bearer ${user.token}`,
@@ -253,13 +265,13 @@ class PublishWriter implements Writer {
                 }
             });
 
-            const doRepublish = () => fetch(`${user.apiServer}/splats/${publishSettings.overwriteId}/republish`, {
+            const doRepublish = () => fetch(`${user.apiServer}/splats/${publishSettings.overwriteHash}/republish`, {
                 method: 'PUT',
                 body: JSON.stringify({
                     s3Key: startJson.key,
                     settings: publishSettings.experienceSettings,
                     sourceFormat: 'ply',
-                    publishFormat: 'sog'
+                    publishFormat
                 }),
                 headers: {
                     'Authorization': `Bearer ${user.token}`,
@@ -267,7 +279,7 @@ class PublishWriter implements Writer {
                 }
             });
 
-            const publishResponse = await (publishSettings.overwriteId ? doRepublish() : doPublish());
+            const publishResponse = await (publishSettings.overwriteHash ? doRepublish() : doPublish());
 
             if (!publishResponse.ok) {
                 let msg;
@@ -303,7 +315,7 @@ const registerPublishEvents = (events: Events) => {
         try {
             events.fire('progressStart', 'Publishing...');
             events.fire('progressUpdate', {
-                text: localize('popup.publish.converting', { ellipsis: true }),
+                text: i18n.t('popup.publish.converting', { ellipsis: true }),
                 progress: 0
             });
 
@@ -312,7 +324,7 @@ const registerPublishEvents = (events: Events) => {
                 setTimeout(resolve, 10);
             });
 
-            const { overwriteId, overwriteHash, overrideAnimation } = publishSettings;
+            const { overwriteHash, overrideAnimation } = publishSettings;
             const overrideModel = publishSettings.overrideModel ?? true;
 
             const mergeAnimation = (target: ExperienceSettings, source: ExperienceSettings) => {
@@ -320,27 +332,27 @@ const registerPublishEvents = (events: Events) => {
                 target.startMode = source.startMode;
             };
 
-            if (overwriteId && !overrideModel) {
+            if (overwriteHash && !overrideModel) {
                 if (!overrideAnimation) {
                     throw new Error('No overrides selected');
                 }
 
                 // animation-only update: fetch existing settings, merge animation, PUT settings
-                const existingSettings = await fetchSceneSettings(publishSettings.user, overwriteId);
+                const existingSettings = await fetchSceneSettings(publishSettings.user, overwriteHash);
                 mergeAnimation(existingSettings, publishSettings.experienceSettings);
-                await updateSceneSettings(publishSettings.user, overwriteId, existingSettings);
+                await updateSceneSettings(publishSettings.user, overwriteHash, existingSettings);
 
                 await events.invoke('showPopup', {
                     type: 'info',
-                    header: localize('popup.publish.succeeded'),
-                    message: localize('popup.publish.message'),
+                    header: i18n.t('popup.publish.succeeded'),
+                    message: i18n.t('popup.publish.message'),
                     link: `${origin}/scene/${overwriteHash}/edit`
                 });
             } else {
                 // new scene or model override: upload PLY and publish/republish
-                if (overwriteId) {
+                if (overwriteHash) {
                     // republishing with model override: merge with existing settings
-                    const existingSettings = await fetchSceneSettings(publishSettings.user, overwriteId);
+                    const existingSettings = await fetchSceneSettings(publishSettings.user, overwriteHash);
                     if (overrideAnimation) {
                         mergeAnimation(existingSettings, publishSettings.experienceSettings);
                     }
@@ -349,7 +361,7 @@ const registerPublishEvents = (events: Events) => {
 
                 const progressFunc = (loaded: number, total: number) => {
                     events.fire('progressUpdate', {
-                        text: localize('popup.publish.uploading', { ellipsis: true }),
+                        text: i18n.t('popup.publish.uploading', { ellipsis: true }),
                         progress: 100 * loaded / total
                     });
                 };
@@ -370,14 +382,14 @@ const registerPublishEvents = (events: Events) => {
                 if (!response) {
                     await events.invoke('showPopup', {
                         type: 'error',
-                        header: localize('popup.publish.failed'),
-                        message: localize('popup.publish.please-try-again')
+                        header: i18n.t('popup.publish.failed'),
+                        message: i18n.t('popup.publish.please-try-again')
                     });
                 } else {
                     await events.invoke('showPopup', {
                         type: 'info',
-                        header: localize('popup.publish.succeeded'),
-                        message: localize('popup.publish.message'),
+                        header: i18n.t('popup.publish.succeeded'),
+                        message: i18n.t('popup.publish.message'),
                         link: `${origin}/scene/${response.hash}/edit`
                     });
                 }
@@ -385,7 +397,7 @@ const registerPublishEvents = (events: Events) => {
         } catch (error) {
             await events.invoke('showPopup', {
                 type: 'error',
-                header: localize('popup.publish.failed'),
+                header: i18n.t('popup.publish.failed'),
                 message: `'${error.message ?? error}'`
             });
         } finally {
