@@ -4,10 +4,11 @@ import { Mat4, path, Vec3 } from 'playcanvas';
 import { Events } from '../events';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
+import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
-import { localize, localizeInit } from './localization';
+import { i18n } from './localization';
 import { Menu } from './menu';
 import logo from './playcanvas-logo.png';
 import { Popup, ShowOptions } from './popup';
@@ -17,7 +18,6 @@ import { RightToolbar } from './right-toolbar';
 import { ScenePanel } from './scene-panel';
 import { ShortcutsPopup } from './shortcuts-popup';
 import { Spinner } from './spinner';
-import { StatusBar } from './status-bar';
 import { TimelinePanel } from './timeline-panel';
 import { Tooltips } from './tooltips';
 import { VideoSettingsDialog } from './video-settings-dialog';
@@ -97,10 +97,16 @@ class EditorUI {
             navigator.clipboard.writeText(fullprecision);
 
             const orig = cursorLabel.text;
-            cursorLabel.text = localize('cursor.copied');
+            cursorLabel.text = i18n.t('cursor.copied');
             setTimeout(() => {
                 cursorLabel.text = orig;
             }, 1000);
+        });
+
+        // the camera info overlay occupies the same corner and its target row
+        // shows the focal point live, so hide the cursor label while it's visible
+        events.on('camera.showInfo', (visible: boolean) => {
+            cursorLabel.hidden = visible;
         });
 
         // canvas container
@@ -125,10 +131,12 @@ class EditorUI {
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
         const menu = new Menu(events);
+        const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
 
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
         canvasContainer.append(cursorLabel);
+        canvasContainer.append(cameraInfoOverlay);
         canvasContainer.append(toolsContainer);
         canvasContainer.append(scenePanel);
         canvasContainer.append(renderSubPanel);
@@ -160,7 +168,7 @@ class EditorUI {
 
         editorContainer.append(mainContainer);
 
-        tooltips.register(cursorLabel, localize('cursor.click-to-copy'), 'top');
+        tooltips.register(cursorLabel, () => i18n.t('cursor.click-to-copy'), 'top');
 
         // message popup
         const popup = new Popup(tooltips);
