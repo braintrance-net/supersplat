@@ -829,6 +829,7 @@ class ArtisanClickSelection {
     constructor(events: Events, scene: Scene, parent: HTMLElement) {
         const canvas = scene.canvas;
         let busy = false;
+        let warmedUp = false;
         let abort: AbortController | null = null;
         let cancelPendingSeedReview: (() => void) | null = null;
         let selectionMode: ArtisanSelectionMode = 'set';
@@ -2189,6 +2190,29 @@ class ArtisanClickSelection {
             events.fire('artisan.selectionMode.changed', selectionMode);
             events.fire('artisanClick.selectionMode.changed', selectionMode);
             void warnIfSam3ProxyDown(events);
+            // Cold-start mitigation (best-effort). The EIG planner can starve on the very first
+            // click after a fresh page load — candidate poses collapse before the render/centre
+            // pipeline is warm. Pre-warm it once on activation (force a render, wait for splat
+            // centres + a render tick) so the first real click plans against warm state. Purely
+            // a warm-up: no selection side effects, so it cannot regress a healthy run. See the
+            // artisangs-recall-expansion memory — cold-start remains intermittently open.
+            if (!warmedUp) {
+                warmedUp = true;
+                void (async () => {
+                    try {
+                        const warmSplat = events.invoke('selection') as Splat | undefined;
+                        if (!warmSplat) {
+                            return;
+                        }
+                        scene.forceRender = true;
+                        await waitForSplatCentersReady(warmSplat).catch(() => undefined);
+                        scene.forceRender = true;
+                        await waitForRenderTick();
+                    } catch {
+                        // warm-up is strictly best-effort
+                    }
+                })();
+            }
         };
 
         this.deactivate = () => {
