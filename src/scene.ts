@@ -74,6 +74,7 @@ class Scene {
     app: PCApp;
     worldLayer: Layer;
     splatLayer: Layer;
+    boxVolumeLayer: Layer;
     gizmoLayer: Layer;
     sceneState = [new SceneState(), new SceneState()];
     elements: Element[] = [];
@@ -194,11 +195,14 @@ class Scene {
         });
         this.splatLayer.customCalculateSortValues = specialSort;
 
+        this.boxVolumeLayer = new Layer({ name: 'BoxVolume' });
+
         // gizmo layer
         this.gizmoLayer = new Layer({ name: 'Gizmo' });
 
         const layers = this.app.scene.layers;
         layers.push(this.splatLayer);
+        layers.push(this.boxVolumeLayer);
         layers.push(this.gizmoLayer);
 
         this.dataProcessor = new DataProcessor(this.app.graphicsDevice);

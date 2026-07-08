@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 import { Color, Mat4, path, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp } from './edit-ops';
+import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, type SelectionOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
 import { MappedReadFileSystem } from './io';
@@ -10,7 +10,10 @@ import { Pivot } from './pivot';
 import { Scene } from './scene';
 import { Splat } from './splat';
 import { serializePly } from './splat-serialize';
+import { State } from './splat-state';
 import { Transform } from './transform';
+
+const selectionPreviewMask = State.removePreview | State.intersectPreview;
 
 const removeExtension = (filename: string) => {
     return filename.substring(0, filename.length - path.getExtension(filename).length);
@@ -77,7 +80,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     [
         'camera.mode', 'camera.overlay', 'camera.splatSize', 'view.outlineSelection',
-        'view.centersUseGaussianColor', 'view.bands', 'camera.bound', 'selection.changed',
+        'view.centersUseGaussianColor', 'view.selectedSplatsOverlay', 'view.bands', 'camera.bound', 'selection.changed',
         'tool.coordSpace'
     ].forEach((eventName) => {
         events.on(eventName, () => {
@@ -307,10 +310,44 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         });
     });
 
-    const intersectCenters = async (splat: Splat, op: 'add'|'remove'|'set', options: any) => {
+    const intersectCenters = async (splat: Splat, op: 'add'|'remove'|'set', options: any, awaitEdit = false) => {
         const data = await scene.dataProcessor.intersect(options, splat);
         const filter = (i: number) => data[i] === 255;
-        events.fire('edit.add', new SelectOp(splat, op, filter));
+        const editOp = new SelectOp(splat, op, filter);
+        if (awaitEdit) {
+            await editHistory.add(editOp);
+        } else {
+            events.fire('edit.add', editOp);
+        }
+    };
+
+    const intersectCentersLive = async (splat: Splat, op: 'add'|'remove'|'set', options: any) => {
+        const data = await scene.dataProcessor.intersect(options, splat);
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        let changed = false;
+
+        for (let i = 0; i < state.length; ++i) {
+            const selectedByVolume = data[i] === 255;
+            const selected = state[i] === State.selected;
+            let nextState = state[i];
+
+            if (op === 'add' && state[i] === 0 && selectedByVolume) {
+                nextState = state[i] | State.selected;
+            } else if (op === 'remove' && selected && selectedByVolume) {
+                nextState = state[i] & (~State.selected);
+            } else if (op === 'set' && selected !== selectedByVolume) {
+                nextState = state[i] ^ State.selected;
+            }
+
+            if (nextState !== state[i]) {
+                state[i] = nextState;
+                changed = true;
+            }
+        }
+
+        if (changed) {
+            await splat.updateState(State.selected);
+        }
     };
 
     events.on('select.bySphere', async (op: 'add'|'remove'|'set', sphere: number[]) => {
@@ -329,11 +366,16 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     });
 
-    events.on('select.byOBB', async (
+    const selectByOBB = async (
         op: 'add'|'remove'|'set',
         obb: { center: number[], dimensions: number[], rotation: number[][] }
     ) => {
+        let splatCount = 0;
+        let before = 0;
+        let after = 0;
         for (const splat of selectedSplats()) {
+            splatCount++;
+            before += splat.numSelected;
             await intersectCenters(splat, op, {
                 obb: {
                     x: obb.center[0],
@@ -344,8 +386,53 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                     lenz: obb.dimensions[2],
                     rotation: obb.rotation
                 }
-            });
+            }, true);
+            after += splat.numSelected;
         }
+        const result = { splat_count: splatCount, selected_before: before, selected_after: after };
+        events.fire('select.byOBB.result', result);
+        return result;
+    };
+
+    events.function('select.byOBBNow', selectByOBB);
+
+    const selectByOBBLive = async (
+        op: 'add'|'remove'|'set',
+        obb: { center: number[], dimensions: number[], rotation: number[][] }
+    ) => {
+        let splatCount = 0;
+        let before = 0;
+        let after = 0;
+        for (const splat of selectedSplats()) {
+            splatCount++;
+            before += splat.numSelected;
+            await intersectCentersLive(splat, op, {
+                obb: {
+                    x: obb.center[0],
+                    y: obb.center[1],
+                    z: obb.center[2],
+                    lenx: obb.dimensions[0],
+                    leny: obb.dimensions[1],
+                    lenz: obb.dimensions[2],
+                    rotation: obb.rotation
+                }
+            });
+            after += splat.numSelected;
+        }
+        const result = { splat_count: splatCount, selected_before: before, selected_after: after, live: true };
+        events.fire('select.byOBB.result', result);
+        if (splatCount > 0) {
+            events.fire('view.setSelectedSplatsOverlay', true);
+        }
+        return result;
+    };
+
+    events.function('select.byOBBLiveNow', selectByOBBLive);
+
+    events.on('select.byOBB', (op: 'add'|'remove'|'set', obb: { center: number[], dimensions: number[], rotation: number[][] }) => {
+        selectByOBB(op, obb).catch((err) => {
+            console.warn('[Selection] select.byOBB failed', err);
+        });
     });
 
     events.function('select.rect', async (op: 'add'|'remove'|'set', rect: any) => {
@@ -376,77 +463,358 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     let maskTexture: Texture = null;
+    let selectionPreviewGeneration = 0;
+    const selectionPreviewOriginals = new Map<Splat, Uint8Array>();
+    const selectionPreviewHits = new Map<Splat, { op: SelectionOp; hitMask: Uint8Array }>();
 
-    events.function('select.byMask', async (op: 'add'|'remove'|'set', canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
-        const mode = events.invoke('camera.mode');
+    const summarizeState = (state: Uint8Array) => {
+        let numSelected = 0;
+        let numLocked = 0;
+        let numDeleted = 0;
 
-        for (const splat of selectedSplats()) {
-            if (mode === 'centers') {
-                // create mask texture
-                if (!maskTexture || maskTexture.width !== canvas.width || maskTexture.height !== canvas.height) {
-                    if (maskTexture) {
-                        maskTexture.destroy();
-                    }
-                    maskTexture = new Texture(scene.graphicsDevice);
-                }
-                maskTexture.setSource(canvas);
-
-                await intersectCenters(splat, op, {
-                    mask: maskTexture
-                });
-            } else if (mode === 'rings') {
-                const mask = context.getImageData(0, 0, canvas.width, canvas.height);
-
-                // calculate mask bound so we limit pixel operations
-                let mx0 = mask.width - 1;
-                let my0 = mask.height - 1;
-                let mx1 = 0;
-                let my1 = 0;
-                for (let y = 0; y < mask.height; ++y) {
-                    for (let x = 0; x < mask.width; ++x) {
-                        if (mask.data[(y * mask.width + x) * 4 + 3] === 255) {
-                            mx0 = Math.min(mx0, x);
-                            my0 = Math.min(my0, y);
-                            mx1 = Math.max(mx1, x);
-                            my1 = Math.max(my1, y);
-                        }
-                    }
-                }
-
-                // Convert mask bounds to normalized coordinates
-                const nx0 = mx0 / mask.width;
-                const ny0 = my0 / mask.height;
-                const nx1 = (mx1 + 1) / mask.width;
-                const ny1 = (my1 + 1) / mask.height;
-                const nw = nx1 - nx0;
-                const nh = ny1 - ny0;
-
-                scene.camera.pickPrep(splat, op);
-                const pick = await scene.camera.pickRect(nx0, ny0, nw, nh);
-
-                // Calculate actual pixel dimensions for iteration
-                const { width, height } = scene.targetSize;
-                const pw = Math.max(1, Math.floor(nw * width));
-                const ph = Math.max(1, Math.floor(nh * height));
-
-                const selected = new Set<number>();
-                for (let y = 0; y < ph; ++y) {
-                    for (let x = 0; x < pw; ++x) {
-                        const mx = Math.floor((nx0 + x / width) * mask.width);
-                        const my = Math.floor((ny0 + y / height) * mask.height);
-                        if (mask.data[(my * mask.width + mx) * 4] === 255) {
-                            selected.add(pick[(ph - y) * pw + x]);
-                        }
-                    }
-                }
-
-                const filter = (i: number) => {
-                    return selected.has(i);
-                };
-
-                events.fire('edit.add', new SelectOp(splat, op, filter));
+        for (let i = 0; i < state.length; ++i) {
+            const s = state[i];
+            if (s & State.deleted) {
+                numDeleted++;
+            } else if (s & State.locked) {
+                numLocked++;
+            } else if (s & State.selected) {
+                numSelected++;
             }
         }
+
+        return {
+            numSplats: state.length - numDeleted,
+            numLocked,
+            numSelected,
+            numDeleted
+        };
+    };
+
+    const applySplatStateFast = (splat: Splat, nextState: Uint8Array) => {
+        const state = splat.splatData.getProp('state') as Uint8Array;
+        state.set(nextState);
+
+        const textureData = splat.stateTexture.lock();
+        textureData.set(state);
+        splat.stateTexture.unlock();
+
+        const summary = summarizeState(state);
+        splat.numSplats = summary.numSplats;
+        splat.numLocked = summary.numLocked;
+        splat.numSelected = summary.numSelected;
+        splat.numDeleted = summary.numDeleted;
+
+        scene.forceRender = true;
+        scene.events.fire('splat.stateChanged', splat);
+    };
+
+    const refreshSelectionBoundsLater = (splat: Splat) => {
+        splat.updateLocalBounds().then(() => {
+            scene.forceRender = true;
+            scene.events.fire('splat.stateChanged', splat);
+        }).catch((err) => {
+            console.warn('[Selection] async bounds refresh failed', err);
+        });
+    };
+
+    const createFastStateEditOp = (splat: Splat, beforeState: Uint8Array, afterState: Uint8Array) => {
+        return {
+            name: 'selectOp',
+            splat,
+            do() {
+                applySplatStateFast(splat, afterState);
+                refreshSelectionBoundsLater(splat);
+            },
+            undo() {
+                applySplatStateFast(splat, beforeState);
+                refreshSelectionBoundsLater(splat);
+            },
+            destroy() {
+                this.splat = null;
+            }
+        };
+    };
+
+    const clearSelectionPreview = () => {
+        selectionPreviewGeneration++;
+        if (selectionPreviewOriginals.size === 0) {
+            return false;
+        }
+
+        for (const [splat, originalState] of selectionPreviewOriginals) {
+            applySplatStateFast(splat, originalState);
+        }
+        selectionPreviewOriginals.clear();
+        selectionPreviewHits.clear();
+        return true;
+    };
+
+    events.function('select.clearMaskPreview', () => {
+        return clearSelectionPreview();
+    });
+
+    const collectMaskHits = async (
+        splat: Splat,
+        op: SelectionOp,
+        canvas: HTMLCanvasElement,
+        context: CanvasRenderingContext2D
+    ): Promise<(i: number) => boolean> => {
+        const mode = events.invoke('camera.mode');
+
+        if (mode === 'centers') {
+            // create mask texture
+            if (!maskTexture || maskTexture.width !== canvas.width || maskTexture.height !== canvas.height) {
+                if (maskTexture) {
+                    maskTexture.destroy();
+                }
+                maskTexture = new Texture(scene.graphicsDevice);
+            }
+            maskTexture.setSource(canvas);
+
+            const data = await scene.dataProcessor.intersect(
+                {
+                    mask: maskTexture
+                },
+                splat
+            );
+            return (i: number) => data[i] === 255;
+        }
+
+        if (mode === 'rings') {
+            const mask = context.getImageData(0, 0, canvas.width, canvas.height);
+
+            // calculate mask bound so we limit pixel operations
+            let mx0 = mask.width - 1;
+            let my0 = mask.height - 1;
+            let mx1 = 0;
+            let my1 = 0;
+            let sawMaskPixel = false;
+            for (let y = 0; y < mask.height; ++y) {
+                for (let x = 0; x < mask.width; ++x) {
+                    if (mask.data[(y * mask.width + x) * 4 + 3] > 0) {
+                        sawMaskPixel = true;
+                        mx0 = Math.min(mx0, x);
+                        my0 = Math.min(my0, y);
+                        mx1 = Math.max(mx1, x);
+                        my1 = Math.max(my1, y);
+                    }
+                }
+            }
+
+            if (!sawMaskPixel) {
+                return () => false;
+            }
+
+            // Convert mask bounds to normalized coordinates
+            const nx0 = mx0 / mask.width;
+            const ny0 = my0 / mask.height;
+            const nx1 = (mx1 + 1) / mask.width;
+            const ny1 = (my1 + 1) / mask.height;
+            const nw = nx1 - nx0;
+            const nh = ny1 - ny0;
+
+            scene.camera.pickPrep(splat, op === 'intersect' ? 'remove' : op);
+            const pick = await scene.camera.pickRect(nx0, ny0, nw, nh);
+
+            // Calculate actual pixel dimensions for iteration
+            const { width, height } = scene.targetSize;
+            const pw = Math.max(1, Math.floor(nw * width));
+            const ph = Math.max(1, Math.floor(nh * height));
+
+            const selected = new Set<number>();
+            for (let y = 0; y < ph; ++y) {
+                for (let x = 0; x < pw; ++x) {
+                    const mx = Math.floor((nx0 + x / width) * mask.width);
+                    const my = Math.floor((ny0 + y / height) * mask.height);
+                    const maskIndex = (my * mask.width + mx) * 4;
+                    if (mask.data[maskIndex + 3] > 0) {
+                        const pickId = pick[(ph - 1 - y) * pw + x];
+                        if (pickId !== undefined && pickId !== 0xffffffff) {
+                            selected.add(pickId);
+                        }
+                    }
+                }
+            }
+
+            return (i: number) => selected.has(i);
+        }
+
+        return () => false;
+    };
+
+    const applySelectionOpToPreview = (
+        baseState: Uint8Array,
+        hit: (i: number) => boolean,
+        op: SelectionOp
+    ) => {
+        const previewState = new Uint8Array(baseState);
+
+        for (let i = 0; i < previewState.length; ++i) {
+            const selectedByBrush = hit(i);
+            const state = baseState[i] & (~selectionPreviewMask);
+            const selected = (state & State.selected) !== 0;
+            const editable = (state & (State.locked | State.deleted)) === 0;
+
+            if (op === 'remove' && editable && selected && selectedByBrush) {
+                previewState[i] = state | State.removePreview;
+            } else if (op === 'intersect' && editable && selected && selectedByBrush) {
+                previewState[i] = state | State.intersectPreview;
+            } else if (
+                (op === 'add' && editable && !selected && selectedByBrush) ||
+                (op === 'set' && editable && selected !== selectedByBrush)
+            ) {
+                previewState[i] = state ^ State.selected;
+            } else {
+                previewState[i] = state;
+            }
+        }
+
+        return previewState;
+    };
+
+    const applySelectionOpToState = (
+        baseState: Uint8Array,
+        hitMask: Uint8Array,
+        op: SelectionOp
+    ) => {
+        const nextState = new Uint8Array(baseState);
+
+        for (let i = 0; i < nextState.length; ++i) {
+            const selectedByBrush = hitMask[i] === 1;
+            const state = baseState[i] & (~selectionPreviewMask);
+            const selected = (state & State.selected) !== 0;
+            const editable = (state & (State.locked | State.deleted)) === 0;
+
+            nextState[i] = state;
+            if (
+                (op === 'add' && editable && !selected && selectedByBrush) ||
+                (op === 'set' && editable && selected !== selectedByBrush)
+            ) {
+                nextState[i] = state ^ State.selected;
+            } else if (
+                (op === 'remove' && editable && selected && selectedByBrush) ||
+                (op === 'intersect' && editable && selected && !selectedByBrush)
+            ) {
+                nextState[i] = state & (~State.selected);
+            }
+        }
+
+        return nextState;
+    };
+
+    events.function('select.previewByMask', async (op: SelectionOp, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
+        const generation = selectionPreviewGeneration;
+        const updates: { splat: Splat; state: Uint8Array }[] = [];
+
+        for (const splat of selectedSplats()) {
+            let originalState = selectionPreviewOriginals.get(splat);
+            if (!originalState) {
+                originalState = new Uint8Array(splat.splatData.getProp('state') as Uint8Array);
+                selectionPreviewOriginals.set(splat, originalState);
+            }
+
+            const hit = await collectMaskHits(splat, op, canvas, context);
+            if (generation !== selectionPreviewGeneration) {
+                return { applied: false, stale: true };
+            }
+            const hitMask = new Uint8Array(originalState.length);
+
+            updates.push({
+                splat,
+                state: applySelectionOpToPreview(originalState, (index) => {
+                    const selectedByBrush = hit(index);
+                    if (selectedByBrush) {
+                        hitMask[index] = 1;
+                    }
+                    return selectedByBrush;
+                }, op)
+            });
+            selectionPreviewHits.set(splat, { op, hitMask });
+        }
+
+        for (const update of updates) {
+            applySplatStateFast(update.splat, update.state);
+        }
+        if (updates.length > 0) {
+            events.fire('view.setSelectedSplatsOverlay', true);
+        }
+
+        return {
+            applied: updates.length > 0,
+            selected_after: updates.reduce((sum, update) => sum + summarizeState(update.state).numSelected, 0)
+        };
+    });
+
+    events.function('select.commitMaskPreview', async (op: SelectionOp) => {
+        if (selectionPreviewOriginals.size === 0) {
+            return { applied: false, preview: false };
+        }
+
+        const updates: { splat: Splat; originalState: Uint8Array; hitMask: Uint8Array }[] = [];
+        for (const splat of selectedSplats()) {
+            const originalState = selectionPreviewOriginals.get(splat);
+            const preview = selectionPreviewHits.get(splat);
+            if (!originalState || !preview || preview.op !== op) {
+                return { applied: false, preview: false };
+            }
+            updates.push({ splat, originalState, hitMask: preview.hitMask });
+        }
+
+        if (updates.length === 0) {
+            return { applied: false, preview: false };
+        }
+
+        selectionPreviewGeneration++;
+        selectionPreviewOriginals.clear();
+        selectionPreviewHits.clear();
+
+        let selectedAfter = 0;
+        for (const { splat, originalState, hitMask } of updates) {
+            const nextState = applySelectionOpToState(originalState, hitMask, op);
+            applySplatStateFast(splat, nextState);
+            refreshSelectionBoundsLater(splat);
+            await editHistory.add(createFastStateEditOp(splat, originalState, nextState), true);
+            selectedAfter += splat.numSelected;
+        }
+
+        return {
+            applied: true,
+            preview: true,
+            splat_count: updates.length,
+            selected_after: selectedAfter
+        };
+    });
+
+    events.function('select.byMask', async (op: SelectionOp, canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
+        clearSelectionPreview();
+
+        let splatCount = 0;
+        let selectedBefore = 0;
+        let selectedAfter = 0;
+        let changedCount = 0;
+        for (const splat of selectedSplats()) {
+            splatCount++;
+            selectedBefore += splat.numSelected;
+            const hit = await collectMaskHits(splat, op, canvas, context);
+            const selectOp = new SelectOp(splat, op, hit);
+            const changed = selectOp.indices.length;
+            changedCount += changed;
+            if (changed > 0) {
+                await editHistory.add(selectOp);
+            } else {
+                selectOp.destroy();
+            }
+            selectedAfter += splat.numSelected;
+        }
+
+        return {
+            applied: changedCount > 0,
+            splat_count: splatCount,
+            changed_count: changedCount,
+            selected_before: selectedBefore,
+            selected_after: selectedAfter
+        };
     });
 
     events.function('select.point', async (op: 'add'|'remove'|'set', point: { x: number, y: number }) => {
@@ -697,6 +1065,51 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         setCameraOverlay(!events.invoke('camera.overlay'));
     });
 
+    // outline selection
+
+    let outlineSelection = false;
+    let selectedSplatsOverlay = false;
+
+    const setOutlineSelection = (value: boolean) => {
+        if (value && selectedSplatsOverlay) {
+            selectedSplatsOverlay = false;
+            events.fire('view.selectedSplatsOverlay', selectedSplatsOverlay);
+        }
+        if (value !== outlineSelection) {
+            outlineSelection = value;
+            events.fire('view.outlineSelection', outlineSelection);
+        }
+    };
+
+    events.function('view.outlineSelection', () => {
+        return outlineSelection;
+    });
+
+    events.on('view.setOutlineSelection', (value: boolean) => {
+        setOutlineSelection(value);
+    });
+
+    // Selected splats debug highlighting. Boxer/Brush can force this on after
+    // selection so selected Gaussians are tinted with their real footprint.
+    const setSelectedSplatsOverlay = (enabled: boolean) => {
+        if (enabled && outlineSelection) {
+            outlineSelection = false;
+            events.fire('view.outlineSelection', outlineSelection);
+        }
+        if (enabled !== selectedSplatsOverlay) {
+            selectedSplatsOverlay = enabled;
+            events.fire('view.selectedSplatsOverlay', selectedSplatsOverlay);
+        }
+    };
+
+    events.function('view.selectedSplatsOverlay', () => {
+        return selectedSplatsOverlay;
+    });
+
+    events.on('view.setSelectedSplatsOverlay', (value: boolean) => {
+        setSelectedSplatsOverlay(value);
+    });
+
     // splat size
 
     let splatSize = 2;
@@ -731,25 +1144,6 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('camera.setFlySpeed', (value: number) => {
         setFlySpeed(value);
-    });
-
-    // outline selection
-
-    let outlineSelection = true;
-
-    const setOutlineSelection = (value: boolean) => {
-        if (value !== outlineSelection) {
-            outlineSelection = value;
-            events.fire('view.outlineSelection', outlineSelection);
-        }
-    };
-
-    events.function('view.outlineSelection', () => {
-        return outlineSelection;
-    });
-
-    events.on('view.setOutlineSelection', (value: boolean) => {
-        setOutlineSelection(value);
     });
 
     // view spherical harmonic bands

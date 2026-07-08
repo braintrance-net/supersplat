@@ -16,6 +16,41 @@ type ExportType = 'ply' | 'splat' | 'sog' | 'viewer';
 
 type FileType = 'ply' | 'compressedPly' | 'splat' | 'sog' | 'htmlViewer' | 'packageViewer';
 
+const URL_IMPORT_RETRY_DELAYS_MS = [750, 1500, 3000, 5000, 8000];
+
+const delay = (ms: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+});
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+const shouldRetryUrlImport = (error: unknown) => /network|fetch|failed to load|load failed|err_/i.test(errorMessage(error));
+
+const fetchUrlImportBlob = async (url: string): Promise<Blob> => {
+    let lastError: unknown = new Error('URL import failed');
+
+    for (let attempt = 0; attempt <= URL_IMPORT_RETRY_DELAYS_MS.length; attempt++) {
+        try {
+            const response = await fetch(url, { cache: 'force-cache' });
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status} ${response.statusText}`);
+            }
+            return await response.blob();
+        } catch (error) {
+            lastError = error;
+            if (attempt >= URL_IMPORT_RETRY_DELAYS_MS.length || !shouldRetryUrlImport(error)) {
+                break;
+            }
+
+            const delayMs = URL_IMPORT_RETRY_DELAYS_MS[attempt];
+            console.warn(`[Import] retrying URL import (${attempt + 2}/${URL_IMPORT_RETRY_DELAYS_MS.length + 1}) after ${errorMessage(error)}`);
+            await delay(delayMs);
+        }
+    }
+
+    throw lastError;
+};
+
 interface SceneExportOptions {
     filename: string;
     splatIdx: 'all' | number;
@@ -278,17 +313,20 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (f.contents) fileSystem.addFile(f.filename, f.contents);
             });
 
-            // For URL-only single file, use full URL as filename
-            const filename = (files.length === 1 && !mainFile.contents && mainFile.url) ?
-                mainFile.url :
-                mainFile.filename;
+            const urlOnlySingleFile = files.length === 1 && !mainFile.contents && mainFile.url;
+            if (urlOnlySingleFile) {
+                const importUrl = new URL(mainFile.url, window.location.href).href;
+                fileSystem.addFile(mainFile.filename, await fetchUrlImportBlob(importUrl));
+            }
+
+            const filename = mainFile.filename;
 
             const model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
             await scene.add(model);
             return model;
         } catch (error) {
             const displayName = files[0]?.filename ?? 'unknown';
-            await showLoadError(error.message ?? error, displayName);
+            await showLoadError(errorMessage(error), displayName);
         }
     };
 

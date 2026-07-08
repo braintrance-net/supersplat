@@ -5,4 +5,11 @@ dist
 .vscode
 .cursor
 .env
+.env.local
 .vercel
+.artisangs
+.venv-artisangs
+__pycache__
+test-fixtures/artisangs/reviews/*-review-full.json
+
+.secrets-handoff/

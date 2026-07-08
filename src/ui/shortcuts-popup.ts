@@ -68,25 +68,25 @@ const popupConfig: Record<string, CategoryConfig> = {
     tools: {
         localeKey: 'popup.shortcuts.tools',
         shortcuts: [
-            { id: 'tool.walk', localeKey: 'Walk Mode' },
+            { id: 'tool.deactivate', localeKey: 'No Tool / Normal Movement' },
             { id: 'tool.boxerSelection', localeKey: 'Boxer AI Selection' },
             { id: 'tool.sam3Selection', localeKey: 'SAM3 AI Selection' },
-            { id: 'tool.move', localeKey: 'popup.shortcuts.move' },
-            { id: 'tool.rotate', localeKey: 'popup.shortcuts.rotate' },
-            { id: 'tool.scale', localeKey: 'popup.shortcuts.scale' },
-            { id: 'tool.rectSelection', localeKey: 'popup.shortcuts.rect-selection' },
-            { id: 'tool.brushSelection', localeKey: 'popup.shortcuts.brush-selection' },
-            { id: 'tool.measure', localeKey: 'Measure' },
+            { id: 'tool.brushSelection.boxer', localeKey: 'Brush Boxer' },
+            { id: 'tool.brushSelection.sam', localeKey: 'Brush SAM' },
+            { id: 'tool.brushSelection.raw', localeKey: '2D Brush' },
+            { id: 'tool.boxerDetectAll', localeKey: 'Boxer Detect All' },
+            { id: 'tool.boxSelection', localeKey: '4 Click Box' },
+            { id: 'tool.boxVolume', localeKey: 'Box Volume' },
             { id: 'tool.place', localeKey: 'Click to Place' },
             { id: 'tool.lassoSelection', localeKey: 'popup.shortcuts.lasso-selection' },
             { id: 'tool.polygonSelection', localeKey: 'popup.shortcuts.polygon-selection' },
             { id: 'tool.floodSelection', localeKey: 'popup.shortcuts.flood-selection' },
             { id: 'tool.eyedropperSelection', localeKey: 'popup.shortcuts.eyedropper-selection' },
-            { id: 'tool.deactivate', localeKey: 'popup.shortcuts.deactivate-tool' },
             { id: 'tool.toggleCoordSpace', localeKey: 'popup.shortcuts.toggle-gizmo-coordinate-space' }
         ],
         hints: [
             { displayKey: '[ ]', localeKey: 'popup.shortcuts.brush-size' },
+            { displayKey: 'N / A / R / I', localeKey: 'Raw brush: New / Add / Remove / Intersect' },
             { displayKey: 'Space (hold)', localeKey: 'Hold to talk' }
         ]
     },

@@ -75,11 +75,11 @@ npm run develop
 When `DEV_TOOLS=true`, a `Help -> Dev: Log Camera` action appears. It logs the current camera state to the browser console and copies the JSON payload to the clipboard.
 
 The Boxer tool reads its backend from `BOXER_BACKEND_URL` or the runtime `supersplat:api-config` message. Board-demo web passes its guarded `/api/boxer` proxy at runtime for production. Other deployments fall back to `https://boxer.4dream.app`.
-The SAM tool reads its backend from `SAM3_BACKEND_URL`. If unset, it falls back to `https://sam3.4dream.app`.
+The SAM tool reads its backend from `SAM3_BACKEND_URL`. If unset, it falls back to the SAM3 EC2 service at `http://3.19.208.185:8000`.
 
 Current hosted API docs:
 - Boxer: `https://boxer.4dream.app/docs`
-- SAM3: `https://sam3.4dream.app/docs`
+- SAM3: `http://3.19.208.185:8000/docs`
 
 ## Localizing the SuperSplat Editor
 

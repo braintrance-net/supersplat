@@ -2,14 +2,14 @@ import { Color, Mat4 } from 'playcanvas';
 
 import { Pivot } from './pivot';
 import { Scene } from './scene';
-import { Splat } from './splat';
+import { Splat, type SplatUpdateStateOptions } from './splat';
 import { State } from './splat-state';
 import { Transform } from './transform';
 
 interface EditOp {
     name: string;
-    do(): void | Promise<void>;
-    undo(): void | Promise<void>;
+    do(options?: SplatUpdateStateOptions): void | Promise<void>;
+    undo(options?: SplatUpdateStateOptions): void | Promise<void>;
     destroy?(): void;
 }
 
@@ -34,6 +34,7 @@ const buildIndex = (total: number, pred: (i: number) => boolean) => {
 type filterFunc = (state: number, index: number) => boolean;
 type doFunc = (state: number) => number;
 type undoFunc = (state: number) => number;
+const selectionPreviewMask = State.removePreview | State.intersectPreview;
 
 class StateOp {
     splat: Splat;
@@ -54,24 +55,24 @@ class StateOp {
         this.updateFlags = updateFlags;
     }
 
-    async do() {
+    async do(options: SplatUpdateStateOptions = {}) {
         const splatData = this.splat.splatData;
         const state = splatData.getProp('state') as Uint8Array;
         for (let i = 0; i < this.indices.length; ++i) {
             const idx = this.indices[i];
             state[idx] = this.doIt(state[idx]);
         }
-        await this.splat.updateState(this.updateFlags);
+        await this.splat.updateState(this.updateFlags, options);
     }
 
-    async undo() {
+    async undo(options: SplatUpdateStateOptions = {}) {
         const splatData = this.splat.splatData;
         const state = splatData.getProp('state') as Uint8Array;
         for (let i = 0; i < this.indices.length; ++i) {
             const idx = this.indices[i];
             state[idx] = this.undoIt(state[idx]);
         }
-        await this.splat.updateState(this.updateFlags);
+        await this.splat.updateState(this.updateFlags, options);
     }
 
     destroy() {
@@ -116,26 +117,33 @@ class SelectInvertOp extends StateOp {
     }
 }
 
+type SelectionOp = 'add' | 'remove' | 'set' | 'intersect';
+
 class SelectOp extends StateOp {
     name = 'selectOp';
 
-    constructor(splat: Splat, op: 'add'|'remove'|'set', filter: (i: number) => boolean) {
+    constructor(splat: Splat, op: SelectionOp, filter: (i: number) => boolean) {
+        const selected = (state: number) => (state & State.selected) !== 0;
+        const editable = (state: number) => (state & (State.locked | State.deleted)) === 0;
         const filterFunc = {
-            add: (state: number, index: number) => (state === 0) && filter(index),
-            remove: (state: number, index: number) => (state === State.selected) && filter(index),
-            set: (state: number, index: number) => (state === State.selected) !== filter(index)
+            add: (state: number, index: number) => editable(state) && !selected(state) && filter(index),
+            remove: (state: number, index: number) => editable(state) && selected(state) && filter(index),
+            set: (state: number, index: number) => editable(state) && selected(state) !== filter(index),
+            intersect: (state: number, index: number) => editable(state) && selected(state) && !filter(index)
         };
 
         const doIt = {
-            add: (state: number) => state | State.selected,
-            remove: (state: number) => state & (~State.selected),
-            set: (state: number) => state ^ State.selected
+            add: (state: number) => (state | State.selected) & (~selectionPreviewMask),
+            remove: (state: number) => state & (~(State.selected | selectionPreviewMask)),
+            set: (state: number) => (state ^ State.selected) & (~selectionPreviewMask),
+            intersect: (state: number) => state & (~(State.selected | selectionPreviewMask))
         };
 
         const undoIt = {
-            add: (state: number) => state & (~State.selected),
-            remove: (state: number) => state | State.selected,
-            set: (state: number) => state ^ State.selected
+            add: (state: number) => state & (~(State.selected | selectionPreviewMask)),
+            remove: (state: number) => (state | State.selected) & (~selectionPreviewMask),
+            set: (state: number) => (state ^ State.selected) & (~selectionPreviewMask),
+            intersect: (state: number) => (state | State.selected) & (~selectionPreviewMask)
         };
 
         super(splat, filterFunc[op], doIt[op], undoIt[op]);
@@ -434,6 +442,7 @@ class SplatRenameOp {
 
 export {
     EditOp,
+    type SelectionOp,
     SelectAllOp,
     SelectNoneOp,
     SelectInvertOp,

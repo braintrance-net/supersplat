@@ -13,6 +13,11 @@ class Events extends EventHandler {
         this.functions.set(name, fn);
     }
 
+    // replace or declare an editor function
+    replaceFunction(name: string, fn: FunctionCallback) {
+        this.functions.set(name, fn);
+    }
+
     // invoke an editor function
     invoke(name: string, ...args: any[]) {
         const fn = this.functions.get(name);

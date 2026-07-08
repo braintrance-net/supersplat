@@ -1,11 +1,11 @@
 import { Button, Container } from '@playcanvas/pcui';
 
 import { Events } from '../events';
+import { ShortcutManager } from '../shortcut-manager';
+import { localize } from './localization';
 import redoSvg from './svg/redo.svg';
 import undoSvg from './svg/undo.svg';
 import { Tooltips } from './tooltips';
-import { ShortcutManager } from '../shortcut-manager';
-import { localize } from './localization';
 
 const createSvg = (svgString: string) => {
     const decodedStr = decodeURIComponent(svgString.substring('data:image/svg+xml,'.length));

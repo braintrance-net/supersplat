@@ -2,14 +2,21 @@ const vertexShader = /* glsl*/`
 #include "gsplatCommonVS"
 
 uniform sampler2D splatState;
+uniform sampler2D artisanConfidence;
 
 uniform vec4 selectedClr;
 uniform vec4 lockedClr;
+uniform vec4 selectionRemovePreviewClr;
+uniform vec4 selectionIntersectPreviewClr;
+uniform float artisanConfidenceActive;
+uniform float artisanConfidenceThreshold;
 
 uniform vec3 clrOffset;
 uniform vec4 clrScale;
 
 varying mediump vec4 texCoord_flags;            // xy: texCoord, z: selected, w: locked
+varying mediump float removePreview;
+varying mediump float intersectPreview;
 varying mediump vec4 color;
 
 #if PICK_PASS
@@ -32,6 +39,25 @@ vec3 applySaturation(vec3 color) {
     return grey + (color - grey) * saturation;
 }
 
+// Absolute confidence color scale (mirrors confidenceRampColor in artisan-gs-local.ts):
+// fixed 5-stop gradient over posterior mean 0..1, quantized into 0.05 buckets, so a color
+// always means the same confidence range regardless of the selection threshold.
+vec3 artisanConfidenceColor(float confidence, float threshold) {
+    float bucket = 0.05;
+    float c = clamp(confidence, 0.0, 1.0);
+    float bucketed = min(1.0, (floor(c / bucket) + 0.5) * bucket);
+    vec3 s0 = vec3(0.10, 0.20, 1.00);   // 0.00 deep blue
+    vec3 s1 = vec3(0.00, 0.75, 0.95);   // 0.25 cyan
+    vec3 s2 = vec3(1.00, 0.90, 0.20);   // 0.50 yellow
+    vec3 s3 = vec3(1.00, 0.50, 0.10);   // 0.75 orange
+    vec3 s4 = vec3(1.00, 0.10, 0.80);   // 1.00 pink/magenta
+    float scaled = bucketed * 4.0;
+    if (scaled < 1.0) return mix(s0, s1, scaled);
+    if (scaled < 2.0) return mix(s1, s2, scaled - 1.0);
+    if (scaled < 3.0) return mix(s2, s3, scaled - 2.0);
+    return mix(s3, s4, scaled - 3.0);
+}
+
 void main(void) {
     // read gaussian details
     SplatSource source;
@@ -41,31 +67,34 @@ void main(void) {
     }
 
     // get per-gaussian edit state, discard if deleted
-    uint vertexState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5) & 7u;
+    uint vertexState = uint(texelFetch(splatState, splat.uv, 0).r * 255.0 + 0.5);
+    uint editState = vertexState & 7u;
+    bool isRemovePreview = (vertexState & 8u) != 0u;
+    bool isIntersectPreview = (vertexState & 16u) != 0u;
 
     #if PICK_PASS
         if (pickOp == 0u) {
             // add: skip deleted, locked and selected splats
-            if (vertexState != 0u) {
+            if (editState != 0u) {
                 gl_Position = discardVec;
                 return;
             }
         } else if (pickOp == 1u) {
             // remove: skip deleted, locked and unselected splats
-            if (vertexState != 1u) {
+            if (editState != 1u) {
                 gl_Position = discardVec;
                 return;
             }
         } else {
             // set: skip deleted and locked splats
-            if ((vertexState & 6u) != 0u) {
+            if ((editState & 6u) != 0u) {
                 gl_Position = discardVec;
                 return;
             }
         }
     #else
         // skip deleted splats
-        if ((vertexState & 4u) != 0u) {
+        if ((editState & 4u) != 0u) {
             gl_Position = discardVec;
             return;
         }
@@ -103,9 +132,11 @@ void main(void) {
     // store texture coord and locked state
     texCoord_flags = vec4(
         corner.uv,
-        (vertexState & 1u) != 0u ? 1.0 : 0.0,       // selected
-        (vertexState & 2u) != 0u ? 1.0 : 0.0        // locked
+        (editState & 1u) != 0u ? 1.0 : 0.0,         // selected
+        (editState & 2u) != 0u ? 1.0 : 0.0          // locked
     );
+    removePreview = isRemovePreview ? 1.0 : 0.0;
+    intersectPreview = isIntersectPreview ? 1.0 : 0.0;
 
     #if PICK_PASS
         if (pickMode == 1) {
@@ -151,12 +182,38 @@ void main(void) {
         color = vec4(prepareOutputFromGamma(max(color.xyz, 0.0)), color.w);
 
         // apply locked/selected colors
-        if ((vertexState & 2u) != 0u) {
+        if ((editState & 2u) != 0u) {
             // locked
             color *= lockedClr;
-        } else if ((vertexState & 1u) != 0u) {
+        } else if ((editState & 1u) != 0u && artisanConfidenceActive <= 0.5) {
             // selected: subtle brighten so splats pop under the glass bubble
             color.xyz *= 1.1;
+        }
+
+        if (artisanConfidenceActive > 0.5) {
+            // Artisan inspect flow. Three visual states, keyed off the REAL selection so
+            // what you see is exactly what will move:
+            //   selected            -> SOLID GREEN
+            //   selectable, unpicked -> posterior heatmap color
+            //   unselectable (conf 0)-> original color, untouched
+            bool artisanSelected = (editState & 1u) != 0u;
+            float confidence = texelFetch(artisanConfidence, splat.uv, 0).r;
+            if (artisanSelected) {
+                // Retain a little original luminance so surface form stays legible
+                // through the green, but keep it unmistakably solid green.
+                float lum = dot(color.xyz, vec3(0.299, 0.587, 0.114));
+                vec3 solidGreen = vec3(0.10, 0.95, 0.25) * (0.55 + 0.45 * lum);
+                color.xyz = mix(color.xyz, solidGreen, 0.92);
+                color.a = max(color.a, 0.97);
+            } else if (confidence > 0.0) {
+                vec3 confidenceClr = artisanConfidenceColor(confidence, artisanConfidenceThreshold);
+                // Continuous emphasis so the heatmap reads the posterior mean directly
+                // instead of a hard selected/unselected split at the threshold.
+                float emphasis = smoothstep(0.0, 1.0, confidence);
+                float blend = mix(0.72, 0.98, emphasis);
+                color.xyz = mix(color.xyz, confidenceClr, blend);
+                color.a = max(color.a, mix(0.4, 0.95, emphasis));
+            }
         }
     #endif
 }
@@ -164,9 +221,15 @@ void main(void) {
 
 const fragmentShader = /* glsl*/`
 varying mediump vec4 texCoord_flags;
+varying mediump float removePreview;
+varying mediump float intersectPreview;
 varying mediump vec4 color;
 
+uniform vec4 selectedClr;
+uniform vec4 selectionRemovePreviewClr;
+uniform vec4 selectionIntersectPreviewClr;
 uniform bool outlineMode;
+uniform float selectedSplatOverlay;
 uniform float ringSize;
 
 #if PICK_PASS
@@ -215,6 +278,32 @@ void main(void) {
         }
 
         bool selected = texCoord_flags.z != 0.0 && texCoord_flags.w == 0.0;
+        bool removePreviewed = removePreview > 0.5 && selected;
+        bool intersectPreviewed = intersectPreview > 0.5 && selected;
+
+        if (removePreviewed) {
+            mediump float overlayAlpha = max(alpha, norm * max(selectionRemovePreviewClr.a, 0.85));
+            vec3 overlayColor = mix(color.xyz, selectionRemovePreviewClr.xyz, 0.86);
+            pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
+            pcFragColor1 = vec4(selectionRemovePreviewClr.xyz * overlayAlpha, overlayAlpha);
+            return;
+        }
+
+        if (intersectPreviewed) {
+            mediump float overlayAlpha = max(alpha, norm * max(selectionIntersectPreviewClr.a, 0.85));
+            vec3 overlayColor = mix(color.xyz, selectionIntersectPreviewClr.xyz, 0.84);
+            pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
+            pcFragColor1 = vec4(selectionIntersectPreviewClr.xyz * overlayAlpha, overlayAlpha);
+            return;
+        }
+
+        if (selectedSplatOverlay > 0.5 && selected) {
+            mediump float overlayAlpha = max(alpha, norm * max(selectedClr.a, 0.85));
+            vec3 overlayColor = mix(color.xyz, selectedClr.xyz, 0.8);
+            pcFragColor0 = vec4(overlayColor * overlayAlpha, overlayAlpha);
+            pcFragColor1 = vec4(selectedClr.xyz * overlayAlpha, overlayAlpha);
+            return;
+        }
 
         if (outlineMode) {
             pcFragColor0 = vec4(color.xyz * alpha, alpha);

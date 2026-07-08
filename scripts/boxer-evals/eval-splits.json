@@ -1,0 +1,139 @@
+{
+    "schema": "boxer-eval-splits/v1",
+    "description": "Anti-benchmax sidecar metadata for Boxer brush replay fixtures. Current saved cases are regression/diagnostic only; do not treat them as holdout.",
+    "policy": {
+        "allowed_splits": ["regression", "holdout", "diagnostic", "release"],
+        "allowed_bench_statuses": ["known_tuned", "known_diagnostic", "unseen", "demoted_holdout", "released"],
+        "holdout_bench_statuses": ["unseen"],
+        "holdout_forbidden_tags": ["product-path", "known-tuned", "tuned", "regression"],
+        "require_holdout_fresh_scene_or_target_group": true,
+        "metric_tracks": ["single_view_brush", "live_multiview", "fusion_offline_multiview", "speed"]
+    },
+    "fixtures": {
+        "scripts/boxer-evals/live-brush-evals.jsonl": {
+            "scene_id": "desk-dev-assets-v1",
+            "cases": {
+                "2026-06-08T23:04:42.253Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-08T23:09:37.092Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-08T23:10:31.647Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-08T23:11:18.020Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-08T23:14:32.388Z": {
+                    "split": "regression",
+                    "suite": "product10-can",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "can",
+                    "tags": ["product-path", "live-fusion", "multi-view-can"]
+                },
+                "2026-06-08T23:14:43.551Z": {
+                    "split": "regression",
+                    "suite": "product10-can",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "can",
+                    "tags": ["product-path", "live-fusion", "multi-view-can"]
+                },
+                "2026-06-08T23:15:05.492Z": {
+                    "split": "regression",
+                    "suite": "product10-can",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "can",
+                    "tags": ["product-path", "live-fusion", "multi-view-can"]
+                },
+                "2026-06-11T05:32:22.923Z": {
+                    "split": "diagnostic",
+                    "suite": "diagnostic-unscorable",
+                    "bench_status": "known_diagnostic",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "diagnostic",
+                    "tags": ["diagnostic", "unscorable"]
+                },
+                "2026-06-11T05:33:10.911Z": {
+                    "split": "diagnostic",
+                    "suite": "diagnostic-unscorable",
+                    "bench_status": "known_diagnostic",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "diagnostic",
+                    "tags": ["diagnostic", "unscorable"]
+                },
+                "2026-06-11T05:52:20.566Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-11T05:53:06.927Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-11T05:53:47.897Z": {
+                    "split": "regression",
+                    "suite": "product10-large",
+                    "bench_status": "known_tuned",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "large-desk-object",
+                    "tags": ["product-path", "live-fusion", "multi-view-large"]
+                },
+                "2026-06-11T05:54:31.883Z": {
+                    "split": "diagnostic",
+                    "suite": "diagnostic-unscorable",
+                    "bench_status": "known_diagnostic",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "diagnostic",
+                    "tags": ["diagnostic", "unscorable"]
+                },
+                "2026-06-12T04:20:53.323Z": {
+                    "split": "diagnostic",
+                    "suite": "diagnostic-scorable",
+                    "bench_status": "known_diagnostic",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "extra-scorable",
+                    "tags": ["diagnostic", "scorable", "brush-boxer-replay"]
+                },
+                "2026-06-12T04:21:54.920Z": {
+                    "split": "diagnostic",
+                    "suite": "diagnostic-unscorable",
+                    "bench_status": "known_diagnostic",
+                    "scene_id": "desk-dev-assets-v1",
+                    "target_group": "diagnostic",
+                    "tags": ["diagnostic", "unscorable", "brush-boxer-replay"]
+                }
+            }
+        }
+    }
+}

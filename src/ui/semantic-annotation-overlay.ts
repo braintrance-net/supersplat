@@ -85,6 +85,12 @@ type MultiplayerAvatarInstance = {
     smoothedVoiceLevel: number;
 };
 
+type MultiplayerAvatarPreloadDetails = {
+    reason?: string;
+    count?: number;
+    forceRetry?: boolean;
+};
+
 type MultiplayerAvatarRigBone = {
     entity: Entity;
     baseEuler: Vec3;
@@ -396,6 +402,7 @@ class SemanticAnnotationOverlay {
     private readonly multiplayerAvatarLoadingUrls = new Set<string>();
     private readonly multiplayerAvatarFailedAt = new Map<string, number>();
     private readonly multiplayerAvatarLoadStartedAt = new Map<string, number>();
+    private readonly multiplayerAvatarRetryTimers = new Map<string, number>();
     private annotations: SemanticAnnotation[] = [];
     private multiplayerPlayers: MultiplayerOverlayPlayer[] = [];
     private interactionMode: 'edit' | 'game' = 'edit';
@@ -461,6 +468,10 @@ class SemanticAnnotationOverlay {
             window.clearTimeout(this.hitVolumeRebuildTimer);
             this.hitVolumeRebuildTimer = null;
         }
+        for (const timer of this.multiplayerAvatarRetryTimers.values()) {
+            window.clearTimeout(timer);
+        }
+        this.multiplayerAvatarRetryTimers.clear();
         this.container.parentElement?.removeEventListener('pointerdown', this.onPointerDown);
         this.container.parentElement?.removeEventListener('pointerup', this.onPointerUp);
         this.container.remove();
@@ -562,7 +573,11 @@ class SemanticAnnotationOverlay {
         this.roomWarmupBackground = background === true;
         if (!this.roomWarmupBackground && this.multiplayerPlayers.length) {
             for (const player of this.multiplayerPlayers) {
-                this.preloadMultiplayerAvatarAsset(player, { reason: 'warmup-visible', count: this.multiplayerPlayers.length });
+                this.preloadMultiplayerAvatarAsset(player, {
+                    reason: 'warmup-visible',
+                    count: this.multiplayerPlayers.length,
+                    forceRetry: true
+                });
             }
             this.update();
             this.scene.forceRender = true;
@@ -799,11 +814,49 @@ class SemanticAnnotationOverlay {
         }
     }
 
-    private preloadMultiplayerAvatarAsset(player?: MultiplayerOverlayPlayer, details: { reason?: string; count?: number } = {}) {
+    private preloadMultiplayerAvatarAsset(player?: MultiplayerOverlayPlayer, details: MultiplayerAvatarPreloadDetails = {}) {
         this.loadMultiplayerAvatarAsset(this.multiplayerAvatarUrl(player), details.reason ?? 'preload', details);
     }
 
-    private loadMultiplayerAvatarAsset(url?: string, reason = 'update', details: Record<string, unknown> = {}) {
+    private clearMultiplayerAvatarRetryTimer(url: string) {
+        const timer = this.multiplayerAvatarRetryTimers.get(url);
+        if (timer === undefined) {
+            return;
+        }
+        window.clearTimeout(timer);
+        this.multiplayerAvatarRetryTimers.delete(url);
+    }
+
+    private scheduleMultiplayerAvatarRetry(url: string) {
+        if (this.multiplayerAvatarRetryTimers.has(url) || this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
+            return;
+        }
+
+        const waitingPlayers = this.multiplayerPlayers.filter(player => this.multiplayerAvatarUrl(player) === url);
+        if (!waitingPlayers.length) {
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            this.multiplayerAvatarRetryTimers.delete(url);
+            if (this.multiplayerAvatarAssets.has(url) || this.multiplayerAvatarLoadingUrls.has(url)) {
+                return;
+            }
+
+            const nextWaitingPlayers = this.multiplayerPlayers.filter(player => this.multiplayerAvatarUrl(player) === url);
+            if (!nextWaitingPlayers.length) {
+                return;
+            }
+
+            this.loadMultiplayerAvatarAsset(url, 'retry-timer', {
+                count: nextWaitingPlayers.length,
+                forceRetry: true
+            });
+        }, MULTIPLAYER_AVATAR_RETRY_MS);
+        this.multiplayerAvatarRetryTimers.set(url, timer);
+    }
+
+    private loadMultiplayerAvatarAsset(url?: string, reason = 'update', details: MultiplayerAvatarPreloadDetails = {}) {
         if (!url) {
             return;
         }
@@ -811,18 +864,20 @@ class SemanticAnnotationOverlay {
             return;
         }
 
+        const { forceRetry, ...diagnosticDetails } = details;
         const failedAt = this.multiplayerAvatarFailedAt.get(url);
         if (failedAt !== undefined) {
             const retryAgeMs = performance.now() - failedAt;
-            if (retryAgeMs < MULTIPLAYER_AVATAR_RETRY_MS) {
+            if (!forceRetry && retryAgeMs < MULTIPLAYER_AVATAR_RETRY_MS) {
                 return;
             }
             this.multiplayerAvatarFailedAt.delete(url);
+            this.clearMultiplayerAvatarRetryTimer(url);
             this.emitDiagnostic('multiplayer-avatar-url-retry', {
                 url,
                 reason,
                 retryAgeMs: Number(retryAgeMs.toFixed(1)),
-                ...details
+                ...diagnosticDetails
             });
         }
 
@@ -832,7 +887,7 @@ class SemanticAnnotationOverlay {
 
         this.multiplayerAvatarLoadingUrls.add(url);
         this.multiplayerAvatarLoadStartedAt.set(url, performance.now());
-        this.emitDiagnostic('multiplayer-avatar-preload-start', { url, reason, ...details });
+        this.emitDiagnostic('multiplayer-avatar-preload-start', { url, reason, ...diagnosticDetails });
         this.scene.app.assets.loadFromUrl(url, 'container', (error: unknown, asset?: Asset) => {
             const startedAt = this.multiplayerAvatarLoadStartedAt.get(url);
             const loadMs = startedAt === undefined ? null : performance.now() - startedAt;
@@ -840,6 +895,7 @@ class SemanticAnnotationOverlay {
             this.multiplayerAvatarLoadStartedAt.delete(url);
             if (error || !asset) {
                 this.multiplayerAvatarFailedAt.set(url, performance.now());
+                this.scheduleMultiplayerAvatarRetry(url);
                 this.emitDiagnostic('multiplayer-avatar-url-failed', {
                     url,
                     error: error instanceof Error ? error.message : String(error ?? 'unknown')
@@ -858,6 +914,7 @@ class SemanticAnnotationOverlay {
             }
 
             this.multiplayerAvatarFailedAt.delete(url);
+            this.clearMultiplayerAvatarRetryTimer(url);
             this.multiplayerAvatarAssets.set(url, asset);
             const resource = asset.resource as MultiplayerAvatarContainer | undefined;
             this.emitDiagnostic('multiplayer-avatar-preload-ready', {

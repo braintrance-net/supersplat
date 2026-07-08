@@ -261,6 +261,26 @@ class ViewPanel extends Container {
         outlineSelectionRow.append(outlineSelectionLabel);
         outlineSelectionRow.append(outlineSelectionToggle);
 
+        // selected splats overlay
+
+        const selectedSplatsOverlayRow = new Container({
+            class: 'view-panel-row'
+        });
+
+        const selectedSplatsOverlayLabel = new Label({
+            text: 'Selected Splats',
+            class: 'view-panel-row-label'
+        });
+
+        const selectedSplatsOverlayToggle = new BooleanInput({
+            type: 'toggle',
+            class: 'view-panel-row-toggle',
+            value: false
+        });
+
+        selectedSplatsOverlayRow.append(selectedSplatsOverlayLabel);
+        selectedSplatsOverlayRow.append(selectedSplatsOverlayToggle);
+
         // show grid
 
         const showGridRow = new Container({
@@ -301,6 +321,26 @@ class ViewPanel extends Container {
         showBoundRow.append(showBoundLabel);
         showBoundRow.append(showBoundToggle);
 
+        // voxel mesh
+
+        const voxelMeshRow = new Container({
+            class: 'view-panel-row'
+        });
+
+        const voxelMeshLabel = new Label({
+            text: 'Voxel Mesh',
+            class: 'view-panel-row-label'
+        });
+
+        const voxelMeshToggle = new BooleanInput({
+            type: 'toggle',
+            class: 'view-panel-row-toggle',
+            value: false
+        });
+
+        voxelMeshRow.append(voxelMeshLabel);
+        voxelMeshRow.append(voxelMeshToggle);
+
         this.append(header);
         this.append(clrRow);
         this.append(tonemappingRow);
@@ -310,8 +350,10 @@ class ViewPanel extends Container {
         this.append(centersSizeRow);
         this.append(centersColorRow);
         this.append(outlineSelectionRow);
+        this.append(selectedSplatsOverlayRow);
         this.append(showGridRow);
         this.append(showBoundRow);
+        this.append(voxelMeshRow);
 
         // handle panel visibility
 
@@ -319,6 +361,9 @@ class ViewPanel extends Container {
             if (visible === this.hidden) {
                 this.hidden = !visible;
                 events.fire('viewPanel.visible', visible);
+                if (visible) {
+                    voxelMeshToggle.value = Boolean(events.invoke('walk.collisionMeshVisualize'));
+                }
             }
         };
 
@@ -391,6 +436,16 @@ class ViewPanel extends Container {
             events.fire('view.setOutlineSelection', value);
         });
 
+        // selected splats overlay
+
+        events.on('view.selectedSplatsOverlay', (value: boolean) => {
+            selectedSplatsOverlayToggle.value = value;
+        });
+
+        selectedSplatsOverlayToggle.on('change', (value: boolean) => {
+            events.fire('view.setSelectedSplatsOverlay', value);
+        });
+
         // show grid
 
         events.on('grid.visible', (visible: boolean) => {
@@ -409,6 +464,16 @@ class ViewPanel extends Container {
 
         showBoundToggle.on('change', () => {
             events.fire('camera.setBound', showBoundToggle.value);
+        });
+
+        // voxel mesh
+
+        events.on('walk.collisionMeshVisualize', (visible: boolean) => {
+            voxelMeshToggle.value = Boolean(visible);
+        });
+
+        voxelMeshToggle.on('change', () => {
+            events.fire('walk.collisionMeshVisualize', voxelMeshToggle.value);
         });
 
         // background color
@@ -457,6 +522,7 @@ class ViewPanel extends Container {
         tooltips.register(selectedClrPicker, localize('panel.view-options.selected-color'), 'top');
         tooltips.register(unselectedClrPicker, localize('panel.view-options.unselected-color'), 'top');
         tooltips.register(lockedClrPicker, localize('panel.view-options.locked-color'), 'top');
+        tooltips.register(selectedSplatsOverlayLabel, 'Tint selected splats with their real Gaussian footprint', 'left');
     }
 }
 

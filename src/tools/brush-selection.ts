@@ -1,4 +1,23 @@
+import { Color } from 'playcanvas';
+
 import { Events } from '../events';
+
+type BrushSelectionVariant = 'boxer' | 'sam' | 'raw' | 'raw3d';
+type BrushSelectionOp = 'add' | 'remove' | 'set' | 'intersect';
+type RawBrushMode = 'new' | 'add' | 'remove' | 'intersect';
+
+const LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED = true;
+const LIVE_GAUSSIAN_PREVIEW_INTERVAL_MS = 90;
+const BRUSH_STROKE_ACTIVE_COLOR = '#2388ff';
+const BRUSH_STROKE_REMOVE_COLOR = '#ff382e';
+const BRUSH_STROKE_FINAL_COLOR = '#16c784';
+const BRUSH_STROKE_FINAL_HOLD_MS = 700;
+const BRUSH_SELECTION_FINAL_COLOR = new Color(0.08, 0.78, 0.52, 1);
+
+const livePreviewEnabledFromUrl = () => {
+    const value = new URLSearchParams(window.location.search).get('brushLivePreview')?.toLowerCase();
+    return value !== '0' && value !== 'false' && value !== 'off';
+};
 
 class BrushSelection {
     activate: () => void;
@@ -15,6 +34,12 @@ class BrushSelection {
         const circle = document.createElementNS(svg.namespaceURI, 'circle') as SVGCircleElement;
         svg.appendChild(circle);
 
+        // surface-conforming outline used in 3D mode: a ring of raycasts
+        // against the collision mesh, so the cursor folds over corners
+        const surfaceOutline = document.createElementNS(svg.namespaceURI, 'polygon') as SVGPolygonElement;
+        surfaceOutline.style.display = 'none';
+        svg.appendChild(surfaceOutline);
+
         const { canvas, context } = mask;
 
         let radius = 40;
@@ -24,11 +49,140 @@ class BrushSelection {
         const prev = { x: 0, y: 0 };
         let dragId: number | undefined;
         let points: [number, number][] = [];
+        let pointRadii: number[] = [];
+        let variant: BrushSelectionVariant = 'boxer';
+        let rawBrushMode: RawBrushMode = 'new';
+        let livePreviewEnabled = LIVE_GAUSSIAN_PREVIEW_DEFAULT_ENABLED && livePreviewEnabledFromUrl();
+        let livePreviewTimer: number | undefined;
+        let livePreviewInFlight = false;
+        let livePreviewQueued = false;
+        let livePreviewOp: BrushSelectionOp = 'set';
+        let livePreviewRunId = 0;
+        let lastLivePreviewAt = 0;
+        let finalStrokeTimer: number | undefined;
+        let strokeSelectionOp: BrushSelectionOp | null = null;
+        let strokeRawMode: RawBrushMode | null = null;
+        let strokeVariant: BrushSelectionVariant | null = null;
+        let strokeHadGaussianSelection: boolean | null = null;
+
+        // 3D brush mode: when a collision surface is loaded for the scene, the
+        // brush keeps a constant world-space radius and the cursor conforms to
+        // the surface depth/shape under the pointer.
+        let radiusWorld: number | null = null;
+        let lastPxPerWorld: number | null = null;
+        // transient probe misses (mesh gaps, edges) coast on the last good
+        // conversion instead of flickering back to 2D mode
+        let surfaceMissStreak = 0;
+        const SURFACE_MISS_TOLERANCE = 14;
+        // per-stroke diagnostic trace: where the user actually pointed (client
+        // px) and where the surface probe landed in 3D — recorded into the
+        // prompt so strokes can be replicated and debugged offline
+        let lastProbeHit: { point: [number, number, number]; distance: number } | null = null;
+        let strokeTrace: { client: [number, number]; world: [number, number, number] | null; distance: number | null }[] = [];
+
+        type SurfaceProbeHit = {
+            point: [number, number, number];
+            distance: number;
+            world_per_screen_height: number;
+            px_per_world: number;
+        };
+
+        // probes speak raw viewport (client) pixels — no frame conversions here
+        const probeSurface = (clientX: number, clientY: number) => {
+            return events.invoke('collisionSurface.screenProbe', clientX, clientY) as SurfaceProbeHit | null | undefined;
+        };
+
+        const probeSurfaceRing = (clientX: number, clientY: number, rWorld: number) => {
+            return events.invoke('collisionSurface.ringProbe', clientX, clientY, rWorld, 20) as
+                { center: SurfaceProbeHit; ring: [number, number][] } | null | undefined;
+        };
+
+        const rawModeToSelectionOp = (mode: RawBrushMode): BrushSelectionOp => {
+            return mode === 'new' ? 'set' : mode;
+        };
+
+        const selectionOpNeedsExistingSelection = (op: BrushSelectionOp) => {
+            return op === 'remove' || op === 'intersect';
+        };
+
+        const rawModeAllows2DPreview = (op: BrushSelectionOp) => {
+            return op === 'remove' || op === 'intersect';
+        };
+
+        const isRawBrushVariant = (value = variant) => {
+            return value === 'raw' || value === 'raw3d';
+        };
+
+        const is2DRawBrush = (value = variant) => {
+            return value === 'raw';
+        };
+
+        const usesSurfaceBrush = (value = variant) => {
+            return value === 'raw3d' || value === 'boxer' || value === 'sam';
+        };
+
+        const hasCurrentGaussianSelection = () => {
+            return events.invoke('selection.splats') === true;
+        };
+
+        const hasStrokeGaussianSelection = () => {
+            return strokeHadGaussianSelection ?? hasCurrentGaussianSelection();
+        };
+
+        const toastRawModeNeedsSelection = () => {
+            events.fire('toast', 'Raw brush Remove and Intersect need an existing selection', 'warning');
+        };
+
+        const setRawBrushMode = (value: RawBrushMode) => {
+            rawBrushMode = value === 'add' || value === 'remove' || value === 'intersect' ? value : 'new';
+            events.fire('brushSelection.rawMode.changed', rawBrushMode);
+            return rawBrushMode;
+        };
+
+        const isRawBrushActive = () => {
+            return events.invoke('tool.active') === 'brushSelection' && isRawBrushVariant();
+        };
+
+        const shouldIgnoreRawModeShortcutTarget = (target: EventTarget | null) => {
+            if (!(target instanceof HTMLElement)) {
+                return false;
+            }
+
+            return target.isContentEditable ||
+                target instanceof HTMLInputElement ||
+                target instanceof HTMLTextAreaElement ||
+                target instanceof HTMLSelectElement;
+        };
+
+        const rawModeKeydown = (e: KeyboardEvent) => {
+            if (!isRawBrushActive() || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.repeat || shouldIgnoreRawModeShortcutTarget(e.target)) {
+                return;
+            }
+
+            const key = e.key.toLowerCase();
+            const modeByKey: Record<string, RawBrushMode | undefined> = {
+                n: 'new',
+                a: 'add',
+                r: 'remove',
+                i: 'intersect'
+            };
+            const mode = modeByKey[key];
+            if (!mode) {
+                return;
+            }
+
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            setRawBrushMode(mode);
+        };
+
+        document.addEventListener('keydown', rawModeKeydown, true);
 
         const controls = document.createElement('div');
         controls.className = 'brush-selection-controls hidden';
         controls.style.cssText = [
             'position:fixed',
+            'display:none',
             'left:16px',
             'top:72px',
             'z-index:10000',
@@ -44,6 +198,11 @@ class BrushSelection {
             'pointer-events:auto',
             'user-select:none'
         ].join(';');
+
+        const setControlsVisible = (visible: boolean) => {
+            controls.classList[visible ? 'remove' : 'add']('hidden');
+            controls.style.display = visible ? 'block' : 'none';
+        };
 
         const controlHeader = document.createElement('div');
         controlHeader.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px';
@@ -75,19 +234,88 @@ class BrushSelection {
             radius = clampRadius(value);
             circle.setAttribute('r', radius.toString());
             radiusInput.value = Math.round(radius).toString();
-            radiusValue.textContent = `${Math.round(radius)}px`;
+            radiusValue.textContent = usesSurfaceBrush() && radiusWorld !== null ?
+                `${Math.round(radius)}px · ${radiusWorld.toFixed(2)}wu` :
+                `${Math.round(radius)}px`;
         };
 
         setRadius(radius);
 
-        const addPoint = (x: number, y: number) => {
+        // keep the world radius in sync after explicit user resizes (wheel/slider)
+        const syncWorldRadius = () => {
+            if (radiusWorld !== null && lastPxPerWorld) {
+                radiusWorld = radius / lastPxPerWorld;
+            }
+        };
+
+        const exitSurfaceMode = () => {
+            svg.classList.remove('surface-mode');
+            surfaceOutline.style.display = 'none';
+            circle.style.display = '';
+            controlLabel.textContent = 'Brush Size';
+        };
+
+        const applySurfaceRadius = (clientX: number, clientY: number) => {
+            if (!usesSurfaceBrush()) {
+                exitSurfaceMode();
+                return;
+            }
+
+            const ringResult = radiusWorld !== null ? probeSurfaceRing(clientX, clientY, radiusWorld) : null;
+            const hit = ringResult?.center ?? probeSurface(clientX, clientY);
+            if (!hit || !(hit.px_per_world > 0)) {
+                lastProbeHit = null;
+                surfaceMissStreak += 1;
+                if (surfaceMissStreak > SURFACE_MISS_TOLERANCE) {
+                    exitSurfaceMode();
+                }
+                return;
+            }
+            lastProbeHit = { point: hit.point, distance: hit.distance };
+            surfaceMissStreak = 0;
+            const pxPerWorld = hit.px_per_world;
+            if (radiusWorld === null) {
+                radiusWorld = radius / pxPerWorld;
+            }
+            lastPxPerWorld = pxPerWorld;
+            svg.classList.add('surface-mode');
+            controlLabel.textContent = 'Brush Size · 3D';
+
+            // ease toward the target size so depth edges do not snap the cursor
+            const targetRadius = radiusWorld * pxPerWorld;
+            setRadius(radius + (targetRadius - radius) * 0.45);
+
+            if (ringResult?.ring?.length) {
+                const parentRect = parent.getBoundingClientRect();
+                surfaceOutline.setAttribute(
+                    'points',
+                    ringResult.ring.map(point => `${(point[0] - parentRect.left).toFixed(1)},${(point[1] - parentRect.top).toFixed(1)}`).join(' ')
+                );
+                surfaceOutline.style.display = '';
+                circle.style.display = 'none';
+            } else {
+                surfaceOutline.style.display = 'none';
+                circle.style.display = '';
+            }
+        };
+
+        const addPoint = (x: number, y: number, clientX?: number, clientY?: number) => {
             const last = points[points.length - 1];
             if (last && Math.hypot(last[0] - x, last[1] - y) < 3) return;
             points.push([x, y]);
+            pointRadii.push(radius);
+            if (clientX !== undefined && clientY !== undefined && strokeTrace.length < 256) {
+                strokeTrace.push({
+                    client: [Math.round(clientX), Math.round(clientY)],
+                    world: lastProbeHit ? [...lastProbeHit.point] : null,
+                    distance: lastProbeHit ? Number(lastProbeHit.distance.toFixed(3)) : null
+                });
+            }
         };
 
-        const buildBrushPrompt = () => {
+        const buildBrushPrompt = (promptVariant = strokeVariant ?? variant) => {
             if (points.length === 0) return null;
+            const promptRawMode = strokeRawMode ?? rawBrushMode;
             const bounds = points.reduce((acc, point) => {
                 acc[0] = Math.min(acc[0], point[0]);
                 acc[1] = Math.min(acc[1], point[1]);
@@ -102,45 +330,178 @@ class BrushSelection {
             }, [0, 0] as [number, number]);
             center[0] = Math.round(center[0] / points.length);
             center[1] = Math.round(center[1] / points.length);
+            // in 3D mode the px radius varies along the stroke; the prompt
+            // carries the mean for region tests and the max for bounds padding
+            const promptRadius = pointRadii.length ?
+                pointRadii.reduce((sum, value) => sum + value, 0) / pointRadii.length :
+                radius;
+            const paddingRadius = pointRadii.length ? Math.max(...pointRadii) : radius;
             const bb2d: [number, number, number, number] = [
-                Math.max(0, bounds[0] - radius),
-                Math.max(0, bounds[1] - radius),
-                Math.min(canvas.width, bounds[2] + radius),
-                Math.min(canvas.height, bounds[3] + radius)
+                Math.max(0, bounds[0] - paddingRadius),
+                Math.max(0, bounds[1] - paddingRadius),
+                Math.min(canvas.width, bounds[2] + paddingRadius),
+                Math.min(canvas.height, bounds[3] + paddingRadius)
             ];
 
+            // honest variant contract:
+            //   raw   -> client_brush  (no model, local geometry pipeline)
+            //   boxer -> brush_boxer   (real Boxer model lift, no fallback)
+            //   sam   -> brush_sam     (real SAM mask, no fallback)
             return {
-                type: 'client_brush',
+                type: promptVariant === 'sam' ? 'brush_sam' : promptVariant === 'boxer' ? 'brush_boxer' : 'client_brush',
                 click_xy: center,
                 brush: {
                     shape: 'stroke',
                     center_xy: center,
-                    radius,
+                    radius: promptRadius,
                     bb2d,
-                    points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number])
+                    points: points.map(point => [Math.round(point[0]), Math.round(point[1])] as [number, number]),
+                    ...(isRawBrushVariant(promptVariant) ? {
+                        mode: 'raw' as const,
+                        selection_mode: promptRawMode,
+                        brush_space: is2DRawBrush(promptVariant) ? '2d' as const : '3d' as const
+                    } : {}),
+                    ...(usesSurfaceBrush(promptVariant) && radiusWorld !== null ? { radius_world: radiusWorld } : {}),
+                    ...(usesSurfaceBrush(promptVariant) && strokeTrace.length ? { probe_trace: strokeTrace } : {})
                 }
             };
         };
+
+        const selectionOpFromPointer = (e: PointerEvent): BrushSelectionOp => {
+            if (isRawBrushVariant()) {
+                return rawModeToSelectionOp(rawBrushMode);
+            }
+            return e.shiftKey ? 'add' : (e.ctrlKey ? 'remove' : 'set');
+        };
+
+        const invokeClearLivePreview = () => {
+            const result = events.invoke('select.clearMaskPreview') as Promise<unknown> | undefined;
+            if (result && typeof result.catch === 'function') {
+                result.catch((err) => {
+                    console.warn('[BrushSelection] live preview clear failed', err);
+                });
+            }
+        };
+
+        const cancelLivePreview = () => {
+            livePreviewRunId++;
+            livePreviewQueued = false;
+            if (livePreviewTimer !== undefined) {
+                window.clearTimeout(livePreviewTimer);
+                livePreviewTimer = undefined;
+            }
+        };
+
+        const clearLivePreview = () => {
+            cancelLivePreview();
+            invokeClearLivePreview();
+        };
+
+        const cancelFinalStrokeHold = () => {
+            if (finalStrokeTimer !== undefined) {
+                window.clearTimeout(finalStrokeTimer);
+                finalStrokeTimer = undefined;
+            }
+            canvas.style.display = 'none';
+        };
+
+        const repaintMaskStroke = (color: string) => {
+            context.save();
+            context.globalCompositeOperation = 'source-in';
+            context.fillStyle = color;
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            context.restore();
+            context.globalCompositeOperation = 'source-over';
+        };
+
+        const holdFinalStroke = (color = BRUSH_STROKE_FINAL_COLOR) => {
+            cancelFinalStrokeHold();
+            repaintMaskStroke(color);
+            canvas.style.display = 'inline';
+            finalStrokeTimer = window.setTimeout(() => {
+                canvas.style.display = 'none';
+                finalStrokeTimer = undefined;
+            }, BRUSH_STROKE_FINAL_HOLD_MS);
+        };
+
+        async function runLivePreview() {
+            livePreviewTimer = undefined;
+            if (!livePreviewEnabled || !livePreviewQueued || dragId === undefined) {
+                livePreviewQueued = false;
+                return;
+            }
+
+            const runId = livePreviewRunId;
+            const op = livePreviewOp;
+            livePreviewQueued = false;
+            livePreviewInFlight = true;
+
+            try {
+                await events.invoke('select.previewByMask', op, canvas, context);
+            } catch (err) {
+                console.warn('[BrushSelection] live preview failed', err);
+            } finally {
+                livePreviewInFlight = false;
+                lastLivePreviewAt = performance.now();
+                if (livePreviewQueued && dragId !== undefined && runId === livePreviewRunId) {
+                    requestLivePreview(livePreviewOp);
+                }
+            }
+        }
+
+        function requestLivePreview(op: BrushSelectionOp) {
+            if (!livePreviewEnabled || dragId === undefined) {
+                return;
+            }
+            const previewVariant = strokeVariant ?? variant;
+            if (is2DRawBrush(previewVariant) && !rawModeAllows2DPreview(op)) {
+                return;
+            }
+            if (isRawBrushVariant(previewVariant) && selectionOpNeedsExistingSelection(op) && !hasStrokeGaussianSelection()) {
+                return;
+            }
+
+            livePreviewOp = op;
+            livePreviewQueued = true;
+
+            if (livePreviewInFlight || livePreviewTimer !== undefined) {
+                return;
+            }
+
+            const elapsed = performance.now() - lastLivePreviewAt;
+            const delay = Math.max(0, LIVE_GAUSSIAN_PREVIEW_INTERVAL_MS - elapsed);
+            livePreviewTimer = window.setTimeout(() => {
+                runLivePreview();
+            }, delay);
+        }
 
         const update = (e: PointerEvent) => {
             const x = e.offsetX;
             const y = e.offsetY;
 
+            applySurfaceRadius(e.clientX, e.clientY);
             circle.setAttribute('cx', x.toString());
             circle.setAttribute('cy', y.toString());
 
             if (dragId !== undefined) {
+                const selectionOp = strokeSelectionOp ?? selectionOpFromPointer(e);
+                const activeStrokeVariant = strokeVariant ?? variant;
+                context.globalCompositeOperation = 'source-over';
                 context.beginPath();
-                context.strokeStyle = '#f60';
+                context.strokeStyle = is2DRawBrush(activeStrokeVariant) && selectionOp === 'remove' ?
+                    BRUSH_STROKE_REMOVE_COLOR :
+                    (is2DRawBrush(activeStrokeVariant) ? BRUSH_STROKE_ACTIVE_COLOR : '#f60');
                 context.lineCap = 'round';
                 context.lineWidth = radius * 2;
                 context.moveTo(prev.x, prev.y);
                 context.lineTo(x, y);
                 context.stroke();
-                addPoint(x, y);
+                addPoint(x, y, e.clientX, e.clientY);
 
                 prev.x = x;
                 prev.y = y;
+
+                requestLivePreview(selectionOp);
             }
         };
 
@@ -148,17 +509,30 @@ class BrushSelection {
             if (dragId === undefined && (e.pointerType === 'mouse' ? e.button === 0 : e.isPrimary)) {
                 e.preventDefault();
                 e.stopPropagation();
+                const selectionOp = selectionOpFromPointer(e);
+                const hadGaussianSelection = hasCurrentGaussianSelection();
+                if (isRawBrushVariant() && selectionOpNeedsExistingSelection(selectionOp) && !hadGaussianSelection) {
+                    toastRawModeNeedsSelection();
+                    return;
+                }
+                strokeSelectionOp = selectionOp;
+                strokeRawMode = rawBrushMode;
+                strokeVariant = variant;
+                strokeHadGaussianSelection = hadGaussianSelection;
+                events.fire('selection.gestureStarted', { source: 'brushSelection' });
 
                 dragId = e.pointerId;
                 parent.setPointerCapture(dragId);
 
                 // initialize canvas
+                cancelFinalStrokeHold();
                 if (canvas.width !== parent.clientWidth || canvas.height !== parent.clientHeight) {
                     canvas.width = parent.clientWidth;
                     canvas.height = parent.clientHeight;
                 }
 
                 // clear canvas
+                context.globalCompositeOperation = 'source-over';
                 context.clearRect(0, 0, canvas.width, canvas.height);
 
                 // display it
@@ -167,7 +541,9 @@ class BrushSelection {
                 prev.x = e.offsetX;
                 prev.y = e.offsetY;
                 points = [];
-                addPoint(prev.x, prev.y);
+                pointRadii = [];
+                strokeTrace = [];
+                addPoint(prev.x, prev.y, e.clientX, e.clientY);
 
                 update(e);
             }
@@ -182,29 +558,93 @@ class BrushSelection {
             update(e);
         };
 
-        const dragEnd = () => {
-            parent.releasePointerCapture(dragId);
+        const dragEnd = (releaseCapture = true) => {
+            const pointerId = dragId;
             dragId = undefined;
+            if (releaseCapture && pointerId !== undefined && parent.hasPointerCapture(pointerId)) {
+                try {
+                    parent.releasePointerCapture(pointerId);
+                } catch (err) {
+                    console.warn('[BrushSelection] pointer capture release failed', err);
+                }
+            }
             canvas.style.display = 'none';
+            clearLivePreview();
+            strokeSelectionOp = null;
+            strokeRawMode = null;
+            strokeVariant = null;
+            strokeHadGaussianSelection = null;
         };
 
         const pointerup = async (e: PointerEvent) => {
             if (e.pointerId === dragId) {
                 e.preventDefault();
                 e.stopPropagation();
-
-                await events.invoke(
-                    'select.byMask',
-                    e.shiftKey ? 'add' : (e.ctrlKey ? 'remove' : 'set'),
-                    canvas,
-                    context
-                );
-                const prompt = buildBrushPrompt();
-                if (prompt) {
-                    events.fire('boxer.brushPromptCaptured', prompt);
+                cancelLivePreview();
+                const selectionOp = strokeSelectionOp ?? selectionOpFromPointer(e);
+                const commitVariant = strokeVariant ?? variant;
+                if (isRawBrushVariant(commitVariant) && selectionOpNeedsExistingSelection(selectionOp) && !hasStrokeGaussianSelection()) {
+                    toastRawModeNeedsSelection();
+                    dragEnd();
+                    return;
                 }
 
+                let selectionResult: { applied?: boolean; selected_after?: number; splat_count?: number } | undefined;
+                let prompt: ReturnType<typeof buildBrushPrompt> = null;
+                try {
+                    if (isRawBrushVariant(commitVariant)) {
+                        selectionResult = await events.invoke(
+                            'select.byMask',
+                            selectionOp,
+                            canvas,
+                            context
+                        ) as { selected_after?: number; splat_count?: number } | undefined;
+                    } else {
+                        const previewCommit = await events.invoke('select.commitMaskPreview', selectionOp) as
+                            ({ applied?: boolean; preview?: boolean; selected_after?: number; splat_count?: number } | undefined);
+                        selectionResult = previewCommit?.preview ?
+                            previewCommit :
+                            await events.invoke(
+                                'select.byMask',
+                                selectionOp,
+                                canvas,
+                                context
+                            ) as { selected_after?: number; splat_count?: number } | undefined;
+                    }
+                    prompt = buildBrushPrompt(commitVariant);
+                } catch (err) {
+                    console.warn('[BrushSelection] mask selection failed', err);
+                    events.fire('toast', 'Brush selection failed', 'error');
+                } finally {
+                    dragEnd();
+                }
+
+                if (selectionResult?.applied && is2DRawBrush(commitVariant)) {
+                    events.fire('setSelectedClr', BRUSH_SELECTION_FINAL_COLOR);
+                    events.fire('view.setSelectedSplatsOverlay', true);
+                    holdFinalStroke(selectionOp === 'remove' ? BRUSH_STROKE_REMOVE_COLOR : BRUSH_STROKE_FINAL_COLOR);
+                }
+
+                if (selectionResult?.applied) {
+                    events.fire('selection.commit', { source: 'brushSelection', variant: commitVariant, result: selectionResult });
+                }
+                if (prompt && (!isRawBrushVariant(commitVariant) || selectionResult?.applied)) {
+                    events.fire('boxer.brushPromptCaptured', prompt);
+                }
+            }
+        };
+
+        const pointercancel = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                e.preventDefault();
+                e.stopPropagation();
                 dragEnd();
+            }
+        };
+
+        const lostpointercapture = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                dragEnd(false);
             }
         };
 
@@ -212,6 +652,9 @@ class BrushSelection {
             if (delta === 0) return;
             const scale = fast ? 1.18 : 1.08;
             setRadius(delta > 0 ? radius / scale : radius * scale);
+            if (usesSurfaceBrush()) {
+                syncWorldRadius();
+            }
         };
 
         const wheel = (e: WheelEvent) => {
@@ -223,6 +666,9 @@ class BrushSelection {
 
         radiusInput.addEventListener('input', () => {
             setRadius(Number(radiusInput.value));
+            if (usesSurfaceBrush()) {
+                syncWorldRadius();
+            }
         });
 
         radiusInput.addEventListener('pointerdown', (e) => {
@@ -232,12 +678,21 @@ class BrushSelection {
         controls.addEventListener('wheel', wheel);
 
         this.activate = () => {
+            // re-derive the world radius from the current px radius on first
+            // probe, in case the scene or camera changed since last activation
+            radiusWorld = null;
+            lastPxPerWorld = null;
+            surfaceMissStreak = 0;
+            exitSurfaceMode();
+            setRadius(radius);
             svg.classList.remove('hidden');
-            controls.classList.remove('hidden');
+            setControlsVisible(events.invoke('tool.active') === 'brushSelection');
             parent.style.display = 'block';
             parent.addEventListener('pointerdown', pointerdown);
             parent.addEventListener('pointermove', pointermove);
             parent.addEventListener('pointerup', pointerup);
+            parent.addEventListener('pointercancel', pointercancel);
+            parent.addEventListener('lostpointercapture', lostpointercapture);
             parent.addEventListener('wheel', wheel);
         };
 
@@ -246,12 +701,15 @@ class BrushSelection {
             if (dragId !== undefined) {
                 dragEnd();
             }
+            cancelFinalStrokeHold();
             svg.classList.add('hidden');
-            controls.classList.add('hidden');
+            setControlsVisible(false);
             parent.style.display = 'none';
             parent.removeEventListener('pointerdown', pointerdown);
             parent.removeEventListener('pointermove', pointermove);
             parent.removeEventListener('pointerup', pointerup);
+            parent.removeEventListener('pointercancel', pointercancel);
+            parent.removeEventListener('lostpointercapture', lostpointercapture);
             parent.removeEventListener('wheel', wheel);
         };
 
@@ -263,14 +721,42 @@ class BrushSelection {
             setRadius(radius * 1.08);
         });
 
+        events.on('brushSelection.variant', (value: BrushSelectionVariant) => {
+            variant = value === 'sam' || value === 'raw' || value === 'raw3d' ? value : 'boxer';
+            radiusWorld = null;
+            lastPxPerWorld = null;
+            surfaceMissStreak = 0;
+            exitSurfaceMode();
+            setRadius(radius);
+            events.fire('brushSelection.variant.changed', variant);
+        });
+
+        events.on('brushSelection.rawMode', (value: RawBrushMode) => {
+            setRawBrushMode(value);
+        });
+
+        events.on('tool.activated', (toolName: string | null) => {
+            setControlsVisible(toolName === 'brushSelection');
+        });
+
         try {
             events.function('brushSelection.getRadius', () => radius);
             events.function('brushSelection.setRadius', (value: number) => {
                 setRadius(Number(value));
                 return radius;
             });
+            events.function('brushSelection.getVariant', () => variant);
+            events.function('brushSelection.getRawMode', () => rawBrushMode);
+            events.function('brushSelection.getLivePreviewEnabled', () => livePreviewEnabled);
+            events.function('brushSelection.setLivePreviewEnabled', (enabled: boolean) => {
+                livePreviewEnabled = enabled === true;
+                if (!livePreviewEnabled) {
+                    clearLivePreview();
+                }
+                return livePreviewEnabled;
+            });
         } catch (err) {
-            console.warn('[BrushSelection] brushSelection radius functions were already registered', err);
+            console.warn('[BrushSelection] brushSelection functions were already registered', err);
         }
     }
 }

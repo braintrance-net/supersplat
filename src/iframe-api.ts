@@ -5,6 +5,10 @@ import type { SemanticAnnotation, SemanticLayer } from './semantic-annotations';
 
 const IS_SCENE_DIRTY = 'supersplat:is-scene-dirty';
 const LOAD_FILE = 'supersplat:load-file';
+const LOAD_SCENE_MANIFEST = 'supersplat:load-scene-manifest';
+const LOAD_SCENE_MANIFEST_STREAM_START = 'supersplat:load-scene-manifest-stream-start';
+const LOAD_SCENE_MANIFEST_STREAM_LAYER = 'supersplat:load-scene-manifest-stream-layer';
+const LOAD_SCENE_MANIFEST_STREAM_FINISH = 'supersplat:load-scene-manifest-stream-finish';
 const GET_CAMERA_STATE = 'supersplat:get-camera-state';
 const CAMERA_STATE = 'supersplat:camera-state';
 const GET_PRESET_STATE = 'supersplat:get-preset-state';
@@ -51,6 +55,7 @@ const ROOM_WARMUP_MODE = 'supersplat:room-warmup-mode';
 const VIEWER_PERF_RESET = 'supersplat:viewer-perf-reset';
 const COLLISION_DEBUG_BUNDLE_GET = 'supersplat:collision-debug-bundle-get';
 const COLLISION_DEBUG_BUNDLE = 'supersplat:collision-debug-bundle';
+const COLLISION_MESH_PREVIEW = 'supersplat:collision-mesh-preview';
 
 type CameraState = {
     position: { x: number; y: number; z: number };
@@ -102,6 +107,59 @@ interface LoadFileMessage {
     camera?: CameraState;
     transform?: PresetTransform;
     collisionMeshSrc?: string | null;
+    collisionMeshFloorY?: number | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestLayer {
+    id: string;
+    label?: string;
+    filename: string;
+    assetUrl?: string;
+    byteLength?: number;
+    data?: ArrayBuffer;
+    docTransform?: Record<string, unknown>;
+    transform?: PresetTransform;
+}
+
+interface LoadSceneManifestMessage {
+    type: typeof LOAD_SCENE_MANIFEST;
+    manifest: {
+        id: string;
+        title?: string;
+        strategy?: string;
+        backgroundLayerId?: string;
+        sourceBytes?: number;
+        totalBytes?: number;
+        manifestUrl?: string;
+        layers: LoadSceneManifestLayer[];
+    };
+    camera?: CameraState;
+    collisionMeshSrc?: string | null;
+    collisionMeshFloorY?: number | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestStreamStartMessage {
+    type: typeof LOAD_SCENE_MANIFEST_STREAM_START;
+    manifest: LoadSceneManifestMessage['manifest'];
+    camera?: CameraState;
+    collisionMeshSrc?: string | null;
+    collisionMeshFloorY?: number | null;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestStreamLayerMessage {
+    type: typeof LOAD_SCENE_MANIFEST_STREAM_LAYER;
+    manifestId: string;
+    layerIndex: number;
+    layer: LoadSceneManifestLayer;
+    requestId?: RequestId;
+}
+
+interface LoadSceneManifestStreamFinishMessage {
+    type: typeof LOAD_SCENE_MANIFEST_STREAM_FINISH;
+    manifestId: string;
     requestId?: RequestId;
 }
 
@@ -154,12 +212,14 @@ interface Sam3dConfigMessage {
     type: typeof SAM3D_CONFIG;
     proxyBaseUrl: string;
     semanticScanUrl?: string;
+    artisanGsBackendUrl?: string;
 }
 
 interface ApiConfigMessage {
     type: typeof API_CONFIG;
     proxyBaseUrl?: string;
     sam3BackendUrl?: string;
+    artisanGsBackendUrl?: string;
     semanticScanUrl?: string;
     boxerBackendUrl?: string;
     sketchfabApiToken?: string;
@@ -275,6 +335,12 @@ interface CollisionDebugBundleGetMessage {
     requestId?: RequestId;
 }
 
+interface CollisionMeshPreviewMessage {
+    type: typeof COLLISION_MESH_PREVIEW;
+    enabled: boolean;
+    requestId?: RequestId;
+}
+
 interface MultiplayerPlayersMessage {
     type: typeof MULTIPLAYER_PLAYERS;
     players: MultiplayerPlayer[];
@@ -351,6 +417,65 @@ const isLoadFileMessage = (data: any): data is LoadFileMessage => {
     );
 };
 
+const isLoadSceneManifestMessage = (data: any): data is LoadSceneManifestMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST &&
+        data.manifest &&
+        typeof data.manifest === 'object' &&
+        typeof data.manifest.id === 'string' &&
+        Array.isArray(data.manifest.layers) &&
+        data.manifest.layers.every((layer: any) => (
+            layer &&
+            typeof layer === 'object' &&
+            typeof layer.id === 'string' &&
+            typeof layer.filename === 'string' &&
+            (layer.data === undefined || layer.data instanceof ArrayBuffer)
+        )) &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestStreamStartMessage = (data: any): data is LoadSceneManifestStreamStartMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST_STREAM_START &&
+        data.manifest &&
+        typeof data.manifest === 'object' &&
+        typeof data.manifest.id === 'string' &&
+        Array.isArray(data.manifest.layers) &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestStreamLayerMessage = (data: any): data is LoadSceneManifestStreamLayerMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST_STREAM_LAYER &&
+        typeof data.manifestId === 'string' &&
+        typeof data.layerIndex === 'number' &&
+        data.layer &&
+        typeof data.layer === 'object' &&
+        typeof data.layer.id === 'string' &&
+        typeof data.layer.filename === 'string' &&
+        data.layer.data instanceof ArrayBuffer &&
+        hasOptionalRequestId(data)
+    );
+};
+
+const isLoadSceneManifestStreamFinishMessage = (data: any): data is LoadSceneManifestStreamFinishMessage => {
+    return (
+        data &&
+        typeof data === 'object' &&
+        data.type === LOAD_SCENE_MANIFEST_STREAM_FINISH &&
+        typeof data.manifestId === 'string' &&
+        hasOptionalRequestId(data)
+    );
+};
+
 const isGetCameraStateQuery = (data: any): data is GetCameraStateQuery => {
     return (
         data &&
@@ -385,7 +510,9 @@ const isSam3dConfigMessage = (data: any): data is Sam3dConfigMessage => {
         data &&
         typeof data === 'object' &&
         data.type === SAM3D_CONFIG &&
-        typeof data.proxyBaseUrl === 'string'
+        typeof data.proxyBaseUrl === 'string' &&
+        (data.semanticScanUrl === undefined || typeof data.semanticScanUrl === 'string') &&
+        (data.artisanGsBackendUrl === undefined || typeof data.artisanGsBackendUrl === 'string')
     );
 };
 
@@ -396,6 +523,7 @@ const isApiConfigMessage = (data: any): data is ApiConfigMessage => {
         data.type === API_CONFIG &&
         (data.proxyBaseUrl === undefined || typeof data.proxyBaseUrl === 'string') &&
         (data.sam3BackendUrl === undefined || typeof data.sam3BackendUrl === 'string') &&
+        (data.artisanGsBackendUrl === undefined || typeof data.artisanGsBackendUrl === 'string') &&
         (data.semanticScanUrl === undefined || typeof data.semanticScanUrl === 'string') &&
         (data.boxerBackendUrl === undefined || typeof data.boxerBackendUrl === 'string') &&
         (data.sketchfabApiToken === undefined || typeof data.sketchfabApiToken === 'string')
@@ -519,6 +647,10 @@ const isCollisionDebugBundleGetMessage = (data: any): data is CollisionDebugBund
     return data && typeof data === 'object' && data.type === COLLISION_DEBUG_BUNDLE_GET && hasOptionalRequestId(data);
 };
 
+const isCollisionMeshPreviewMessage = (data: any): data is CollisionMeshPreviewMessage => {
+    return data && typeof data === 'object' && data.type === COLLISION_MESH_PREVIEW && typeof data.enabled === 'boolean' && hasOptionalRequestId(data);
+};
+
 const isMultiplayerPlayer = (player: any): player is MultiplayerPlayer => (
     player &&
     typeof player === 'object' &&
@@ -633,7 +765,7 @@ const normalizeUrl = (value: string, base: string) => new URL(value, base).href.
 
 const applyApiConfig = (
     event: MessageEvent,
-    values: { proxyBaseUrl?: string, sam3BackendUrl?: string, semanticScanUrl?: string, boxerBackendUrl?: string, sketchfabApiToken?: string }
+    values: { proxyBaseUrl?: string, sam3BackendUrl?: string, artisanGsBackendUrl?: string, semanticScanUrl?: string, boxerBackendUrl?: string, sketchfabApiToken?: string }
 ) => {
     try {
         const config = (window as any).supersplatConfig ?? {};
@@ -643,10 +775,15 @@ const applyApiConfig = (
         if (proxyOrigin) {
             nextConfig.sam3BackendUrl = proxyOrigin;
             nextConfig.semanticScanBackendUrl = proxyOrigin;
+            nextConfig.artisanGsBackendUrl = proxyOrigin;
         }
 
         if (values.sam3BackendUrl) {
             nextConfig.sam3BackendUrl = normalizeOrigin(values.sam3BackendUrl, event.origin);
+        }
+
+        if (values.artisanGsBackendUrl) {
+            nextConfig.artisanGsBackendUrl = normalizeOrigin(values.artisanGsBackendUrl, event.origin);
         }
 
         if (values.semanticScanUrl) {
@@ -701,13 +838,18 @@ const cameraStateFromAnnotation = (annotation: SemanticAnnotation): CameraState 
     ortho: annotation.source.camera.ortho
 });
 
-const applyTransformState = (events: Events, transform?: PresetTransform) => {
+const applyTransformState = (
+    events: Events,
+    transform?: PresetTransform,
+    targetSplat?: any,
+    options: { forceRender?: boolean } = {}
+) => {
     if (!transform) {
         return;
     }
 
     const splats = events.invoke('scene.splats') as Array<any>;
-    const splat = splats?.[0];
+    const splat = targetSplat ?? splats?.[0];
     if (!splat) {
         return;
     }
@@ -729,9 +871,64 @@ const applyTransformState = (events: Events, transform?: PresetTransform) => {
     }
 
     const scene = window.scene as any;
-    if (scene) {
+    if (scene && options.forceRender !== false) {
         scene.forceRender = true;
     }
+};
+
+const applyDocTransformState = (
+    splat: any,
+    docTransform?: Record<string, unknown>,
+    options: { forceRender?: boolean } = {}
+) => {
+    if (!docTransform || typeof splat?.docDeserialize !== 'function') {
+        return false;
+    }
+
+    splat.docDeserialize(docTransform);
+    const scene = window.scene as any;
+    if (scene && options.forceRender !== false) {
+        scene.forceRender = true;
+    }
+    return true;
+};
+
+const importSplatFile = async (events: Events, filename: string, data: ArrayBuffer) => {
+    const splatsBefore = events.invoke('scene.splats') as Array<any>;
+    const beforeCount = splatsBefore?.length ?? 0;
+    const file = new File([data], filename);
+    const imported = await events.invoke('import', [{
+        filename: file.name,
+        contents: file
+    }]) as unknown;
+    if (Array.isArray(imported) && imported[0]) {
+        return imported[0];
+    }
+
+    const splatsAfter = events.invoke('scene.splats') as Array<any>;
+    return splatsAfter?.[beforeCount] ?? splatsAfter?.[splatsAfter.length - 1] ?? null;
+};
+
+const importSceneManifestLayer = async (
+    events: Events,
+    layer: LoadSceneManifestLayer,
+    options: { forceRender?: boolean } = {}
+) => {
+    if (!layer.data) {
+        throw new Error(`Scene layer '${layer.label ?? layer.id}' did not include data.`);
+    }
+
+    const importedSplat = await importSplatFile(events, layer.filename, layer.data);
+    if (!importedSplat) {
+        throw new Error(`Scene layer '${layer.label ?? layer.id}' did not import.`);
+    }
+
+    const usedDocTransform = applyDocTransformState(importedSplat, layer.docTransform, options);
+    if (!usedDocTransform) {
+        applyTransformState(events, layer.transform, importedSplat, options);
+    }
+
+    return usedDocTransform;
 };
 
 const collisionMeshAssetVersion = '20260605-raw-mesh-v1';
@@ -880,6 +1077,21 @@ const POINTER_LOOK_ACTIVE_RENDER_MS = 900;
 const ROOM_WARMUP_BACKGROUND_PIXEL_SCALE = 2;
 const ROOM_WARMUP_BACKGROUND_MAX_PIXEL_RATIO = 0.75;
 
+type ActiveSceneManifestStream = {
+    camera?: CameraState;
+    collisionMeshFloorY?: number | null;
+    collisionMeshSrc?: string | null;
+    finished: boolean;
+    importedCount: number;
+    manifest: LoadSceneManifestMessage['manifest'];
+    nextLayerIndex: number;
+    origin: string;
+    pendingLayers: Map<number, LoadSceneManifestLayer>;
+    processing: boolean;
+    requestId?: RequestId;
+    source: Window;
+};
+
 const registerIframeApi = (events: Events) => {
     document.body.classList.toggle('time-trial-game-mode', shouldHideTimeTrialChromeFromUrl());
 
@@ -916,6 +1128,7 @@ const registerIframeApi = (events: Events) => {
     let pointerLookIdleResetCount = 0;
     let lastAutoSemanticLayerSignature = '';
     let activeCollisionMeshSrc: string | null = null;
+    let activeCollisionMeshReadySrc: string | null = null;
     let lastGameModeSignature = '';
     let renderWarmupFrame: number | null = null;
     let activeRenderFrame: number | null = null;
@@ -934,6 +1147,15 @@ const registerIframeApi = (events: Events) => {
     let longTaskMaxMs = 0;
     let longTaskSamples: Array<Record<string, unknown>> = [];
     let lastLongTaskReportAt = performance.now();
+    let activeSceneManifestStream: ActiveSceneManifestStream | null = null;
+
+    const activeToolName = () => {
+        try {
+            return events.invoke('tool.active') as string | null;
+        } catch {
+            return null;
+        }
+    };
 
     const resetLongTaskStats = () => {
         longTaskCount = 0;
@@ -986,6 +1208,191 @@ const registerIframeApi = (events: Events) => {
             renderWarmupFrame = remaining > 0 ? window.requestAnimationFrame(tick) : null;
         };
         tick();
+    };
+
+    const postSceneManifestLoaded = (
+        source: Window,
+        origin: string,
+        error: string | undefined,
+        rendered: boolean,
+        requestId?: RequestId
+    ) => {
+        source.postMessage({
+            type: SCENE_LOADED,
+            result: {
+                empty: events.invoke('scene.empty') as boolean,
+                semanticLayer: events.invoke('semanticAnnotations.layer') as SemanticLayer,
+                error: error ?? (rendered ? undefined : 'Scene imported, but render confirmation timed out')
+            },
+            ...requestIdPayload(requestId)
+        }, origin);
+    };
+
+    const failSceneManifestLoad = (
+        source: Window,
+        origin: string,
+        diagnosticPrefix: string,
+        error: string,
+        requestId?: RequestId
+    ) => {
+        console.error(`[iframe-api] ${diagnosticPrefix} failed:`, error);
+        events.fire('toast', error, 'error');
+        postDiagnostic(source, origin, `${diagnosticPrefix}-error`, { error }, requestId);
+        postSceneManifestLoaded(source, origin, error, false, requestId);
+    };
+
+    const waitForCollisionMeshReady = async (url: string, requestId?: RequestId) => {
+        if (activeCollisionMeshReadySrc === url) {
+            return;
+        }
+
+        let onCollisionMesh: ((details: Record<string, unknown>) => void) | null = null;
+        try {
+            await withTimeout(new Promise<void>((resolve, reject) => {
+                onCollisionMesh = (details: Record<string, unknown>) => {
+                    if (details.url !== url) {
+                        return;
+                    }
+
+                    if (details.ok === true && details.reason === 'ready') {
+                        resolve();
+                        return;
+                    }
+
+                    if (details.reason === 'empty' || details.reason === 'load-failed') {
+                        reject(new Error(typeof details.error === 'string' ? details.error : 'Collision mesh load failed'));
+                    }
+                };
+                events.on('walk.collisionMesh', onCollisionMesh);
+            }), 45000, `Collision mesh load timed out for ${url}`);
+        } finally {
+            if (onCollisionMesh) {
+                events.off('walk.collisionMesh', onCollisionMesh);
+            }
+        }
+
+        postDiagnostic(window.parent, '*', 'collision-mesh-ready', { url }, requestId);
+    };
+
+    const finalizeSceneManifestLoad = async (
+        source: Window,
+        origin: string,
+        diagnosticPrefix: string,
+        manifest: LoadSceneManifestMessage['manifest'],
+        importedCount: number,
+        camera?: CameraState,
+        collisionMeshSrc?: string | null,
+        collisionMeshFloorY?: number | null,
+        requestId?: RequestId
+    ) => {
+        let rendered = false;
+        try {
+            postDiagnostic(source, origin, `${diagnosticPrefix}-imported`, {
+                id: manifest.id,
+                importedCount,
+                empty: events.invoke('scene.empty') as boolean
+            }, requestId);
+
+            activeCollisionMeshSrc = collisionMeshSrc ?? null;
+            if (collisionMeshSrc) {
+                const collisionMeshReady = waitForCollisionMeshReady(collisionMeshSrc, requestId);
+                events.fire('walk.collisionMeshLoad', {
+                    url: collisionMeshSrc,
+                    blockingEnabled: true,
+                    floorY: collisionMeshFloorY ?? null,
+                    requestId: requestId ?? null
+                });
+                await collisionMeshReady;
+            } else {
+                events.fire('walk.collisionMeshClear', {
+                    reason: 'manifest-disabled',
+                    requestId: requestId ?? null
+                });
+            }
+            applyCameraState(events, camera);
+            startRenderWarmup(roomWarmupBackground ? 3 : 8, { allowBackground: true });
+            rendered = await waitForPostRender(events);
+            postDiagnostic(source, origin, `${diagnosticPrefix}-postrender`, { rendered }, requestId);
+            postSceneManifestLoaded(source, origin, undefined, rendered, requestId);
+        } catch (err) {
+            failSceneManifestLoad(
+                source,
+                origin,
+                diagnosticPrefix,
+                err instanceof Error ? err.message : 'Manifest import failed',
+                requestId
+            );
+        }
+    };
+
+    const processSceneManifestStream = async () => {
+        const stream = activeSceneManifestStream;
+        if (!stream || stream.processing) {
+            return;
+        }
+
+        stream.processing = true;
+        try {
+            while (true) {
+                if (activeSceneManifestStream !== stream) {
+                    break;
+                }
+
+                const layer = stream.pendingLayers.get(stream.nextLayerIndex);
+                if (!layer) {
+                    break;
+                }
+
+                stream.pendingLayers.delete(stream.nextLayerIndex);
+                const layerIndex = stream.nextLayerIndex;
+                const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
+                stream.importedCount += 1;
+                stream.nextLayerIndex += 1;
+                postDiagnostic(stream.source, stream.origin, 'load-scene-manifest-stream-layer-imported', {
+                    id: layer.id,
+                    label: layer.label ?? null,
+                    filename: layer.filename,
+                    byteLength: layer.data?.byteLength ?? layer.byteLength ?? null,
+                    layerIndex,
+                    layerCount: stream.manifest.layers.length,
+                    usedDocTransform
+                }, stream.requestId);
+            }
+
+            if (
+                activeSceneManifestStream === stream &&
+                stream.finished &&
+                stream.importedCount >= stream.manifest.layers.length
+            ) {
+                activeSceneManifestStream = null;
+                await finalizeSceneManifestLoad(
+                    stream.source,
+                    stream.origin,
+                    'load-scene-manifest-stream',
+                    stream.manifest,
+                    stream.importedCount,
+                    stream.camera,
+                    stream.collisionMeshSrc,
+                    stream.collisionMeshFloorY,
+                    stream.requestId
+                );
+            }
+        } catch (err) {
+            if (activeSceneManifestStream === stream) {
+                activeSceneManifestStream = null;
+            }
+            failSceneManifestLoad(
+                stream.source,
+                stream.origin,
+                'load-scene-manifest-stream',
+                err instanceof Error ? err.message : 'Manifest stream import failed',
+                stream.requestId
+            );
+        } finally {
+            if (activeSceneManifestStream === stream) {
+                stream.processing = false;
+            }
+        }
     };
 
     events.on('scene.clear', () => {
@@ -1198,7 +1605,7 @@ const registerIframeApi = (events: Events) => {
                 totalMs: Number(longTaskTotalMs.toFixed(1)),
                 maxMs: Number(longTaskMaxMs.toFixed(1)),
                 samples: longTaskSamples,
-                activeTool: events.invoke('tool.active') as string | null
+                activeTool: activeToolName()
             });
             resetLongTaskStats();
         };
@@ -1259,12 +1666,12 @@ const registerIframeApi = (events: Events) => {
 
     const restoreGameModeTool = () => {
         const restoreTool = gameModePreviousTool;
-        const shouldRestoreTool = gameModeActivatedWalk && events.invoke('tool.active') === 'walk';
+        const shouldRestoreTool = gameModeActivatedWalk && activeToolName() === 'walk';
         gameModeActive = false;
         gameModePreviousTool = null;
         gameModeActivatedWalk = false;
         setGameModeRenderChrome(false);
-        const activeTool = events.invoke('tool.active') as string | null;
+        const activeTool = activeToolName();
         if (shouldRestoreTool && restoreTool && activeTool !== restoreTool) {
             events.fire(`tool.${restoreTool}`);
         } else if (shouldRestoreTool && !restoreTool && activeTool) {
@@ -1349,7 +1756,7 @@ const registerIframeApi = (events: Events) => {
             maxLongGapMs: Number(pointerLookStats.maxLongGapMs.toFixed(1)),
             avgApplyMs: Number((pointerLookStats.totalApplyMs / Math.max(1, pointerLookStats.count)).toFixed(3)),
             maxApplyMs: Number(pointerLookStats.maxApplyMs.toFixed(3)),
-            activeTool: events.invoke('tool.active') as string | null,
+            activeTool: activeToolName(),
             idleResets: pointerLookIdleResetCount
         });
         pointerLookIdleResetCount = 0;
@@ -1382,7 +1789,7 @@ const registerIframeApi = (events: Events) => {
                         activeRenderWalkHeld,
                         visibilityState: document.visibilityState,
                         hasFocus: document.hasFocus(),
-                        activeTool: events.invoke('tool.active') as string | null,
+                        activeTool: activeToolName(),
                         annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0,
                         renderNextFrame: scene?.app?.renderNextFrame ?? null,
                         canvas: canvas ? { width: canvas.clientWidth, height: canvas.clientHeight } : null,
@@ -1441,7 +1848,7 @@ const registerIframeApi = (events: Events) => {
             visibilityState: document.visibilityState,
             hasFocus: document.hasFocus(),
             renderNextFrame: (window.scene as any)?.app?.renderNextFrame ?? null,
-            activeTool: events.invoke('tool.active') as string | null,
+            activeTool: activeToolName(),
             annotations: (events.invoke('semanticAnnotations.list') as unknown[] | null)?.length ?? 0
         });
 
@@ -1460,7 +1867,7 @@ const registerIframeApi = (events: Events) => {
             activeRenderWalkHeld,
             visibilityState: document.visibilityState,
             hasFocus: document.hasFocus(),
-            activeTool: events.invoke('tool.active') as string | null
+            activeTool: activeToolName()
         });
 
         perfFrameCount = 0;
@@ -1527,6 +1934,13 @@ const registerIframeApi = (events: Events) => {
     });
 
     events.on('walk.collisionMesh', (details: Record<string, unknown>) => {
+        const url = typeof details.url === 'string' ? details.url : null;
+        if (url && details.ok === true && details.reason === 'ready') {
+            activeCollisionMeshReadySrc = url;
+        } else if (!url || details.reason === 'cleared' || details.reason === 'empty' || details.reason === 'load-failed') {
+            activeCollisionMeshReadySrc = null;
+        }
+
         if (window.parent && window.parent !== window) {
             window.parent.postMessage({
                 type: DIAGNOSTIC,
@@ -1591,8 +2005,11 @@ const registerIframeApi = (events: Events) => {
                     screenFrameBytes: true,
                     raycast: true,
                     collisionDebugBundle: true,
+                    collisionMeshPreview: true,
                     roomWarmupMode: true,
-                    version: 8
+                    sceneManifest: true,
+                    sceneManifestStream: true,
+                    version: 11
                 },
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
@@ -1604,6 +2021,14 @@ const registerIframeApi = (events: Events) => {
                 result: events.invoke('walk.collisionDebugBundle') ?? null,
                 ...requestIdPayload(event.data.requestId)
             }, event.origin);
+        }
+
+        if (isCollisionMeshPreviewMessage(event.data)) {
+            events.fire('walk.collisionMeshPreview', event.data.enabled);
+            postDiagnostic(source, event.origin, 'collision-mesh-preview', {
+                enabled: event.data.enabled
+            }, event.data.requestId);
+            return;
         }
 
         if (isMultiplayerPlayersMessage(event.data)) {
@@ -1863,7 +2288,7 @@ const registerIframeApi = (events: Events) => {
                 cameraReset: Boolean(event.data.camera)
             });
             if (event.data.enabled) {
-                const activeTool = events.invoke('tool.active') as string | null;
+                const activeTool = activeToolName();
                 const startingGameMode = !gameModeActive;
                 if (startingGameMode) {
                     gameModePreviousTool = activeTool;
@@ -1916,7 +2341,141 @@ const registerIframeApi = (events: Events) => {
             }, event.origin);
         }
 
+        if (isLoadSceneManifestMessage(event.data)) {
+            activeSceneManifestStream = null;
+            resetGameModeState();
+            events.fire('multiplayer.players', []);
+            const layers = event.data.manifest.layers;
+            postDiagnostic(source, event.origin, 'load-scene-manifest-start', {
+                id: event.data.manifest.id,
+                layerCount: layers.length,
+                totalBytes: event.data.manifest.totalBytes ?? layers.reduce((total, layer) => total + (layer.data?.byteLength ?? layer.byteLength ?? 0), 0),
+                strategy: event.data.manifest.strategy ?? null,
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null,
+                collisionMeshFloorY: event.data.collisionMeshFloorY ?? null
+            }, event.data.requestId);
+            try {
+                events.fire('scene.clear');
+                activeCollisionMeshSrc = null;
+                activeCollisionMeshReadySrc = null;
+                let importedCount = 0;
+                for (const [layerIndex, layer] of layers.entries()) {
+                    const usedDocTransform = await importSceneManifestLayer(events, layer, { forceRender: false });
+                    importedCount += 1;
+                    postDiagnostic(source, event.origin, 'load-scene-manifest-layer-imported', {
+                        id: layer.id,
+                        label: layer.label ?? null,
+                        filename: layer.filename,
+                        byteLength: layer.data.byteLength,
+                        layerIndex,
+                        layerCount: layers.length,
+                        usedDocTransform
+                    }, event.data.requestId);
+                }
+
+                await finalizeSceneManifestLoad(
+                    source,
+                    event.origin,
+                    'load-scene-manifest',
+                    event.data.manifest,
+                    importedCount,
+                    event.data.camera,
+                    event.data.collisionMeshSrc ?? null,
+                    event.data.collisionMeshFloorY ?? null,
+                    event.data.requestId
+                );
+            } catch (err) {
+                failSceneManifestLoad(
+                    source,
+                    event.origin,
+                    'load-scene-manifest',
+                    err instanceof Error ? err.message : 'Manifest import failed',
+                    event.data.requestId
+                );
+            }
+            return;
+        }
+
+        if (isLoadSceneManifestStreamStartMessage(event.data)) {
+            resetGameModeState();
+            events.fire('multiplayer.players', []);
+            events.fire('scene.clear');
+            activeCollisionMeshSrc = null;
+            activeCollisionMeshReadySrc = null;
+            activeSceneManifestStream = {
+                camera: event.data.camera,
+                collisionMeshFloorY: event.data.collisionMeshFloorY ?? null,
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null,
+                finished: false,
+                importedCount: 0,
+                manifest: event.data.manifest,
+                nextLayerIndex: 0,
+                origin: event.origin,
+                pendingLayers: new Map(),
+                processing: false,
+                requestId: event.data.requestId,
+                source
+            };
+            postDiagnostic(source, event.origin, 'load-scene-manifest-stream-start', {
+                id: event.data.manifest.id,
+                layerCount: event.data.manifest.layers.length,
+                totalBytes: event.data.manifest.totalBytes ?? event.data.manifest.layers.reduce((total, layer) => total + (layer.byteLength ?? 0), 0),
+                strategy: event.data.manifest.strategy ?? null,
+                collisionMeshSrc: event.data.collisionMeshSrc ?? null,
+                collisionMeshFloorY: event.data.collisionMeshFloorY ?? null
+            }, event.data.requestId);
+            return;
+        }
+
+        if (isLoadSceneManifestStreamLayerMessage(event.data)) {
+            const stream = activeSceneManifestStream;
+            if (!stream || stream.manifest.id !== event.data.manifestId) {
+                postDiagnostic(source, event.origin, 'load-scene-manifest-stream-layer-miss', {
+                    manifestId: event.data.manifestId,
+                    layerIndex: event.data.layerIndex
+                }, event.data.requestId);
+                return;
+            }
+
+            stream.pendingLayers.set(event.data.layerIndex, event.data.layer);
+            postDiagnostic(source, event.origin, 'load-scene-manifest-stream-layer-received', {
+                id: event.data.layer.id,
+                label: event.data.layer.label ?? null,
+                filename: event.data.layer.filename,
+                byteLength: event.data.layer.data.byteLength,
+                layerIndex: event.data.layerIndex,
+                layerCount: stream.manifest.layers.length
+            }, stream.requestId);
+            processSceneManifestStream().catch((err) => {
+                console.warn('[iframe-api] Scene manifest stream processing failed', err);
+            });
+            return;
+        }
+
+        if (isLoadSceneManifestStreamFinishMessage(event.data)) {
+            const stream = activeSceneManifestStream;
+            if (!stream || stream.manifest.id !== event.data.manifestId) {
+                postDiagnostic(source, event.origin, 'load-scene-manifest-stream-finish-miss', {
+                    manifestId: event.data.manifestId
+                }, event.data.requestId);
+                return;
+            }
+
+            stream.finished = true;
+            postDiagnostic(source, event.origin, 'load-scene-manifest-stream-finish', {
+                id: stream.manifest.id,
+                importedCount: stream.importedCount,
+                layerCount: stream.manifest.layers.length,
+                pendingLayers: stream.pendingLayers.size
+            }, stream.requestId);
+            processSceneManifestStream().catch((err) => {
+                console.warn('[iframe-api] Scene manifest stream processing failed', err);
+            });
+            return;
+        }
+
         if (isLoadFileMessage(event.data)) {
+            activeSceneManifestStream = null;
             let error: string | undefined;
             let rendered = false;
             resetGameModeState();
@@ -1929,11 +2488,7 @@ const registerIframeApi = (events: Events) => {
                 const hasSceneData = Boolean(event.data.data);
                 if (hasSceneData && event.data.data) {
                     events.fire('scene.clear');
-                    const file = new File([event.data.data], event.data.filename);
-                    await events.invoke('import', [{
-                        filename: file.name,
-                        contents: file
-                    }]);
+                    await importSplatFile(events, event.data.filename, event.data.data);
                     postDiagnostic(source, event.origin, 'load-file-imported', {
                         filename: event.data.filename,
                         empty: events.invoke('scene.empty') as boolean
@@ -1951,6 +2506,7 @@ const registerIframeApi = (events: Events) => {
                 if (collisionMeshSrc) {
                     events.fire('walk.collisionMeshLoad', {
                         url: collisionMeshSrc,
+                        floorY: event.data.collisionMeshFloorY ?? null,
                         requestId: event.data.requestId ?? null,
                         transform: event.data.transform
                     });

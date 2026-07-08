@@ -226,7 +226,9 @@ body.time-trial-game-mode {
     .brush-selection-controls,
     #view-cube-container,
     #mode-toggle,
-    #ui-mode-toggle {
+    #ui-mode-toggle,
+    #boxer-debug-toggle,
+    #walk-height-controls {
         display: none !important;
     }
 
@@ -247,10 +249,10 @@ body.time-trial-game-mode {
     }
 }
 
-#ui-mode-toggle {
+#ui-mode-toggle,
+#boxer-debug-toggle {
     position: absolute;
     top: 20px;
-    right: 20px;
     width: 40px;
     height: 40px;
     border: 0;
@@ -275,6 +277,20 @@ body.time-trial-game-mode {
 
     &.active {
         background: rgba(73, 126, 255, 0.95);
+    }
+}
+
+#ui-mode-toggle {
+    right: 20px;
+}
+
+#boxer-debug-toggle {
+    right: 68px;
+    font-size: 13px;
+    font-weight: 800;
+
+    &:hover {
+        transform: none;
     }
 }
 
