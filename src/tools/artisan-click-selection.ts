@@ -29,7 +29,18 @@ const SEED_NEGATIVE_MIN_DISTANCE_RATIO = 0.18;
 const ARTISAN_CLICK_CONFIG_STORAGE_KEY = 'supersplat.artisanClickSelection.config.v1';
 
 const getSam3BackendUrl = () => {
-    return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;
+    const configured = window.supersplatConfig?.sam3BackendUrl?.trim();
+    if (configured) {
+        return configured;
+    }
+    // Hosted (non-localhost) deploys with no explicit backend target the SAME ORIGIN so SAM3
+    // requests hit the Vercel proxy at /api/sam3/* (forwards server-side to the HTTP EC2). Mirrors
+    // getSam3BackendUrl in artisan-gs-local.ts. Local dev sets SAM3_BACKEND_URL, so this is skipped.
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') {
+        return window.location.origin;
+    }
+    return DEFAULT_SAM3_BACKEND_URL;
 };
 
 const getSam3FetchCredentials = (sam3BackendUrl: string): 'same-origin' | 'include' => {
