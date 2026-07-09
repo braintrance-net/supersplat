@@ -26,11 +26,11 @@ const readBody = async (req) => {
 
 export default async function handler(req, res) {
     try {
-        const parts = req.query?.path;
-        const sub = Array.isArray(parts) ? parts.join('/') : (parts ?? '');
-        const qIdx = req.url.indexOf('?');
-        const qs = qIdx >= 0 ? req.url.slice(qIdx) : '';
-        const upstreamUrl = `${UPSTREAM}/api/sam3/${sub}${qs}`;
+        // Derive the sub-path robustly from req.url (req.query.path is not reliably populated for
+        // catch-all functions across runtimes). req.url may or may not include the /api/sam3 prefix.
+        const parsed = new URL(req.url, 'http://internal');
+        const sub = parsed.pathname.replace(/^\/api\/sam3/, '').replace(/^\/+/, '');
+        const upstreamUrl = `${UPSTREAM}/api/sam3/${sub}${parsed.search}`;
 
         const headers = {};
         for (const [key, value] of Object.entries(req.headers)) {
