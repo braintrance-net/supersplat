@@ -15,7 +15,7 @@
     "main": "index.js",
     "scripts": {
         "build": "rollup -c",
-        "build:board-demo": "cross-env DEFAULT_SPLAT_URL=/static/dev-assets/desk.ply DEFAULT_CAMERA_POSITION=-18.953201293945312,21.82550811767578,0.7397304773330688 DEFAULT_CAMERA_TARGET=1.1438245773315447,14.384140968322754,3.0117335319519043 DEFAULT_CAMERA_FOV=75 DEFAULT_CAMERA_ORTHO=false rollup -c",
+        "build:board-demo": "cross-env DEV_TOOLS=true DEFAULT_SPLAT_URL=/static/dev-assets/desk.ply DEFAULT_CAMERA_POSITION=-18.953201293945312,21.82550811767578,0.7397304773330688 DEFAULT_CAMERA_TARGET=1.1438245773315447,14.384140968322754,3.0117335319519043 DEFAULT_CAMERA_FOV=75 DEFAULT_CAMERA_ORTHO=false rollup -c",
         "watch": "rollup -c -w",
         "serve": "serve dist -C -l 8000",
         "develop": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\"",
