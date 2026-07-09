@@ -26,6 +26,8 @@ const BUILD_TYPE = process.env.BUILD_TYPE || 'release';
 const ENGINE_DIR = path.resolve(`node_modules/playcanvas/build/playcanvas${BUILD_TYPE === 'debug' ? '.dbg' : ''}/src/index.js`);
 const PCUI_DIR = path.resolve('node_modules/@playcanvas/pcui');
 const HREF = process.env.BASE_HREF || '';
+const ASSET_VERSION = process.env.BUILD_ASSET_VERSION || (BUILD_TYPE === 'debug' ? String(Date.now()) : '');
+const BUNDLE_QUERY = ASSET_VERSION ? `?v=${encodeURIComponent(ASSET_VERSION)}` : '';
 
 const parseVec3 = (value) => {
     if (!value) {
@@ -69,6 +71,7 @@ const SUPERSPLAT_CONFIG = JSON.stringify({
     boxerBackendUrl: process.env.BOXER_BACKEND_URL || '',
     boxerGpuDepth: process.env.BOXER_GPU_DEPTH === 'true',
     sam3BackendUrl: process.env.SAM3_BACKEND_URL || '',
+    artisanGsBackendUrl: process.env.ARTISANGS_BACKEND_URL || '',
     sketchfabProxyBaseUrl: process.env.SKETCHFAB_PROXY_BASE_URL || '',
     openAiProxyBaseUrl: process.env.OPENAI_PROXY_BASE_URL || '',
     enableDevTools: process.env.DEV_TOOLS === 'true',
@@ -106,7 +109,8 @@ const application = {
                     transform: (contents, filename) => {
                         return contents.toString()
                         .replace('__BASE_HREF__', HREF)
-                        .replace('__SUPERSPLAT_CONFIG__', SUPERSPLAT_CONFIG);
+                        .replace('__SUPERSPLAT_CONFIG__', SUPERSPLAT_CONFIG)
+                        .replace('__BUNDLE_QUERY__', BUNDLE_QUERY);
                     }
                 },
                 { src: 'src/manifest.json' },
@@ -114,6 +118,7 @@ const application = {
                 { src: 'static/icons', dest: 'static' },
                 { src: 'static/lib', dest: 'static' },
                 { src: 'static/locales', dest: 'static' },
+                { src: 'static/artisan-debug-viewer', dest: 'static' },
                 { src: 'static/dev-assets', dest: 'static' },
                 { src: 'scripts/boxer-evals', dest: 'static', destFilename: 'evals' },
                 { src: 'static/env/VertebraeHDRI_v1_512.png', dest: 'static/env' }
@@ -128,7 +133,9 @@ const application = {
         typescript({
             tsconfig: './tsconfig.json'
         }),
-        resolve(),
+        resolve({
+            browser: true
+        }),
         image({ dom: false }),
         json(),
         scss({

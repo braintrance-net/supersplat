@@ -4,8 +4,11 @@ import { SelectOp } from '../edit-ops';
 import { Events } from '../events';
 import { Scene } from '../scene';
 import { Splat } from '../splat';
+import { rleMaskToArray } from './artisan-selection';
 
 const DEFAULT_SAM3_BACKEND_URL = 'http://3.19.208.185:8000';
+const DEFAULT_SAM3_CLICK_CAPTURE_MAX_SIDE = 960;
+const DEFAULT_SAM3_CLICK_TIMEOUT_MS = 60000;
 
 const getSam3BackendUrl = () => {
     return window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL;
@@ -58,7 +61,10 @@ const maskPngToArray = async (b64: string, width: number, height: number): Promi
     ctx.drawImage(img, 0, 0, width, height);
     const id = ctx.getImageData(0, 0, width, height);
     const out = new Uint8Array(width * height);
-    for (let i = 0, j = 0; i < id.data.length; i += 4, j++) out[j] = id.data[i];
+    for (let i = 0, j = 0; i < id.data.length; i += 4, j++) {
+        const alpha = id.data[i + 3];
+        out[j] = alpha < 255 ? alpha : Math.max(id.data[i], id.data[i + 1], id.data[i + 2]);
+    }
     return out;
 };
 
@@ -84,6 +90,9 @@ type MaskProjectionMode = 'connected' | 'complete';
 type Sam3ImageSize = { width: number; height: number };
 type Sam3SegmentResponse = {
     mask?: string;
+    rle_mask?: string;
+    rle_encoding?: string;
+    rle_run_count?: number;
     width?: number;
     height?: number;
     job_id?: string;
@@ -111,6 +120,49 @@ const normalizePromptPoint = (point: Sam3PromptPoint, imageSize: Sam3ImageSize):
         Math.min(1, Math.max(0, point.click_xy[0] / width)),
         Math.min(1, Math.max(0, point.click_xy[1] / height))
     ];
+};
+
+const positiveIntegerUrlParam = (name: string) => {
+    const value = new URLSearchParams(window.location.search).get(name);
+    if (!value) {
+        return undefined;
+    }
+
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : undefined;
+};
+
+const resolveSam3ClickTimeoutMs = () => {
+    const value = positiveIntegerUrlParam('sam3ClickTimeoutMs') ??
+        positiveIntegerUrlParam('sam3TimeoutMs') ??
+        DEFAULT_SAM3_CLICK_TIMEOUT_MS;
+    return Math.max(1000, Math.min(180000, value));
+};
+
+const resolveSam3CaptureSize = (canvasWidth: number, canvasHeight: number) => {
+    const requestedMaxSide = positiveIntegerUrlParam('sam3ClickMaxSide') ??
+        positiveIntegerUrlParam('sam3MaxSide') ??
+        DEFAULT_SAM3_CLICK_CAPTURE_MAX_SIDE;
+    const maxSide = Math.max(256, Math.min(1920, requestedMaxSide));
+    const scale = Math.min(1, maxSide / Math.max(1, canvasWidth, canvasHeight));
+    return {
+        width: Math.max(1, Math.round(canvasWidth * scale)),
+        height: Math.max(1, Math.round(canvasHeight * scale)),
+        scale
+    };
+};
+
+const decodeSam3Mask = async (data: Sam3SegmentResponse) => {
+    if (data.width === undefined || data.height === undefined) {
+        throw new Error('SAM3 segmentation response missing mask dimensions');
+    }
+    if (data.rle_mask) {
+        return rleMaskToArray(data.rle_mask, data.width, data.height, data.rle_run_count, data.rle_encoding);
+    }
+    if (data.mask) {
+        return maskPngToArray(data.mask, data.width, data.height);
+    }
+    throw new Error('SAM3 segmentation response missing mask data');
 };
 
 const collectMaskCandidates = (
@@ -301,7 +353,8 @@ class Sam3Selection {
                 points?: Sam3PromptPoint[];
                 image_size: Sam3ImageSize;
             },
-            signal: AbortSignal
+            signal: AbortSignal,
+            timeoutMs = resolveSam3ClickTimeoutMs()
         ): Promise<{ ok: true; data: Sam3SegmentResponse } | { ok: false; status: number; error: string; data: Sam3SegmentResponse }> => {
             const points = payload.points ?? [{ click_xy: payload.click_xy, label: payload.label }];
             const refineBody = {
@@ -317,21 +370,29 @@ class Sam3Selection {
                 labels: points.map(point => point.label)
             };
 
-            let res = await fetch(`${sam3BackendUrl}/api/sam3/refine`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: getSam3FetchCredentials(sam3BackendUrl),
-                body: JSON.stringify(refineBody),
-                signal
-            });
-            if (res.status === 404 || res.status === 405 || res.status === 501) {
-                res = await fetch(`${sam3BackendUrl}/api/sam3/segment`, {
+            const fetchJson = (endpoint: string, body: unknown, compactMask: boolean) => {
+                const requestUrl = new URL(endpoint, sam3BackendUrl);
+                requestUrl.searchParams.set('timeout_ms', String(timeoutMs));
+                const headers: Record<string, string> = {
+                    'Content-Type': 'application/json',
+                    'X-SAM3-Timeout-Ms': String(timeoutMs)
+                };
+                if (compactMask) {
+                    headers['X-SAM3-Mask-Encoding'] = 'rle-compact';
+                    headers['X-SAM3-Compact-Mask'] = '1';
+                }
+                return fetch(requestUrl.toString(), {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers,
                     credentials: getSam3FetchCredentials(sam3BackendUrl),
-                    body: JSON.stringify(payload),
+                    body: JSON.stringify(body),
                     signal
                 });
+            };
+
+            let res = await fetchJson('/api/sam3/refine', refineBody, true);
+            if (res.status === 404 || res.status === 405 || res.status === 501) {
+                res = await fetchJson('/api/sam3/segment', payload, false);
             }
             const data = await res.json().catch(() => ({})) as Sam3SegmentResponse;
             if (!res.ok) {
@@ -458,14 +519,21 @@ class Sam3Selection {
             // Optimistically show the radial menu at the click point while SAM3 processes
             events.fire('sam3.clickStarted', { x: clickX, y: clickY });
             try {
-                const w = canvas.clientWidth;
-                const h = canvas.clientHeight;
+                const canvasW = canvas.clientWidth;
+                const canvasH = canvas.clientHeight;
+                const captureSize = resolveSam3CaptureSize(canvasW, canvasH);
+                const w = captureSize.width;
+                const h = captureSize.height;
                 const cam = scene.camera.camera;
                 const intr = extractIntrinsics(cam, w, h);
                 const modifierOp: Sam3SelectionMode | null = e.shiftKey ? 'add' : ((e.ctrlKey || e.metaKey) ? 'remove' : null);
                 const op = modifierOp ?? selectionMode;
-                const click_xy: [number, number] = [clickX, clickY];
+                const click_xy: [number, number] = [
+                    Math.round(clickX * captureSize.scale),
+                    Math.round(clickY * captureSize.scale)
+                ];
                 const viewKey = buildViewKey(scene, splat, w, h);
+                const timeoutMs = resolveSam3ClickTimeoutMs();
 
                 const hasPromptSession = promptSession !== null && promptSession.points.length > 0;
                 const canRefinePrompt = hasPromptSession && promptSession.viewKey === viewKey;
@@ -499,7 +567,7 @@ class Sam3Selection {
                     requestPoints = nextPromptSession.points;
                 }
 
-                console.log(`[SAM3] click=(${clickX},${clickY}) op=${op} applyOp=${outputOp} promptPoints=${requestPoints.length}`);
+                console.log(`[SAM3] click=(${clickX},${clickY}) capture=(${click_xy[0]},${click_xy[1]}) ${w}x${h} op=${op} applyOp=${outputOp} promptPoints=${requestPoints.length} timeout=${timeoutMs}ms`);
 
                 const sam3BackendUrl = getSam3BackendUrl();
                 const segmentResult = await fetchSegment(sam3BackendUrl, {
@@ -509,7 +577,7 @@ class Sam3Selection {
                     job_id: requestJobId,
                     points: requestPoints,
                     image_size: { width: w, height: h }
-                }, abort.signal);
+                }, abort.signal, timeoutMs);
 
                 if (!this.active) return;
                 if (segmentResult.ok === false) {
@@ -525,7 +593,7 @@ class Sam3Selection {
                     return;
                 }
 
-                if (!data.mask || data.width === undefined || data.height === undefined) {
+                if ((!data.mask && !data.rle_mask) || data.width === undefined || data.height === undefined) {
                     console.error('[SAM3] segmentation response missing mask data');
                     events.fire('toast', 'SAM3 backend error', 'error');
                     return;
@@ -540,7 +608,7 @@ class Sam3Selection {
                     console.log(`[SAM3] prompt refinement applied points=${requestPoints.length}`);
                 }
 
-                const mask = await maskPngToArray(data.mask, data.width, data.height);
+                const mask = await decodeSam3Mask(data);
                 if (!this.active) return;
 
                 processMask(
@@ -552,8 +620,8 @@ class Sam3Selection {
                     h,
                     intr,
                     outputOp,
-                    clickX,
-                    clickY,
+                    click_xy[0],
+                    click_xy[1],
                     requestPoints.length > 1 ? 'complete' : 'connected'
                 );
             } catch (err: any) {

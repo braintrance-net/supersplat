@@ -28,6 +28,10 @@ const vecb = new Vec3();
 const selectionRemovePreviewClr = [1, 0.12, 0.08, 0.95];
 const selectionIntersectPreviewClr = [1, 0.82, 0.1, 0.96];
 
+type SplatUpdateStateOptions = {
+    updateBounds?: boolean;
+};
+
 const boundingPoints =
     [-1, 1].map((x) => {
         return [-1, 1].map((y) => {
@@ -52,6 +56,7 @@ class Splat extends Element {
     changedCounter = 0;
     stateTexture: Texture;
     revealTexture: Texture;
+    artisanConfidenceTexture: Texture;
     transformTexture: Texture;
     selectionBoundStorage: BoundingBox;
     localBoundStorage: BoundingBox;
@@ -67,6 +72,8 @@ class Splat extends Element {
     revealCenter = new Vec3();
     revealRadius = 1;
     revealStartTime = 0;
+    artisanConfidenceActive = false;
+    artisanConfidenceThreshold = 0;
 
     _name = '';
     _tintClr = new Color(1, 1, 1);
@@ -143,6 +150,7 @@ class Splat extends Element {
         // create the state texture
         this.stateTexture = createTexture('splatState', PIXELFORMAT_R8);
         this.revealTexture = createTexture('revealMask', PIXELFORMAT_R8);
+        this.artisanConfidenceTexture = createTexture('artisanConfidence', PIXELFORMAT_R8);
         this.transformTexture = createTexture('splatTransform', PIXELFORMAT_R16U);
 
         // create the transform palette
@@ -158,6 +166,7 @@ class Splat extends Element {
             material.setDefine('SH_BANDS', `${Math.min(bands, (instance.resource as GSplatResource).shBands)}`);
             material.setParameter('splatState', this.stateTexture);
             material.setParameter('revealMask', this.revealTexture);
+            material.setParameter('artisanConfidence', this.artisanConfidenceTexture);
             material.setParameter('splatTransform', this.transformTexture);
             material.update();
         };
@@ -183,7 +192,7 @@ class Splat extends Element {
         this.asset.unload();
     }
 
-    async updateState(changedState = State.selected) {
+    async updateState(changedState = State.selected, options: SplatUpdateStateOptions = {}) {
         const state = this.splatData.getProp('state') as Uint8Array;
 
         // write state data to gpu texture
@@ -214,7 +223,7 @@ class Splat extends Element {
         // handle splats being added or removed
         if (changedState & State.deleted) {
             await this.updateSorting();
-        } else {
+        } else if (options.updateBounds !== false) {
             await this.updateLocalBounds();
         }
 
@@ -395,6 +404,8 @@ class Splat extends Element {
         material.setParameter('revealTime', this.revealTime);
         material.setParameter('revealCenter', [this.revealCenter.x, this.revealCenter.y, this.revealCenter.z]);
         material.setParameter('revealRadius', this.revealRadius);
+        material.setParameter('artisanConfidenceActive', this.artisanConfidenceActive ? 1 : 0);
+        material.setParameter('artisanConfidenceThreshold', this.artisanConfidenceThreshold);
 
         if (this.visible && selected) {
             // render bounding box
@@ -433,6 +444,23 @@ class Splat extends Element {
         this.revealTexture.unlock();
     }
 
+    setArtisanConfidencePreview(confidence?: Float32Array | null, threshold = 0) {
+        const data = this.artisanConfidenceTexture.lock() as Uint8Array;
+        data.fill(0);
+
+        if (confidence) {
+            const limit = Math.min(data.length, confidence.length);
+            for (let i = 0; i < limit; i++) {
+                data[i] = Math.max(0, Math.min(255, Math.round(confidence[i] * 255)));
+            }
+        }
+
+        this.artisanConfidenceTexture.unlock();
+        this.artisanConfidenceActive = !!confidence;
+        this.artisanConfidenceThreshold = Math.max(0, Math.min(1, threshold));
+        this.scene.forceRender = true;
+    }
+
     focalPoint() {
         // GSplatData has a function for calculating an weighted average of the splat positions
         // to get a focal point for the camera, but we use bound center instead
@@ -458,8 +486,31 @@ class Splat extends Element {
 
     // calculate both selection and local bounds (async, callers must await)
     async updateLocalBounds(): Promise<void> {
-        await this.scene.dataProcessor.calcBound(this, this.selectionBoundStorage, this.localBoundStorage);
+        try {
+            await this.scene.dataProcessor.calcBound(this, this.selectionBoundStorage, this.localBoundStorage);
+        } catch (error) {
+            console.warn('[Splat] GPU bounds readback failed; falling back to CPU bounds', error);
+            this.updateLocalBoundsCpuFallback();
+        }
         this.updateWorldBound();
+    }
+
+    private updateLocalBoundsCpuFallback() {
+        const state = this.splatData.getProp('state') as Uint8Array | undefined;
+        const live = (index: number) => !state || (state[index] & State.deleted) === 0;
+        const selected = (index: number) => !!state && (state[index] & State.selected) !== 0 && (state[index] & State.deleted) === 0;
+
+        const setEmpty = (bound: BoundingBox) => {
+            bound.center.set(0, 0, 0);
+            bound.halfExtents.set(0, 0, 0);
+        };
+
+        if (!this.splatData.calcAabb(this.localBoundStorage, live)) {
+            setEmpty(this.localBoundStorage);
+        }
+        if (!this.splatData.calcAabb(this.selectionBoundStorage, selected)) {
+            setEmpty(this.selectionBoundStorage);
+        }
     }
 
     // update world bound from local bound (synchronous)
@@ -637,3 +688,4 @@ class Splat extends Element {
 }
 
 export { Splat };
+export type { SplatUpdateStateOptions };

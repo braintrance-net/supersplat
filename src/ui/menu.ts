@@ -295,6 +295,16 @@ class Menu extends Container {
                 });
             }
         }, {
+            text: 'Dev: Show Voxel Mesh',
+            icon: 'E186',
+            isVisible: () => events.invoke('config.devToolsEnabled') && !events.invoke('walk.collisionMeshVisualize'),
+            onSelect: () => events.fire('walk.collisionMeshVisualize', true)
+        }, {
+            text: 'Dev: Hide Voxel Mesh',
+            icon: 'E186',
+            isVisible: () => events.invoke('config.devToolsEnabled') && events.invoke('walk.collisionMeshVisualize'),
+            onSelect: () => events.fire('walk.collisionMeshVisualize', false)
+        }, {
             // separator
         }, {
             text: localize('menu.help.user-guide'),

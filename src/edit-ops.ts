@@ -2,14 +2,14 @@ import { Color, Mat4 } from 'playcanvas';
 
 import { Pivot } from './pivot';
 import { Scene } from './scene';
-import { Splat } from './splat';
+import { Splat, type SplatUpdateStateOptions } from './splat';
 import { State } from './splat-state';
 import { Transform } from './transform';
 
 interface EditOp {
     name: string;
-    do(): void | Promise<void>;
-    undo(): void | Promise<void>;
+    do(options?: SplatUpdateStateOptions): void | Promise<void>;
+    undo(options?: SplatUpdateStateOptions): void | Promise<void>;
     destroy?(): void;
 }
 
@@ -55,24 +55,24 @@ class StateOp {
         this.updateFlags = updateFlags;
     }
 
-    async do() {
+    async do(options: SplatUpdateStateOptions = {}) {
         const splatData = this.splat.splatData;
         const state = splatData.getProp('state') as Uint8Array;
         for (let i = 0; i < this.indices.length; ++i) {
             const idx = this.indices[i];
             state[idx] = this.doIt(state[idx]);
         }
-        await this.splat.updateState(this.updateFlags);
+        await this.splat.updateState(this.updateFlags, options);
     }
 
-    async undo() {
+    async undo(options: SplatUpdateStateOptions = {}) {
         const splatData = this.splat.splatData;
         const state = splatData.getProp('state') as Uint8Array;
         for (let i = 0; i < this.indices.length; ++i) {
             const idx = this.indices[i];
             state[idx] = this.undoIt(state[idx]);
         }
-        await this.splat.updateState(this.updateFlags);
+        await this.splat.updateState(this.updateFlags, options);
     }
 
     destroy() {

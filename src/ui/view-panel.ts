@@ -321,6 +321,26 @@ class ViewPanel extends Container {
         showBoundRow.append(showBoundLabel);
         showBoundRow.append(showBoundToggle);
 
+        // voxel mesh
+
+        const voxelMeshRow = new Container({
+            class: 'view-panel-row'
+        });
+
+        const voxelMeshLabel = new Label({
+            text: 'Voxel Mesh',
+            class: 'view-panel-row-label'
+        });
+
+        const voxelMeshToggle = new BooleanInput({
+            type: 'toggle',
+            class: 'view-panel-row-toggle',
+            value: false
+        });
+
+        voxelMeshRow.append(voxelMeshLabel);
+        voxelMeshRow.append(voxelMeshToggle);
+
         this.append(header);
         this.append(clrRow);
         this.append(tonemappingRow);
@@ -333,6 +353,7 @@ class ViewPanel extends Container {
         this.append(selectedSplatsOverlayRow);
         this.append(showGridRow);
         this.append(showBoundRow);
+        this.append(voxelMeshRow);
 
         // handle panel visibility
 
@@ -340,6 +361,9 @@ class ViewPanel extends Container {
             if (visible === this.hidden) {
                 this.hidden = !visible;
                 events.fire('viewPanel.visible', visible);
+                if (visible) {
+                    voxelMeshToggle.value = Boolean(events.invoke('walk.collisionMeshVisualize'));
+                }
             }
         };
 
@@ -440,6 +464,16 @@ class ViewPanel extends Container {
 
         showBoundToggle.on('change', () => {
             events.fire('camera.setBound', showBoundToggle.value);
+        });
+
+        // voxel mesh
+
+        events.on('walk.collisionMeshVisualize', (visible: boolean) => {
+            voxelMeshToggle.value = Boolean(visible);
+        });
+
+        voxelMeshToggle.on('change', () => {
+            events.fire('walk.collisionMeshVisualize', voxelMeshToggle.value);
         });
 
         // background color

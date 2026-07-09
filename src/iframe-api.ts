@@ -212,12 +212,14 @@ interface Sam3dConfigMessage {
     type: typeof SAM3D_CONFIG;
     proxyBaseUrl: string;
     semanticScanUrl?: string;
+    artisanGsBackendUrl?: string;
 }
 
 interface ApiConfigMessage {
     type: typeof API_CONFIG;
     proxyBaseUrl?: string;
     sam3BackendUrl?: string;
+    artisanGsBackendUrl?: string;
     semanticScanUrl?: string;
     boxerBackendUrl?: string;
     sketchfabApiToken?: string;
@@ -508,7 +510,9 @@ const isSam3dConfigMessage = (data: any): data is Sam3dConfigMessage => {
         data &&
         typeof data === 'object' &&
         data.type === SAM3D_CONFIG &&
-        typeof data.proxyBaseUrl === 'string'
+        typeof data.proxyBaseUrl === 'string' &&
+        (data.semanticScanUrl === undefined || typeof data.semanticScanUrl === 'string') &&
+        (data.artisanGsBackendUrl === undefined || typeof data.artisanGsBackendUrl === 'string')
     );
 };
 
@@ -519,6 +523,7 @@ const isApiConfigMessage = (data: any): data is ApiConfigMessage => {
         data.type === API_CONFIG &&
         (data.proxyBaseUrl === undefined || typeof data.proxyBaseUrl === 'string') &&
         (data.sam3BackendUrl === undefined || typeof data.sam3BackendUrl === 'string') &&
+        (data.artisanGsBackendUrl === undefined || typeof data.artisanGsBackendUrl === 'string') &&
         (data.semanticScanUrl === undefined || typeof data.semanticScanUrl === 'string') &&
         (data.boxerBackendUrl === undefined || typeof data.boxerBackendUrl === 'string') &&
         (data.sketchfabApiToken === undefined || typeof data.sketchfabApiToken === 'string')
@@ -760,7 +765,7 @@ const normalizeUrl = (value: string, base: string) => new URL(value, base).href.
 
 const applyApiConfig = (
     event: MessageEvent,
-    values: { proxyBaseUrl?: string, sam3BackendUrl?: string, semanticScanUrl?: string, boxerBackendUrl?: string, sketchfabApiToken?: string }
+    values: { proxyBaseUrl?: string, sam3BackendUrl?: string, artisanGsBackendUrl?: string, semanticScanUrl?: string, boxerBackendUrl?: string, sketchfabApiToken?: string }
 ) => {
     try {
         const config = (window as any).supersplatConfig ?? {};
@@ -770,10 +775,15 @@ const applyApiConfig = (
         if (proxyOrigin) {
             nextConfig.sam3BackendUrl = proxyOrigin;
             nextConfig.semanticScanBackendUrl = proxyOrigin;
+            nextConfig.artisanGsBackendUrl = proxyOrigin;
         }
 
         if (values.sam3BackendUrl) {
             nextConfig.sam3BackendUrl = normalizeOrigin(values.sam3BackendUrl, event.origin);
+        }
+
+        if (values.artisanGsBackendUrl) {
+            nextConfig.artisanGsBackendUrl = normalizeOrigin(values.artisanGsBackendUrl, event.origin);
         }
 
         if (values.semanticScanUrl) {

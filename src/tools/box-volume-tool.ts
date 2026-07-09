@@ -199,6 +199,58 @@ class BoxVolumeTool {
             }) as Promise<unknown>;
         };
 
+        const currentEvalTarget = () => ({
+            ...currentBox(),
+            ready: phase === 'placed',
+            updated_at: new Date().toISOString(),
+            source: 'boxVolume.currentBox',
+            touched: phase === 'placed',
+            confirmed: phase === 'placed',
+            confirmed_at: phase === 'placed' ? new Date().toISOString() : null,
+            changed_from_initial: phase === 'placed',
+            active,
+            synthetic: false
+        });
+
+        try {
+            events.function('boxVolume.currentBox', currentEvalTarget);
+        } catch (err) {
+            console.warn('[BoxVolume] boxVolume.currentBox was already registered', err);
+        }
+        try {
+            events.function('boxVolume.hasCurrentBox', () => phase === 'placed');
+        } catch (err) {
+            console.warn('[BoxVolume] boxVolume.hasCurrentBox was already registered', err);
+        }
+        try {
+            events.function('boxVolume.state', () => ({
+                active,
+                phase,
+                edit_mode: editMode,
+                box_added: boxAdded,
+                current_box: currentEvalTarget()
+            }));
+        } catch (err) {
+            console.warn('[BoxVolume] boxVolume.state was already registered', err);
+        }
+
+        const copyJson = async (payload: unknown) => {
+            const text = JSON.stringify(payload, null, 2);
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch {
+                const input = document.createElement('textarea');
+                input.value = text;
+                input.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+                document.body.append(input);
+                input.select();
+                const copied = document.execCommand('copy');
+                input.remove();
+                return copied;
+            }
+        };
+
         const applySelection = (op: 'set' | 'add' | 'remove') => {
             selectCurrentBox(op)
             .then(() => {
@@ -340,12 +392,54 @@ class BoxVolumeTool {
         });
         saveTargetButton.dom.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
-            events.invoke('boxer.setStickyEvalTarget', currentBox());
-            events.fire('toast', 'Saved box-volume target for Boxer evals', 'info');
         });
-        copyEvalButton.dom.addEventListener('pointerdown', async (e) => {
+        saveTargetButton.dom.addEventListener('click', (e) => {
             e.stopPropagation();
-            await events.invoke('boxer.copyEvalCase', currentBox());
+            const target = currentEvalTarget();
+            if (!target.ready) {
+                events.fire('toast', 'Finish the 4-click volume before saving the eval target', 'warning');
+                return;
+            }
+            try {
+                events.invoke('boxer.setStickyEvalTarget', target);
+            } catch {
+                // Boxer is optional for Artisan eval exports.
+            }
+            try {
+                events.invoke('artisan.local.setEvalTarget', {
+                    target,
+                    label: 'Box Volume eval target'
+                });
+            } catch {
+                events.fire('toast', 'Saved box-volume target for Boxer evals', 'info');
+            }
+        });
+        copyEvalButton.dom.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+        });
+        copyEvalButton.dom.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const target = currentEvalTarget();
+            if (!target.ready) {
+                events.fire('toast', 'Finish the 4-click volume before copying an eval', 'warning');
+                return;
+            }
+            try {
+                const payload = events.invoke('artisan.local.exportEvalCase', {
+                    target,
+                    includeReview: false,
+                    primarySelection: 'target_bounded_posterior'
+                }) as { ok?: boolean; error?: string } | null;
+                if (payload?.ok) {
+                    const copied = await copyJson(payload);
+                    events.fire('toast', copied ? 'Copied Artisan click eval case' : 'Could not copy Artisan eval case', copied ? 'info' : 'warning');
+                    return;
+                }
+            } catch {
+                // Artisan eval export is optional; fall back to Boxer below.
+            }
+
+            await events.invoke('boxer.copyEvalCase', target);
         });
 
         lenX.on('change', () => {

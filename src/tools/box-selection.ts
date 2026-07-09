@@ -15,6 +15,31 @@ class BoxSelection {
 
     constructor(events: Events, scene: Scene, canvasContainer: Container) {
         const box = new BoxShape();
+        let touched = false;
+        let synthetic = false;
+        let confirmedAt: string | null = null;
+        let confirmationAttemptedAt: string | null = null;
+        let updatedAt: string | null = null;
+        let suppressUserEditTracking = false;
+        const initialPosition = box.pivot.getPosition().clone();
+        const initialDimensions: [number, number, number] = [box.lenX, box.lenY, box.lenZ];
+
+        const markTouched = () => {
+            touched = true;
+            if (!suppressUserEditTracking) {
+                synthetic = false;
+            }
+            updatedAt = new Date().toISOString();
+        };
+
+        const hasChangedFromInitial = (position: Vec3) => (
+            Math.abs(position.x - initialPosition.x) > 1e-5 ||
+            Math.abs(position.y - initialPosition.y) > 1e-5 ||
+            Math.abs(position.z - initialPosition.z) > 1e-5 ||
+            Math.abs(box.lenX - initialDimensions[0]) > 1e-5 ||
+            Math.abs(box.lenY - initialDimensions[1]) > 1e-5 ||
+            Math.abs(box.lenZ - initialDimensions[2]) > 1e-5
+        );
 
         const gizmo = new TranslateGizmo(scene.camera.camera, scene.gizmoLayer);
 
@@ -23,11 +48,13 @@ class BoxSelection {
         });
 
         gizmo.on('transform:move', () => {
+            markTouched();
             box.moved();
             queueSelectionRefresh();
         });
 
         gizmo.on('transform:end', () => {
+            markTouched();
             box.moved();
             queueSelectionRefresh(true, true);
         });
@@ -101,6 +128,8 @@ class BoxSelection {
 
         const currentBox = () => {
             const p = box.pivot.getPosition();
+            const changedFromInitial = hasChangedFromInitial(p);
+            const ready = changedFromInitial;
             return {
                 type: 'axis_aligned_box',
                 center: [p.x, p.y, p.z],
@@ -109,8 +138,100 @@ class BoxSelection {
                     [1, 0, 0],
                     [0, 1, 0],
                     [0, 0, 1]
-                ]
+                ],
+                ready,
+                updated_at: updatedAt,
+                touched,
+                confirmed: ready && !!confirmedAt,
+                confirmed_at: ready ? confirmedAt : null,
+                confirmation_attempted_at: confirmationAttemptedAt,
+                changed_from_initial: changedFromInitial,
+                active: this.active,
+                synthetic,
+                source: 'boxSelection.currentBox'
             };
+        };
+
+        const confirmEvalTarget = () => {
+            const now = new Date().toISOString();
+            confirmationAttemptedAt = now;
+            updatedAt = now;
+            if (hasChangedFromInitial(box.pivot.getPosition())) {
+                confirmedAt = now;
+                touched = true;
+            }
+            return currentBox();
+        };
+
+        const setCurrentBoxTarget = (input: unknown) => {
+            const record = input as {
+                target?: unknown;
+                center?: unknown;
+                dimensions?: unknown;
+                synthetic?: unknown;
+            } | null | undefined;
+            const target = (record?.target ?? input) as {
+                center?: unknown;
+                dimensions?: unknown;
+                synthetic?: unknown;
+            } | null | undefined;
+            const center = target?.center;
+            const dimensions = target?.dimensions;
+            if (!Array.isArray(center) || center.length !== 3 ||
+                !Array.isArray(dimensions) || dimensions.length !== 3) {
+                return { ok: false, error: 'Expected an axis-aligned eval target with center and dimensions.' };
+            }
+
+            const nextCenter = center.map(Number);
+            const nextDimensions = dimensions.map(Number);
+            if (!nextCenter.every(Number.isFinite) ||
+                !nextDimensions.every(value => Number.isFinite(value) && value > 0)) {
+                return { ok: false, error: 'Eval target center or dimensions are invalid.' };
+            }
+
+            suppressUserEditTracking = true;
+            try {
+                box.pivot.setPosition(nextCenter[0], nextCenter[1], nextCenter[2]);
+                box.lenX = nextDimensions[0];
+                box.lenY = nextDimensions[1];
+                box.lenZ = nextDimensions[2];
+                lenX.value = box.lenX;
+                lenY.value = box.lenY;
+                lenZ.value = box.lenZ;
+                box.moved();
+            } finally {
+                suppressUserEditTracking = false;
+            }
+
+            synthetic = (target?.synthetic ?? record?.synthetic) === true;
+            touched = !synthetic;
+            confirmedAt = null;
+            confirmationAttemptedAt = null;
+            updatedAt = new Date().toISOString();
+            scene.forceRender = true;
+            if (this.active) {
+                attachActiveGizmo();
+                queueSelectionRefresh(true);
+            }
+
+            return { ok: true, target: currentBox() };
+        };
+
+        const copyJson = async (payload: unknown) => {
+            const text = JSON.stringify(payload, null, 2);
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch {
+                const input = document.createElement('textarea');
+                input.value = text;
+                input.style.cssText = 'position:fixed;left:-9999px;top:-9999px';
+                document.body.append(input);
+                input.select();
+                const copied = document.execCommand('copy');
+                input.remove();
+                return copied;
+            }
         };
 
         const selectCurrentBox = (op: 'set' | 'add' | 'remove' = 'set', live = false) => {
@@ -123,6 +244,7 @@ class BoxSelection {
         };
 
         const apply = (op: 'set' | 'add' | 'remove') => {
+            markTouched();
             selectCurrentBox(op)
             .then(() => {
                 events.fire('selection.commit', { source: 'boxSelection', action: op });
@@ -356,6 +478,7 @@ class BoxSelection {
                 if (!locked) return;
                 dragFaceAlongAxis(locked, o, d);
             }
+            markTouched();
             box.moved();
             scene.forceRender = true;
             updateResizeHandles();
@@ -478,13 +601,62 @@ class BoxSelection {
         });
         saveTargetButton.dom.addEventListener('pointerdown', (e) => {
             e.stopPropagation();
-            events.invoke('boxer.setStickyEvalTarget', currentBox());
         });
-        copyEvalButton.dom.addEventListener('pointerdown', async (e) => {
+        saveTargetButton.dom.addEventListener('click', (e) => {
             e.stopPropagation();
-            await events.invoke('boxer.copyEvalCase', currentBox());
+            const target = confirmEvalTarget();
+            if (!target.ready) {
+                events.fire('toast', 'Move or resize the eval box around the object before saving it', 'warning');
+                return;
+            }
+            if (target.synthetic) {
+                events.fire('toast', 'Adjust the prefilled eval box before saving it as a benchmark target', 'warning');
+                return;
+            }
+            try {
+                events.invoke('boxer.setStickyEvalTarget', target);
+            } catch {
+                // Boxer is optional for Artisan eval exports.
+            }
+            try {
+                events.invoke('artisan.local.setEvalTarget', target);
+            } catch {
+                // ArtisanGS is optional in some editor builds.
+            }
+        });
+        copyEvalButton.dom.addEventListener('pointerdown', (e) => {
+            e.stopPropagation();
+        });
+        copyEvalButton.dom.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const target = confirmEvalTarget();
+            if (!target.ready) {
+                events.fire('toast', 'Move or resize the eval box around the object before copying an eval', 'warning');
+                return;
+            }
+            if (target.synthetic) {
+                events.fire('toast', 'Adjust the prefilled eval box before copying an eval', 'warning');
+                return;
+            }
+            try {
+                const payload = events.invoke('artisan.local.exportEvalCase', {
+                    target,
+                    includeReview: false,
+                    primarySelection: 'target_bounded_posterior'
+                }) as { ok?: boolean; error?: string } | null;
+                if (payload?.ok) {
+                    const copied = await copyJson(payload);
+                    events.fire('toast', copied ? 'Copied Artisan click eval case' : 'Could not copy Artisan eval case', copied ? 'info' : 'warning');
+                    return;
+                }
+            } catch {
+                // Artisan eval export is optional; fall back to Boxer below.
+            }
+
+            await events.invoke('boxer.copyEvalCase', target);
         });
         const resizeFromLowSide = (axis: 'x' | 'y' | 'z', nextLength: number) => {
+            markTouched();
             const previousLength = axis === 'x' ? box.lenX : (axis === 'y' ? box.lenY : box.lenZ);
             const delta = nextLength - previousLength;
             const position = box.pivot.getPosition().clone();
@@ -514,6 +686,7 @@ class BoxSelection {
 
         events.on('camera.focalPointPicked', (details: { splat: Splat, position: Vec3 }) => {
             if (this.active) {
+                markTouched();
                 box.pivot.setPosition(details.position);
                 attachActiveGizmo();
             }
@@ -526,8 +699,48 @@ class BoxSelection {
         }
 
         try {
+            events.function('boxSelection.confirmEvalTarget', confirmEvalTarget);
+        } catch (err) {
+            console.warn('[BoxSelection] boxSelection.confirmEvalTarget was already registered', err);
+        }
+
+        try {
+            events.function('boxSelection.setCurrentBoxTarget', setCurrentBoxTarget);
+        } catch (err) {
+            console.warn('[BoxSelection] boxSelection.setCurrentBoxTarget was already registered', err);
+        }
+
+        try {
+            events.function('boxSelection.hasCurrentBox', () => {
+                return currentBox().ready;
+            });
+        } catch (err) {
+            console.warn('[BoxSelection] boxSelection.hasCurrentBox was already registered', err);
+        }
+
+        try {
+            events.function('boxSelection.state', () => {
+                const target = currentBox();
+                return {
+                    active: this.active,
+                    touched,
+                    confirmed: target.confirmed,
+                    confirmed_at: target.confirmed_at,
+                    confirmation_attempted_at: target.confirmation_attempted_at,
+                    changed_from_initial: target.changed_from_initial,
+                    ready: target.ready,
+                    updated_at: updatedAt,
+                    target
+                };
+            });
+        } catch (err) {
+            console.warn('[BoxSelection] boxSelection.state was already registered', err);
+        }
+
+        try {
             // seed the manual box from an external source (eval case editor)
             events.function('boxSelection.setBox', (next: { center: [number, number, number]; dimensions: [number, number, number] }) => {
+                suppressUserEditTracking = true;
                 box.pivot.setPosition(new Vec3(next.center[0], next.center[1], next.center[2]));
                 box.lenX = Math.max(0.01, next.dimensions[0]);
                 box.lenY = Math.max(0.01, next.dimensions[1]);
@@ -536,6 +749,10 @@ class BoxSelection {
                 lenY.value = box.lenY;
                 lenZ.value = box.lenZ;
                 box.moved();
+                suppressUserEditTracking = false;
+                synthetic = false;
+                touched = true;
+                updatedAt = new Date().toISOString();
                 if (this.active) {
                     attachActiveGizmo();
                     queueSelectionRefresh(true);

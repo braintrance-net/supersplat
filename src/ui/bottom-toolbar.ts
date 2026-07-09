@@ -5,6 +5,8 @@ import { ShortcutManager } from '../shortcut-manager';
 import { localize } from './localization';
 import assetBrowserSvg from './svg/asset-browser.svg';
 import redoSvg from './svg/redo.svg';
+import artisanBrushSvg from './svg/select-artisan-brush.svg';
+import artisanClickSvg from './svg/select-artisan-click.svg';
 import boxVolumeSvg from './svg/select-box-volume.svg';
 import boxerSvg from './svg/select-boxer.svg';
 import brushSvg from './svg/select-brush.svg';
@@ -137,6 +139,12 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const artisan = new Button({
+            id: 'bottom-toolbar-artisan',
+            class: 'bottom-toolbar-tool'
+        });
+        artisan.dom.classList.add('bottom-toolbar-variant-tool');
+
         const boxer = new Button({
             id: 'bottom-toolbar-boxer',
             class: 'bottom-toolbar-tool'
@@ -192,6 +200,30 @@ class BottomToolbar extends Container {
         const samModeWrap = document.createElement('div');
         samModeWrap.id = 'sam3-mode-wrap';
         samModeWrap.className = 'hidden';
+
+        const artisanSubmenuWrap = document.createElement('div');
+        artisanSubmenuWrap.id = 'artisan-submenu-wrap';
+        artisanSubmenuWrap.className = 'hidden';
+        artisanSubmenuWrap.addEventListener('pointerdown', event => event.stopPropagation());
+        artisanSubmenuWrap.addEventListener('pointerup', event => event.stopPropagation());
+        artisanSubmenuWrap.addEventListener('click', event => event.stopPropagation());
+
+        const createArtisanSubmenuButton = (label: string, svgString: string | null, onClick: () => void) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'artisan-submenu-button';
+            if (svgString) {
+                button.appendChild(createSvg(svgString));
+            }
+            const labelText = document.createElement('span');
+            labelText.textContent = label;
+            button.appendChild(labelText);
+            button.addEventListener('click', (event) => {
+                event.stopPropagation();
+                onClick();
+            });
+            return button;
+        };
 
         const samModeButtons = [
             { mode: 'set', label: 'New' },
@@ -265,6 +297,8 @@ class BottomToolbar extends Container {
 
         normal.dom.appendChild(createSvg(normalSvg));
         touch.dom.appendChild(createSvg(touchSvg));
+        artisan.dom.appendChild(createSvg(artisanClickSvg));
+        addVariantBadge(artisan, 'A');
         boxer.dom.appendChild(createSvg(boxerSvg));
         brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
         brushSamSelect.dom.appendChild(createSvg(samSvg));
@@ -284,6 +318,7 @@ class BottomToolbar extends Container {
             { node: normal, shortcutId: 'tool.deactivate', fallbackOrder: 1 },
             { node: boxer, shortcutId: 'tool.boxerSelection', fallbackOrder: 2 },
             { node: touch, shortcutId: 'tool.sam3Selection', fallbackOrder: 3 },
+            { node: artisan, fallbackOrder: 3.5 },
             { node: brushBoxerSelect, shortcutId: 'tool.brushSelection.boxer', fallbackOrder: 4 },
             { node: brushSamSelect, shortcutId: 'tool.brushSelection.sam', fallbackOrder: 5 },
             { node: brushRawSelect, shortcutId: 'tool.brushSelection.raw', fallbackOrder: 6 },
@@ -294,6 +329,7 @@ class BottomToolbar extends Container {
             { node: semanticScan, fallbackOrder: 11 }
         ]);
         this.dom.appendChild(samModeWrap);
+        this.dom.appendChild(artisanSubmenuWrap);
         this.dom.appendChild(rawBrushModeWrap);
 
         const aiInputWrap = document.createElement('div');
@@ -349,8 +385,56 @@ class BottomToolbar extends Container {
         const positionSamModeWrap = () => {
             positionFloatingWrap(samModeWrap, touch.dom);
         };
+        const positionArtisanSubmenuWrap = () => {
+            positionFloatingWrap(artisanSubmenuWrap, artisan.dom);
+        };
         const positionRawBrushModeWrap = () => {
             positionFloatingWrap(rawBrushModeWrap, brushVariant === 'raw3d' ? brushRaw3dSelect.dom : brushRawSelect.dom);
+        };
+        let samModePinned = false;
+        let artisanSubmenuPinned = false;
+        let rawBrushModePinned = false;
+        const isArtisanToolActive = () => {
+            const activeTool = events.invoke('tool.active');
+            return activeTool === 'artisanClickSelection' || activeTool === 'artisanBrushSelection';
+        };
+        const syncFloatingMenus = () => {
+            syncSamModeWrap();
+            syncArtisanSubmenuWrap();
+            syncRawBrushModeWrap();
+        };
+        const showOnlyFloatingMenu = (menu: 'sam' | 'artisan' | 'raw-brush' | null) => {
+            samModePinned = menu === 'sam';
+            artisanSubmenuPinned = menu === 'artisan';
+            rawBrushModePinned = menu === 'raw-brush';
+            syncFloatingMenus();
+        };
+        const syncArtisanSubmenuWrap = () => {
+            const visible = artisanSubmenuPinned;
+            artisanSubmenuWrap.classList.toggle('hidden', !visible);
+            if (visible) {
+                positionArtisanSubmenuWrap();
+            }
+        };
+        const closeArtisanSubmenu = () => {
+            artisanSubmenuPinned = false;
+            syncArtisanSubmenuWrap();
+        };
+        const activateArtisanClick = () => {
+            closeArtisanSubmenu();
+            events.fire('tool.artisanClickSelection');
+        };
+        const activateArtisanBrush = () => {
+            closeArtisanSubmenu();
+            events.fire('tool.artisanBrushSelection');
+        };
+        const activateArtisanBoxVolume = () => {
+            closeArtisanSubmenu();
+            events.fire('tool.boxVolume');
+        };
+        const activateArtisanManualBox = () => {
+            closeArtisanSubmenu();
+            events.fire('tool.boxSelection');
         };
         const syncRawBrushModeButtons = (mode: RawBrushMode) => {
             rawBrushMode = mode === 'add' || mode === 'remove' || mode === 'intersect' ? mode : 'new';
@@ -359,14 +443,14 @@ class BottomToolbar extends Container {
             }
         };
         const syncRawBrushModeWrap = () => {
-            const visible = events.invoke('tool.active') === 'brushSelection' && isRawBrushVariant();
+            const visible = rawBrushModePinned && events.invoke('tool.active') === 'brushSelection' && isRawBrushVariant();
             rawBrushModeWrap.classList.toggle('hidden', !visible);
             if (visible) {
                 positionRawBrushModeWrap();
             }
         };
         const syncSamModeWrap = () => {
-            const visible = events.invoke('tool.active') === 'sam3Selection';
+            const visible = samModePinned && events.invoke('tool.active') === 'sam3Selection';
             samModeWrap.classList.toggle('hidden', !visible);
             if (visible) {
                 positionSamModeWrap();
@@ -377,26 +461,52 @@ class BottomToolbar extends Container {
             const currentVariant = (events.invoke('brushSelection.getVariant') as BrushSelectionVariant | undefined) ?? brushVariant;
             if (activeTool === 'brushSelection' && currentVariant === variant) {
                 events.fire('tool.brushSelection');
-                return;
+                showOnlyFloatingMenu(null);
+                return false;
             }
 
             events.fire('brushSelection.variant', variant);
             if (activeTool !== 'brushSelection') {
                 events.fire('tool.brushSelection');
             }
+            return true;
+        };
+        const activateBrushVariantFromToolbar = (variant: BrushSelectionVariant) => {
+            const activeAfter = activateBrushVariant(variant);
+            if (activeAfter && (variant === 'raw' || variant === 'raw3d')) {
+                showOnlyFloatingMenu('raw-brush');
+            } else {
+                showOnlyFloatingMenu(null);
+            }
         };
 
-        touch.dom.addEventListener('click', () => events.fire('tool.sam3Selection'));
+        touch.dom.addEventListener('click', () => {
+            const active = events.invoke('tool.active') === 'sam3Selection';
+            if (!active) {
+                events.fire('tool.sam3Selection');
+            }
+            showOnlyFloatingMenu(active && samModePinned ? null : 'sam');
+        });
+        artisan.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(artisanSubmenuPinned ? null : 'artisan');
+        });
+        artisanSubmenuWrap.append(
+            createArtisanSubmenuButton('Click', artisanClickSvg, activateArtisanClick),
+            createArtisanSubmenuButton('Brush', artisanBrushSvg, activateArtisanBrush),
+            createArtisanSubmenuButton('4-Click Box', boxVolumeSvg, activateArtisanBoxVolume),
+            createArtisanSubmenuButton('Manual Box', boxSvg, activateArtisanManualBox)
+        );
         boxer.dom.addEventListener('click', () => events.fire('tool.boxerSelection'));
-        brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariant('boxer'));
-        brushSamSelect.dom.addEventListener('click', () => activateBrushVariant('sam'));
-        brushRawSelect.dom.addEventListener('click', () => activateBrushVariant('raw'));
-        brushRaw3dSelect.dom.addEventListener('click', () => activateBrushVariant('raw3d'));
-        events.on('tool.brushSelection.boxer', () => activateBrushVariant('boxer'));
-        events.on('tool.brushSelection.sam', () => activateBrushVariant('sam'));
-        events.on('tool.brushSelection.raw', () => activateBrushVariant('raw'));
-        events.on('tool.brushSelection.raw3d', () => activateBrushVariant('raw3d'));
+        brushBoxerSelect.dom.addEventListener('click', () => activateBrushVariantFromToolbar('boxer'));
+        brushSamSelect.dom.addEventListener('click', () => activateBrushVariantFromToolbar('sam'));
+        brushRawSelect.dom.addEventListener('click', () => activateBrushVariantFromToolbar('raw'));
+        brushRaw3dSelect.dom.addEventListener('click', () => activateBrushVariantFromToolbar('raw3d'));
+        events.on('tool.brushSelection.boxer', () => activateBrushVariantFromToolbar('boxer'));
+        events.on('tool.brushSelection.sam', () => activateBrushVariantFromToolbar('sam'));
+        events.on('tool.brushSelection.raw', () => activateBrushVariantFromToolbar('raw'));
+        events.on('tool.brushSelection.raw3d', () => activateBrushVariantFromToolbar('raw3d'));
         const runBoxerDetectAll = async () => {
+            showOnlyFloatingMenu(null);
             try {
                 await events.invoke('boxer.runDetectAll');
             } catch (err) {
@@ -408,19 +518,26 @@ class BottomToolbar extends Container {
         events.on('tool.boxerDetectAll', runBoxerDetectAll);
         manualBox.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         boxVolume.dom.addEventListener('click', () => events.fire('tool.boxVolume'));
-        semanticScan.dom.addEventListener('click', () => events.fire('semanticScan.run'));
-        simplifiedAssetBrowser.dom.addEventListener('click', () => events.fire('assetBrowser.toggleVisible'));
+        semanticScan.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('semanticScan.run');
+        });
+        simplifiedAssetBrowser.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('assetBrowser.toggleVisible');
+        });
 
         tooltips.register(normal, tooltip('No Tool', 'tool.deactivate'));
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
+        tooltips.register(artisan, 'ArtisanGS');
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
         tooltips.register(brushBoxerSelect, tooltip('Brush Boxer', 'tool.brushSelection.boxer'));
         tooltips.register(brushSamSelect, tooltip('Brush SAM', 'tool.brushSelection.sam'));
         tooltips.register(brushRawSelect, tooltip('2D Brush', 'tool.brushSelection.raw'));
         tooltips.register(brushRaw3dSelect, '3D Brush - Experimental');
         tooltips.register(boxerAll, tooltip('Boxer Detect All', 'tool.boxerDetectAll'));
-        tooltips.register(manualBox, tooltip('4 Click Box', 'tool.boxSelection'));
-        tooltips.register(boxVolume, tooltip('Box Volume', 'tool.boxVolume'));
+        tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
+        tooltips.register(boxVolume, tooltip('4-Click Box', 'tool.boxVolume'));
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
@@ -552,7 +669,7 @@ class BottomToolbar extends Container {
         picker.dom.addEventListener('click', () => events.fire('tool.rectSelection'));
         lasso.dom.addEventListener('click', () => events.fire('tool.lassoSelection'));
         polygon.dom.addEventListener('click', () => events.fire('tool.polygonSelection'));
-        brush.dom.addEventListener('click', () => activateBrushVariant('boxer'));
+        brush.dom.addEventListener('click', () => activateBrushVariantFromToolbar('boxer'));
         flood.dom.addEventListener('click', () => events.fire('tool.floodSelection'));
         eyedropper.dom.addEventListener('click', () => events.fire('tool.eyedropperSelection'));
         sphere.dom.addEventListener('click', () => events.fire('tool.sphereSelection'));
@@ -579,12 +696,21 @@ class BottomToolbar extends Container {
         };
 
         events.on('tool.activated', (toolName: string | null) => {
+            if (toolName !== 'sam3Selection') {
+                samModePinned = false;
+            }
+            if (toolName !== 'brushSelection' || !isRawBrushVariant()) {
+                rawBrushModePinned = false;
+            }
+            artisanSubmenuPinned = false;
             normal.class[toolName === null ? 'add' : 'remove']('active');
             touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
+            artisan.class[isArtisanToolActive() ? 'add' : 'remove']('active');
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
             syncBrushVariantActive(toolName);
             syncRawBrushModeWrap();
             syncSamModeWrap();
+            syncArtisanSubmenuWrap();
             manualBox.class[toolName === 'boxSelection' ? 'add' : 'remove']('active');
             boxVolume.class[toolName === 'boxVolume' ? 'add' : 'remove']('active');
 
@@ -604,6 +730,9 @@ class BottomToolbar extends Container {
 
         events.on('brushSelection.variant.changed', (variant: BrushSelectionVariant) => {
             brushVariant = variant === 'sam' || variant === 'raw' || variant === 'raw3d' ? variant : 'boxer';
+            if (!isRawBrushVariant()) {
+                rawBrushModePinned = false;
+            }
             syncBrushVariantActive(events.invoke('tool.active'));
             syncRawBrushModeWrap();
         });
@@ -637,10 +766,12 @@ class BottomToolbar extends Container {
         window.addEventListener('resize', () => {
             positionRawBrushModeWrap();
             positionSamModeWrap();
+            positionArtisanSubmenuWrap();
         });
         syncRawBrushModeButtons(rawBrushMode);
         syncRawBrushModeWrap();
         syncSamModeWrap();
+        syncArtisanSubmenuWrap();
 
         const transcriptEl = document.createElement('div');
         transcriptEl.id = 'voice-transcript';

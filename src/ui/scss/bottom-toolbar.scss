@@ -122,6 +122,7 @@ body.advanced-ui {
 
 #bottom-toolbar-normal,
 #bottom-toolbar-touch,
+#bottom-toolbar-artisan,
 #bottom-toolbar-boxer,
 #bottom-toolbar-brush-boxer,
 #bottom-toolbar-brush-sam,
@@ -194,6 +195,54 @@ body.advanced-ui {
 
     &.hidden {
         display: none;
+    }
+}
+
+#artisan-submenu-wrap {
+    position: absolute;
+    bottom: 48px;
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    padding: 3px;
+    border: 1px solid $bg-light-tertiary;
+    border-radius: 6px;
+    background-color: $bcg-secondary;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.24);
+    transform: translateX(-50%);
+
+    &.hidden {
+        display: none;
+    }
+}
+
+.artisan-submenu-button {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    height: 28px;
+    min-width: 48px;
+    padding: 0 8px 0 6px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: $text-dark;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    cursor: pointer;
+
+    svg {
+        width: 15px;
+        height: 15px;
+        color: $clr-default;
+        flex: 0 0 auto;
+    }
+
+    &:hover {
+        background-color: $bg-light-hover;
+        color: $text-primary;
     }
 }
 

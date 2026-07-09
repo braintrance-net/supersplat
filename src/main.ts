@@ -1,6 +1,7 @@
 import { WebPCodec } from '@playcanvas/splat-transform';
 import { Color, createGraphicsDevice, Vec3 } from 'playcanvas';
 
+import { registerArtisanGsLocalEvents } from './artisan-gs-local';
 import { registerCameraPosesEvents } from './camera-poses';
 import { registerDocEvents } from './doc';
 import { EditHistory } from './edit-history';
@@ -19,6 +20,8 @@ import { registerSemanticPreprocessEvents } from './semantic-preprocess';
 import { registerSemanticScanEvents } from './semantic-scan';
 import { ShortcutManager } from './shortcut-manager';
 import { registerTimelineEvents } from './timeline';
+import { ArtisanBrushSelection } from './tools/artisan-brush-selection';
+import { ArtisanClickSelection } from './tools/artisan-click-selection';
 import { BoxSelection } from './tools/box-selection';
 import { BoxVolumeTool } from './tools/box-volume-tool';
 import { BoxerSelection } from './tools/boxer-selection';
@@ -76,15 +79,18 @@ declare global {
             boxerBackendUrl?: string;
             boxerGpuDepth?: boolean;
             sam3BackendUrl?: string;
+            artisanGsBackendUrl?: string;
             semanticScanBackendUrl?: string;
             sketchfabProxyBaseUrl?: string;
             openAiProxyBaseUrl?: string;
             enableDevTools?: boolean;
+            artisanPreserveDrawingBuffer?: boolean;
             sketchfabApiToken?: string;
             openaiApiKey?: string;
         };
         supersplatDebug?: {
             getCameraState: () => DebugCameraState;
+            setCameraState: (camera: DebugCameraState) => DebugCameraState;
             copyCameraState: () => Promise<string>;
             getPresetState: () => {
                 camera: DebugCameraState;
@@ -111,6 +117,64 @@ declare global {
             setBoxerEvalTarget: (payload?: unknown) => unknown;
             getBoxerEvalTarget: () => unknown;
             clearBoxerEvalTarget: () => unknown;
+            getBoxSelectionState: () => unknown;
+            getBoxSelectionTarget: () => unknown;
+            setBoxSelectionTarget: (payload?: unknown) => unknown;
+            confirmBoxSelectionTarget: () => unknown;
+            getBoxVolumeState: () => unknown;
+            getBoxVolumeTarget: () => unknown;
+            getSceneSplatSummary: () => unknown;
+            selectFirstSplat: () => unknown;
+            getArtisanDebugViews: () => unknown;
+            getArtisanStatus: () => unknown;
+            cancelArtisanRun: () => unknown;
+            showArtisanDebugViews: () => unknown;
+            hideArtisanDebugViews: () => unknown;
+            getArtisanClickConfig: () => unknown;
+            setArtisanClickConfig: (patch?: unknown) => unknown;
+            runArtisanClick: (options?: {
+                click_xy?: [number, number];
+                x?: number;
+                y?: number;
+                selectionMode?: 'set' | 'add' | 'remove' | 'intersect';
+                runLocal?: boolean;
+                reviewSeedMask?: boolean;
+                localOptions?: Record<string, unknown>;
+                includeReview?: boolean;
+                includeImages?: boolean;
+            }) => Promise<unknown>;
+            runArtisanDebugPlan: (options?: { frameCount?: number; candidateCheckBudget?: number; targetBounds?: unknown }) => Promise<unknown>;
+            exportArtisanDebugReview: (options?: { includeImages?: boolean; includeEvalCase?: boolean }) => unknown;
+            exportArtisanTestSuite: (options?: { includeImages?: boolean; includeEvalCase?: boolean; allowSyntheticTarget?: boolean; primarySelection?: unknown; primary_selection?: unknown }) => unknown;
+            downloadArtisanTestSuite: (options?: { includeImages?: boolean; includeEvalCase?: boolean; allowSyntheticTarget?: boolean; primarySelection?: unknown; primary_selection?: unknown }) => unknown;
+            exportArtisanEvalCase: (options?: {
+                includeReview?: boolean;
+                includeImages?: boolean;
+                target?: unknown;
+                thresholds?: unknown;
+                primarySelection?: 'editor_state' | 'object_selected' | 'target_bounded_posterior' | 'target_bounded_adaptive' | 'target_bounded_base' | 'target_bounded_loose' | 'target_volume' | 'final_thresholded' | 'all_voted' | 'confidence_thresholded' | 'posterior_filtered';
+                primary_selection?: 'editor_state' | 'object_selected' | 'target_bounded_posterior' | 'target_bounded_adaptive' | 'target_bounded_base' | 'target_bounded_loose' | 'target_volume' | 'final_thresholded' | 'all_voted' | 'confidence_thresholded' | 'posterior_filtered';
+            }) => unknown;
+            getArtisanEvalTarget: (options?: unknown) => unknown;
+            setArtisanEvalTarget: (payload?: unknown) => unknown;
+            clearArtisanEvalTarget: () => unknown;
+            useKnownDeskCanEvalTarget: () => unknown;
+            prepareArtisanManualBoxEvalSuiteDownload: () => unknown;
+            startArtisanFourClickEvalBox: (options?: { downloadSuite?: boolean; download_suite?: boolean; includeImages?: boolean; includeEvalCase?: boolean; editAfterCapture?: boolean; edit_after_capture?: boolean; projectionMode?: 'frustum' | 'surface' | 'connected-surface'; projection_mode?: 'frustum' | 'surface' | 'connected-surface'; points?: [number, number][] }) => Promise<unknown>;
+            restoreArtisanActiveObject: (options?: { mode?: 'final' | 'voted' | 'confidence' | 'posterior' | 'target_bounded_adaptive' | 'target_bounded_base' | 'target_bounded_loose' | 'target_volume' }) => Promise<unknown>;
+            getArtisanSelectionDiagnostics: (options?: { thresholds?: number[] }) => unknown;
+            runArtisanEvalCase: (evalCase: unknown, options?: {
+                includeImages?: boolean;
+                restoreCamera?: boolean;
+                allowUnreadyTarget?: boolean;
+                localOptions?: Record<string, unknown>;
+            }) => Promise<unknown>;
+            backtestArtisanDebugReview: (review: unknown, options?: { frameCount?: number; candidateCheckBudget?: number }) => Promise<unknown>;
+            getWalkCollisionDebug: () => unknown;
+            getVoxelMeshVisualization: () => unknown;
+            setWalkInput: (input?: Record<string, unknown>) => void;
+            clearWalkInput: () => void;
+            probeVisibleCanvasCapture: (options?: { includeStats?: boolean; mimeType?: string; quality?: number }) => Promise<unknown>;
         };
     }
 }
@@ -147,6 +211,10 @@ const getFilenameFromUrl = (value: string) => {
     return filename || 'default.ply';
 };
 
+const truthyUrlFlag = (value: string | null) => {
+    return value === '' || value === '1' || value === 'true' || value === 'yes';
+};
+
 const main = async () => {
     // root events object
     const events = new Events();
@@ -181,16 +249,24 @@ const main = async () => {
     const editorUI = new EditorUI(events);
 
     events.function('config.devToolsEnabled', () => !!devConfig.enableDevTools);
+    const preserveDrawingBufferParam = url.searchParams.get('artisanPreserveDrawingBuffer');
+    const preserveDrawingBuffer = devConfig.artisanPreserveDrawingBuffer === true ||
+        truthyUrlFlag(preserveDrawingBufferParam) ||
+        truthyUrlFlag(url.searchParams.get('artisanDirectPngCapture')) ||
+        truthyUrlFlag(url.searchParams.get('artisanVisibleCapture'));
+    events.function('config.artisanPreserveDrawingBuffer', () => preserveDrawingBuffer);
 
     // create the graphics device
-    const graphicsDevice = await createGraphicsDevice(editorUI.canvas, {
+    const graphicsDeviceOptions = {
         deviceTypes: ['webgl2'],
         antialias: false,
         depth: false,
         stencil: false,
+        preserveDrawingBuffer,
         xrCompatible: false,
         powerPreference: 'high-performance'
-    });
+    } as Parameters<typeof createGraphicsDevice>[1] & { preserveDrawingBuffer?: boolean };
+    const graphicsDevice = await createGraphicsDevice(editorUI.canvas, graphicsDeviceOptions);
 
     const overrides = [
         getURLArgs()
@@ -206,6 +282,7 @@ const main = async () => {
         editorUI.canvas,
         graphicsDevice
     );
+    registerArtisanGsLocalEvents(events, scene);
 
     // colors
     const bgClr = new Color();
@@ -306,6 +383,7 @@ const main = async () => {
     const toolManager = new ToolManager(events);
     toolManager.register('rectSelection', new RectSelection(events, editorUI.toolsContainer.dom));
     toolManager.register('brushSelection', new BrushSelection(events, editorUI.toolsContainer.dom, mask));
+    toolManager.register('artisanBrushSelection', new ArtisanBrushSelection(events, scene, editorUI.toolsContainer.dom, mask));
     toolManager.register('floodSelection', new FloodSelection(events, editorUI.toolsContainer.dom, mask, editorUI.canvasContainer));
     toolManager.register('polygonSelection', new PolygonSelection(events, editorUI.toolsContainer.dom, mask));
     toolManager.register('lassoSelection', new LassoSelection(events, editorUI.toolsContainer.dom, mask));
@@ -314,6 +392,7 @@ const main = async () => {
     toolManager.register('boxVolume', new BoxVolumeTool(events, scene, editorUI.canvasContainer));
     toolManager.register('boxerSelection', new BoxerSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('sam3Selection', new Sam3Selection(events, scene, editorUI.canvasContainer.dom));
+    toolManager.register('artisanClickSelection', new ArtisanClickSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('move', new MoveTool(events, scene));
     toolManager.register('rotate', new RotateTool(events, scene));
@@ -342,6 +421,18 @@ const main = async () => {
     const getCameraState = () => {
         return events.invoke('camera.debugState') as DebugCameraState;
     };
+    const setCameraState = (camera: DebugCameraState) => {
+        scene.camera.setPose(
+            new Vec3(camera.position.x, camera.position.y, camera.position.z),
+            new Vec3(camera.target.x, camera.target.y, camera.target.z),
+            0
+        );
+        events.fire('camera.setFov', camera.fov);
+        scene.camera.ortho = camera.ortho;
+        scene.camera.onUpdate(0);
+        scene.forceRender = true;
+        return getCameraState();
+    };
 
     const getPresetState = () => {
         const splats = events.invoke('scene.splats') as Array<any>;
@@ -365,6 +456,38 @@ const main = async () => {
             } : null
         };
     };
+    const getSceneSplats = () => (events.invoke('scene.splats') as Array<any> | undefined) ?? [];
+    const summarizeSceneSplat = (splat: any, index: number, selected: any) => ({
+        index,
+        selected: splat === selected,
+        visible: splat?.visible !== false,
+        name: splat?.name ?? null,
+        filename: splat?.filename ?? null,
+        num_splats: splat?.splatData?.numSplats ?? null
+    });
+    const getSceneSplatSummary = () => {
+        const splats = getSceneSplats();
+        const selected = events.invoke('selection') as any;
+        return {
+            count: splats.length,
+            selected_index: splats.indexOf(selected),
+            splats: splats.map((splat, index) => summarizeSceneSplat(splat, index, selected))
+        };
+    };
+    const selectFirstSplat = () => {
+        const splats = getSceneSplats();
+        const splat = splats.find(candidate => candidate?.visible !== false);
+        if (!splat) {
+            return { ok: false, error: 'No splat loaded.' };
+        }
+
+        events.fire('selection', splat);
+        return {
+            ok: true,
+            selected: summarizeSceneSplat(splat, splats.indexOf(splat), splat),
+            summary: getSceneSplatSummary()
+        };
+    };
 
     events.function('preset.debugState', () => {
         return getPresetState();
@@ -372,6 +495,7 @@ const main = async () => {
 
     window.supersplatDebug = {
         getCameraState,
+        setCameraState,
         copyCameraState: async () => {
             const json = JSON.stringify(getCameraState(), null, 2);
             console.log('SuperSplat camera state\n', json);
@@ -432,6 +556,133 @@ const main = async () => {
         },
         clearBoxerEvalTarget: () => {
             return events.invoke('boxer.clearEvalTarget');
+        },
+        getBoxSelectionState: () => {
+            return events.invoke('boxSelection.state');
+        },
+        getBoxSelectionTarget: () => {
+            return events.invoke('boxSelection.currentBox');
+        },
+        setBoxSelectionTarget: (payload?: unknown) => {
+            return events.invoke('boxSelection.setCurrentBoxTarget', payload);
+        },
+        confirmBoxSelectionTarget: () => {
+            return events.invoke('boxSelection.confirmEvalTarget');
+        },
+        getBoxVolumeState: () => {
+            return events.invoke('boxVolume.state');
+        },
+        getBoxVolumeTarget: () => {
+            return events.invoke('boxVolume.currentBox');
+        },
+        getSceneSplatSummary,
+        selectFirstSplat,
+        getArtisanDebugViews: () => {
+            return events.invoke('artisan.local.debugViews');
+        },
+        getArtisanStatus: () => {
+            return events.invoke('artisan.local.status');
+        },
+        cancelArtisanRun: () => {
+            return events.invoke('artisan.local.cancel');
+        },
+        showArtisanDebugViews: () => {
+            return events.invoke('artisan.local.showDebugViews');
+        },
+        hideArtisanDebugViews: () => {
+            return events.invoke('artisan.local.hideDebugViews');
+        },
+        getArtisanClickConfig: () => {
+            return events.invoke('artisan.clickSelection.config');
+        },
+        setArtisanClickConfig: (patch?: unknown) => {
+            return events.invoke('artisan.clickSelection.setConfig', patch);
+        },
+        runArtisanClick: (options?: {
+            click_xy?: [number, number];
+            x?: number;
+            y?: number;
+            selectionMode?: 'set' | 'add' | 'remove' | 'intersect';
+            runLocal?: boolean;
+            reviewSeedMask?: boolean;
+            localOptions?: Record<string, unknown>;
+            includeReview?: boolean;
+            includeImages?: boolean;
+        }) => {
+            return events.invoke('artisan.clickSelection.debugRun', options) as Promise<unknown>;
+        },
+        runArtisanDebugPlan: (options?: { frameCount?: number; candidateCheckBudget?: number; targetBounds?: unknown }) => {
+            return events.invoke('artisan.local.debugPlan', options) as Promise<unknown>;
+        },
+        exportArtisanDebugReview: (options?: { includeImages?: boolean; includeEvalCase?: boolean }) => {
+            return events.invoke('artisan.local.exportDebugReview', options);
+        },
+        exportArtisanTestSuite: (options?: { includeImages?: boolean; includeEvalCase?: boolean; allowSyntheticTarget?: boolean; primarySelection?: unknown; primary_selection?: unknown }) => {
+            return events.invoke('artisan.local.exportTestSuite', options);
+        },
+        downloadArtisanTestSuite: (options?: { includeImages?: boolean; includeEvalCase?: boolean; allowSyntheticTarget?: boolean; primarySelection?: unknown; primary_selection?: unknown }) => {
+            return events.invoke('artisan.local.downloadTestSuite', options);
+        },
+        exportArtisanEvalCase: (options?: {
+            includeReview?: boolean;
+            includeImages?: boolean;
+            target?: unknown;
+            thresholds?: unknown;
+            primarySelection?: 'editor_state' | 'object_selected' | 'target_bounded_posterior' | 'target_bounded_adaptive' | 'target_bounded_base' | 'target_bounded_loose' | 'target_volume' | 'final_thresholded' | 'all_voted' | 'confidence_thresholded' | 'posterior_filtered';
+            primary_selection?: 'editor_state' | 'object_selected' | 'target_bounded_posterior' | 'target_bounded_adaptive' | 'target_bounded_base' | 'target_bounded_loose' | 'target_volume' | 'final_thresholded' | 'all_voted' | 'confidence_thresholded' | 'posterior_filtered';
+        }) => {
+            return events.invoke('artisan.local.exportEvalCase', options);
+        },
+        getArtisanEvalTarget: (options?: unknown) => {
+            return events.invoke('artisan.local.evalTarget', options);
+        },
+        setArtisanEvalTarget: (payload?: unknown) => {
+            return events.invoke('artisan.local.setEvalTarget', payload);
+        },
+        clearArtisanEvalTarget: () => {
+            return events.invoke('artisan.local.clearEvalTarget');
+        },
+        useKnownDeskCanEvalTarget: () => {
+            return events.invoke('artisan.local.useKnownDeskCanEvalTarget');
+        },
+        prepareArtisanManualBoxEvalSuiteDownload: () => {
+            return events.invoke('artisan.local.prepareManualBoxEvalSuiteDownload');
+        },
+        startArtisanFourClickEvalBox: (options?: { downloadSuite?: boolean; download_suite?: boolean; includeImages?: boolean; includeEvalCase?: boolean; editAfterCapture?: boolean; edit_after_capture?: boolean; projectionMode?: 'frustum' | 'surface' | 'connected-surface'; projection_mode?: 'frustum' | 'surface' | 'connected-surface'; points?: [number, number][] }) => {
+            return events.invoke('artisan.local.startFourClickEvalBox', options) as Promise<unknown>;
+        },
+        restoreArtisanActiveObject: (options?: { mode?: 'final' | 'voted' | 'confidence' | 'posterior' | 'target_bounded_adaptive' | 'target_bounded_base' | 'target_bounded_loose' | 'target_volume' }) => {
+            return events.invoke('artisan.local.restoreActiveObject', options) as Promise<unknown>;
+        },
+        getArtisanSelectionDiagnostics: (options?: { thresholds?: number[] }) => {
+            return events.invoke('artisan.local.selectionDiagnostics', options);
+        },
+        runArtisanEvalCase: (evalCase: unknown, options?: {
+            includeImages?: boolean;
+            restoreCamera?: boolean;
+            allowUnreadyTarget?: boolean;
+            allowSyntheticTarget?: boolean;
+            localOptions?: Record<string, unknown>;
+        }) => {
+            return events.invoke('artisan.local.runEvalCase', evalCase, options) as Promise<unknown>;
+        },
+        backtestArtisanDebugReview: (review: unknown, options?: { frameCount?: number; candidateCheckBudget?: number }) => {
+            return events.invoke('artisan.local.backtestDebugReview', review, options) as Promise<unknown>;
+        },
+        getWalkCollisionDebug: () => {
+            return events.invoke('walk.collisionDebugBundle');
+        },
+        getVoxelMeshVisualization: () => {
+            return events.invoke('walk.collisionMeshVisualization');
+        },
+        setWalkInput: (input: Record<string, unknown> = {}) => {
+            events.fire('walk.input', input);
+        },
+        clearWalkInput: () => {
+            events.fire('walk.input', {});
+        },
+        probeVisibleCanvasCapture: (options?: { includeStats?: boolean; mimeType?: string; quality?: number }) => {
+            return events.invoke('render.visibleCanvasProbe', options) as Promise<unknown>;
         }
     };
 
@@ -499,6 +750,23 @@ const main = async () => {
             }
         } else {
             scene.camera.focus();
+        }
+    }
+
+    const requestedCameraMode = url.searchParams.get('cameraMode') ?? url.searchParams.get('controlMode');
+    if (requestedCameraMode === 'orbit' || requestedCameraMode === 'fly') {
+        events.fire('camera.setControlMode', requestedCameraMode);
+    }
+
+    const requestedTool = url.searchParams.get('tool') ?? url.searchParams.get('startTool');
+    if (requestedTool) {
+        if (requestedTool === 'none') {
+            events.fire('tool.deactivate');
+        } else if (toolManager.get(requestedTool)) {
+            events.fire('tool.deactivate');
+            events.fire(`tool.${requestedTool}`);
+        } else {
+            console.warn(`[SuperSplat] Unknown startup tool "${requestedTool}"`);
         }
     }
 
