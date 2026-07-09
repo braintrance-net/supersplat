@@ -6174,7 +6174,23 @@ const getArtisanGsBackendUrl = () => {
 
 const getSam3BackendUrl = () => {
     const urlOverride = new URLSearchParams(window.location.search).get('artisanSam3BackendUrl')?.trim();
-    return (urlOverride || window.supersplatConfig?.sam3BackendUrl?.trim() || DEFAULT_SAM3_BACKEND_URL).replace(/\/$/, '');
+    if (urlOverride) {
+        return urlOverride.replace(/\/$/, '');
+    }
+    const configured = window.supersplatConfig?.sam3BackendUrl?.trim();
+    if (configured) {
+        return configured.replace(/\/$/, '');
+    }
+    // No explicit backend configured. In a hosted (non-localhost) deploy, target the SAME ORIGIN
+    // so SAM3 requests hit the Vercel serverless proxy at /api/sam3/* which forwards server-side to
+    // the HTTP EC2 model server (avoids the mixed-content block a static HTTPS page would hit
+    // calling http:// directly). Locally the dev build sets SAM3_BACKEND_URL to the IP/dev-proxy,
+    // so `configured` is set and this branch is skipped.
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') {
+        return window.location.origin.replace(/\/$/, '');
+    }
+    return DEFAULT_SAM3_BACKEND_URL.replace(/\/$/, '');
 };
 
 const isLoopbackSam3Url = (sam3BackendUrl: string) => {
