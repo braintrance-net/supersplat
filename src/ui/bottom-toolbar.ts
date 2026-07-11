@@ -13,6 +13,7 @@ import brushSvg from './svg/select-brush.svg';
 import eyedropperSvg from './svg/select-eyedropper.svg';
 import floodSvg from './svg/select-flood.svg';
 import lassoSvg from './svg/select-lasso.svg';
+import multiViewRefineSvg from './svg/select-multiview-refine.svg';
 import normalSvg from './svg/select-normal.svg';
 import pickerSvg from './svg/select-picker.svg';
 import polygonSvg from './svg/select-poly.svg';
@@ -144,6 +145,11 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
         artisan.dom.classList.add('bottom-toolbar-variant-tool');
+
+        const multiViewRefine = new Button({
+            id: 'bottom-toolbar-multiview-refine',
+            class: 'bottom-toolbar-tool'
+        });
 
         const boxer = new Button({
             id: 'bottom-toolbar-boxer',
@@ -299,6 +305,7 @@ class BottomToolbar extends Container {
         touch.dom.appendChild(createSvg(touchSvg));
         artisan.dom.appendChild(createSvg(artisanClickSvg));
         addVariantBadge(artisan, 'A');
+        multiViewRefine.dom.appendChild(createSvg(multiViewRefineSvg));
         boxer.dom.appendChild(createSvg(boxerSvg));
         brushBoxerSelect.dom.appendChild(createSvg(brushSvg));
         brushSamSelect.dom.appendChild(createSvg(samSvg));
@@ -319,6 +326,7 @@ class BottomToolbar extends Container {
             { node: boxer, shortcutId: 'tool.boxerSelection', fallbackOrder: 2 },
             { node: touch, shortcutId: 'tool.sam3Selection', fallbackOrder: 3 },
             { node: artisan, fallbackOrder: 3.5 },
+            { node: multiViewRefine, fallbackOrder: 3.75 },
             { node: brushBoxerSelect, shortcutId: 'tool.brushSelection.boxer', fallbackOrder: 4 },
             { node: brushSamSelect, shortcutId: 'tool.brushSelection.sam', fallbackOrder: 5 },
             { node: brushRawSelect, shortcutId: 'tool.brushSelection.raw', fallbackOrder: 6 },
@@ -490,6 +498,10 @@ class BottomToolbar extends Container {
         artisan.dom.addEventListener('click', () => {
             showOnlyFloatingMenu(artisanSubmenuPinned ? null : 'artisan');
         });
+        multiViewRefine.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('tool.multiViewRefineSelection');
+        });
         artisanSubmenuWrap.append(
             createArtisanSubmenuButton('Click', artisanClickSvg, activateArtisanClick),
             createArtisanSubmenuButton('Brush', artisanBrushSvg, activateArtisanBrush),
@@ -530,6 +542,7 @@ class BottomToolbar extends Container {
         tooltips.register(normal, tooltip('No Tool', 'tool.deactivate'));
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
         tooltips.register(artisan, 'ArtisanGS');
+        tooltips.register(multiViewRefine, 'Multi-View Refine');
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
         tooltips.register(brushBoxerSelect, tooltip('Brush Boxer', 'tool.brushSelection.boxer'));
         tooltips.register(brushSamSelect, tooltip('Brush SAM', 'tool.brushSelection.sam'));
@@ -706,6 +719,7 @@ class BottomToolbar extends Container {
             normal.class[toolName === null ? 'add' : 'remove']('active');
             touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
             artisan.class[isArtisanToolActive() ? 'add' : 'remove']('active');
+            multiViewRefine.class[toolName === 'multiViewRefineSelection' ? 'add' : 'remove']('active');
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');
             syncBrushVariantActive(toolName);
             syncRawBrushModeWrap();

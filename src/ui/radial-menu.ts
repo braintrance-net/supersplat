@@ -33,7 +33,8 @@ class RadialMenu extends Container {
         'lassoSelection',
         'polygonSelection',
         'floodSelection',
-        'eyedropperSelection'
+        'eyedropperSelection',
+        'multiViewRefineSelection'
     ]);
 
     constructor(events: Events, args = {}) {

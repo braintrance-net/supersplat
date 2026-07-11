@@ -31,6 +31,7 @@ import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
 import { MeasureTool } from './tools/measure-tool';
 import { MoveTool } from './tools/move-tool';
+import { MultiViewRefineSelection } from './tools/multi-view-refine-selection';
 import { PlaceTool } from './tools/place-tool';
 import { PolygonSelection } from './tools/polygon-selection';
 import { RectSelection } from './tools/rect-selection';
@@ -393,6 +394,7 @@ const main = async () => {
     toolManager.register('boxerSelection', new BoxerSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('sam3Selection', new Sam3Selection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('artisanClickSelection', new ArtisanClickSelection(events, scene, editorUI.canvasContainer.dom));
+    toolManager.register('multiViewRefineSelection', new MultiViewRefineSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('move', new MoveTool(events, scene));
     toolManager.register('rotate', new RotateTool(events, scene));

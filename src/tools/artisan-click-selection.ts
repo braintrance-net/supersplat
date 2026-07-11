@@ -10,6 +10,7 @@ import {
     maskArrayToPngBase64,
     maskPngToArray,
     normalizePromptPoint,
+    projectArtisanMaskSelection,
     rleMaskToArray,
     type ArtisanImageSize,
     type ArtisanPromptLabel,
@@ -215,6 +216,7 @@ type ArtisanClickRunOptions = {
     localOptions?: Record<string, unknown>;
     includeReview?: boolean;
     includeImages?: boolean;
+    captureOnly?: boolean;
 };
 
 type ArtisanDebugClickOptions = {
@@ -228,6 +230,7 @@ type ArtisanDebugClickOptions = {
     localOptions?: Record<string, unknown>;
     includeReview?: boolean;
     includeImages?: boolean;
+    captureOnly?: boolean;
 };
 
 type ArtisanClickSeedPayload = {
@@ -1864,17 +1867,26 @@ class ArtisanClickSelection {
                 decodeMs = maskDecodeMs + maskEncodeMs;
 
                 const applyStartedAt = performance.now();
-                let result = await applyArtisanMaskSelection(events, scene, splat, {
-                    source: 'click',
+                const projectionInput = {
+                    source: 'click' as const,
                     mask,
                     maskWidth: data.width,
                     maskHeight: data.height,
                     imageWidth: w,
                     imageHeight: h,
                     op,
-                    projectionMode: 'connected-surface',
+                    projectionMode: 'connected-surface' as const,
                     seed: click_xy
-                });
+                };
+                const projectWithoutApplying = () => {
+                    const projection = projectArtisanMaskSelection(scene, splat, projectionInput);
+                    if (!projection) return null;
+                    const { indices: _indices, logDetails: _logDetails, ...publicResult } = projection;
+                    return publicResult;
+                };
+                let result = options.captureOnly ?
+                    projectWithoutApplying() :
+                    await applyArtisanMaskSelection(events, scene, splat, projectionInput);
                 // Cold-scene guard: on the first click after load, the mask->splat projection
                 // can collapse to a handful of splats even for a good mask (stale depth), which
                 // then starves the multiview planner. Retry once after forcing a fresh render.
@@ -1889,17 +1901,9 @@ class ArtisanClickSelection {
                         console.warn(`[ArtisanGS] seed projection degenerate (${result?.selectedCount ?? 0} splats for ${maskAreaPx}px mask) — retrying after fresh render`);
                         scene.forceRender = true;
                         await waitForRenderTick();
-                        const retry = await applyArtisanMaskSelection(events, scene, splat, {
-                            source: 'click',
-                            mask,
-                            maskWidth: data.width,
-                            maskHeight: data.height,
-                            imageWidth: w,
-                            imageHeight: h,
-                            op,
-                            projectionMode: 'connected-surface',
-                            seed: click_xy
-                        });
+                        const retry = options.captureOnly ?
+                            projectWithoutApplying() :
+                            await applyArtisanMaskSelection(events, scene, splat, projectionInput);
                         if ((retry?.selectedCount ?? 0) > (result?.selectedCount ?? 0)) {
                             result = retry;
                         }
@@ -2179,7 +2183,8 @@ class ArtisanClickSelection {
                 reviewSeedMask: options.reviewSeedMask ?? clickConfig.reviewSeedMask,
                 localOptions,
                 includeReview: options.includeReview !== false,
-                includeImages: options.includeImages === true
+                includeImages: options.includeImages === true,
+                captureOnly: options.captureOnly === true
             });
         });
 

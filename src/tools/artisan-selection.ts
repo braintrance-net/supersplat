@@ -1652,6 +1652,7 @@ export {
     captureScene,
     captureSceneImages,
     extractMaskComponentAroundSeed,
+    encodeIndexRanges,
     getArtisanOpFromPointer,
     maskArrayToPngBase64,
     maskPngToArray,
