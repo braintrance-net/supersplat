@@ -11,6 +11,7 @@ import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
 import { initIframeIntegration } from './iframe-integration';
+import { registerPreferences } from './preferences';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
 import { Scene } from './scene';
@@ -38,6 +39,7 @@ import { AnnotationOverlay } from './ui/annotation-overlay';
 import { BoundDimensionsOverlay } from './ui/bound-dimensions-overlay';
 import { EditorUI } from './ui/editor';
 import { i18n } from './ui/localization';
+import { registerSelectCursor } from './ui/select-cursor';
 import { ViewManager } from './view-manager';
 
 declare global {
@@ -134,8 +136,10 @@ const main = async () => {
         powerPreference: 'high-performance'
     });
 
+    const urlArgs = getURLArgs();
+
     const overrides = [
-        getURLArgs()
+        urlArgs
     ];
 
     // resolve scene config
@@ -255,6 +259,9 @@ const main = async () => {
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
 
+    // show the active selection op (add/remove/intersect) at the cursor
+    registerSelectCursor(events, editorUI.toolsContainer.dom);
+
     window.scene = scene;
 
     // view manager for saving/restoring camera views
@@ -273,6 +280,11 @@ const main = async () => {
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
+
+    // apply stored user preferences and start capturing changes to them.
+    // registered after the boot-time initialization events above so they are
+    // never captured as user changes.
+    registerPreferences(events, sceneConfig, urlArgs);
 
     // load async models
     scene.start();
