@@ -10,6 +10,9 @@ uniform vec4 selectionRemovePreviewClr;
 uniform vec4 selectionIntersectPreviewClr;
 uniform float artisanConfidenceActive;
 uniform float artisanConfidenceThreshold;
+uniform float pointCloudWeight;
+uniform float pointCloudRadius;
+uniform float pointCloudOpacity;
 
 uniform vec3 clrOffset;
 uniform vec4 clrScale;
@@ -117,6 +120,16 @@ void main(void) {
         return;
     }
 
+    #if FORWARD_PASS
+        // Display-only point-cloud morph. Keep canonical Gaussian geometry for pick/depth
+        // passes, but continuously shrink the forward footprint to a fixed screen-space disc.
+        vec3 pointOffset = vec3(
+            source.cornerUV * pointCloudRadius * center.proj.ww * viewport_size.zw,
+            0.0
+        );
+        corner.offset = mix(corner.offset, pointOffset, clamp(pointCloudWeight, 0.0, 1.0));
+    #endif
+
     // reveal animation: scale newly selected splats from center outward
     float revealT = 1.0;
     if (revealActive == 1 && texelFetch(revealMask, splat.uv, 0).r > 0.5) {
@@ -177,6 +190,7 @@ void main(void) {
 
         // don't allow out-of-range alpha
         color.a = clamp(color.a, 0.0, 1.0);
+        color.a *= mix(1.0, pointCloudOpacity, clamp(pointCloudWeight, 0.0, 1.0));
 
         // apply tonemapping
         color = vec4(prepareOutputFromGamma(max(color.xyz, 0.0)), color.w);

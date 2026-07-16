@@ -40,6 +40,8 @@
         "artisangs:fixture": "node scripts/artisangs-review-fixture.mjs",
         "artisangs:backtest": "node scripts/artisangs-review-backtest.mjs",
         "develop:auto-launch": "concurrently --kill-others \"xdg-open 'http://localhost:8000/'\" \"npm run watch\" \"npm run serve\"",
+        "test": "npm run test:unit",
+        "test:unit": "node --no-warnings --test test/*.test.ts",
         "lint": "eslint src"
     },
     "devDependencies": {

@@ -253,7 +253,9 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     let visibleCanvasStreamReader: ReadableStreamDefaultReader<any> | null = null;
     const elapsedMs = (startMs: number) => Math.max(0, Math.round(performance.now() - startMs));
     const postRenderTimeoutMs = 5000;
-    const yieldAfterPostRender = () => new Promise<void>(resolve => window.setTimeout(resolve, 0));
+    const yieldAfterPostRender = () => new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+    });
 
     const getScratchCanvas = (
         current: HTMLCanvasElement | null,
@@ -547,6 +549,15 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
     const captureOffscreenRgba = async (settings: RenderCaptureSettings) => {
         return (await captureOffscreenRgbaWithTimings(settings)).data;
+    };
+
+    const captureCanonicalFrame = async <T>(capture: () => Promise<T>) => {
+        const release = events.invoke('pointCloudBoundary.beginCanonicalCapture') as (() => void) | undefined;
+        try {
+            return await capture();
+        } finally {
+            release?.();
+        }
     };
 
     const captureOffscreenCropPngWithTimings = async (crop: RenderVisibleCanvasCropPngInput): Promise<RenderPngCaptureResult> => {
@@ -1169,16 +1180,16 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     };
 
     events.function('render.offscreen.timed', (width: number, height: number): Promise<RenderCaptureRgbaResult> => {
-        return captureOffscreenRgbaWithTimings({
+        return captureCanonicalFrame(() => captureOffscreenRgbaWithTimings({
             width,
             height,
             transparentBg: true,
             showDebug: false
-        });
+        }));
     });
 
     events.function('render.visibleCanvas.rgba.timed', (width: number, height: number): Promise<RenderCaptureRgbaResult> => {
-        return captureVisibleCanvasRgbaWithTimings(width, height);
+        return captureCanonicalFrame(() => captureVisibleCanvasRgbaWithTimings(width, height));
     });
 
     events.function('render.visibleCanvas.png.timed', (
@@ -1186,15 +1197,15 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
         height: number,
         options?: RenderVisibleCanvasPngOptions
     ): Promise<RenderPngCaptureResult> => {
-        return captureVisibleCanvasPngWithTimings(width, height, options);
+        return captureCanonicalFrame(() => captureVisibleCanvasPngWithTimings(width, height, options));
     });
 
     events.function('render.offscreenCropPng.timed', (crop: RenderVisibleCanvasCropPngInput): Promise<RenderPngCaptureResult> => {
-        return captureOffscreenCropPngWithTimings(crop);
+        return captureCanonicalFrame(() => captureOffscreenCropPngWithTimings(crop));
     });
 
     events.function('render.visibleCanvas.cropPng.timed', (crop: RenderVisibleCanvasCropPngInput): Promise<RenderPngCaptureResult> => {
-        return captureVisibleCanvasCropPngWithTimings(crop);
+        return captureCanonicalFrame(() => captureVisibleCanvasCropPngWithTimings(crop));
     });
 
     events.function('render.offscreen', (width: number, height: number): Promise<Uint8Array> => {
