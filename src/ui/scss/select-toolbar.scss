@@ -22,4 +22,95 @@
         padding: 0px 16px;
         border-radius: 2px;
     }
+
+    .hidden {
+        display: none;
+    }
+
+    .local-segment-status {
+        max-width: 220px;
+        padding: 0 10px;
+        color: $text-primary;
+        font-size: 12px;
+    }
+}
+
+.select-toolbar.hidden,
+.segmentation-compare-panel.hidden {
+    display: none;
+}
+
+#local-segment-toolbar {
+    height: auto;
+    min-height: 54px;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 4px;
+    z-index: 70;
+
+    button.active {
+        background: $clr-hilight;
+        color: $clr-active;
+    }
+}
+
+.segmentation-compare-panel {
+    position: absolute;
+    right: 20px;
+    bottom: 100px;
+    z-index: 75;
+    display: flex;
+    width: 570px;
+    max-width: calc(100% - 40px);
+    padding: 14px;
+    border: 1px solid $bcg-darkest;
+    border-radius: 8px;
+    background: $bcg-primary;
+    color: $text-primary;
+    flex-direction: column;
+    gap: 10px;
+
+    > span {
+        color: $text-secondary;
+    }
+
+    button {
+        min-height: 30px;
+        margin-right: 6px;
+        border: 0;
+        border-radius: 3px;
+        background: $bcg-dark;
+        color: $text-primary;
+        cursor: pointer;
+
+        &.active {
+            background: $clr-hilight;
+            color: $clr-active;
+        }
+
+        &:disabled {
+            cursor: default;
+            opacity: 0.4;
+        }
+    }
+}
+
+.segmentation-compare-candidates {
+    display: flex;
+    gap: 10px;
+
+    > div {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 5px;
+    }
+
+    canvas {
+        width: 100%;
+        border: 1px solid $bcg-darkest;
+        background: #000;
+        image-rendering: pixelated;
+    }
 }

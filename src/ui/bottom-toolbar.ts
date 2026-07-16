@@ -140,6 +140,12 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const localSegment = new Button({
+            id: 'bottom-toolbar-local-segment',
+            class: 'bottom-toolbar-tool'
+        });
+        localSegment.dom.classList.add('bottom-toolbar-variant-tool');
+
         const artisan = new Button({
             id: 'bottom-toolbar-artisan',
             class: 'bottom-toolbar-tool'
@@ -303,6 +309,8 @@ class BottomToolbar extends Container {
 
         normal.dom.appendChild(createSvg(normalSvg));
         touch.dom.appendChild(createSvg(touchSvg));
+        localSegment.dom.appendChild(createSvg(samSvg));
+        addVariantBadge(localSegment, 'L');
         artisan.dom.appendChild(createSvg(artisanClickSvg));
         addVariantBadge(artisan, 'A');
         multiViewRefine.dom.appendChild(createSvg(multiViewRefineSvg));
@@ -325,6 +333,7 @@ class BottomToolbar extends Container {
             { node: normal, shortcutId: 'tool.deactivate', fallbackOrder: 1 },
             { node: boxer, shortcutId: 'tool.boxerSelection', fallbackOrder: 2 },
             { node: touch, shortcutId: 'tool.sam3Selection', fallbackOrder: 3 },
+            { node: localSegment, fallbackOrder: 3.25 },
             { node: artisan, fallbackOrder: 3.5 },
             { node: multiViewRefine, fallbackOrder: 3.75 },
             { node: brushBoxerSelect, shortcutId: 'tool.brushSelection.boxer', fallbackOrder: 4 },
@@ -406,17 +415,6 @@ class BottomToolbar extends Container {
             const activeTool = events.invoke('tool.active');
             return activeTool === 'artisanClickSelection' || activeTool === 'artisanBrushSelection';
         };
-        const syncFloatingMenus = () => {
-            syncSamModeWrap();
-            syncArtisanSubmenuWrap();
-            syncRawBrushModeWrap();
-        };
-        const showOnlyFloatingMenu = (menu: 'sam' | 'artisan' | 'raw-brush' | null) => {
-            samModePinned = menu === 'sam';
-            artisanSubmenuPinned = menu === 'artisan';
-            rawBrushModePinned = menu === 'raw-brush';
-            syncFloatingMenus();
-        };
         const syncArtisanSubmenuWrap = () => {
             const visible = artisanSubmenuPinned;
             artisanSubmenuWrap.classList.toggle('hidden', !visible);
@@ -435,6 +433,10 @@ class BottomToolbar extends Container {
         const activateArtisanBrush = () => {
             closeArtisanSubmenu();
             events.fire('tool.artisanBrushSelection');
+        };
+        const activateLocalSegment = () => {
+            closeArtisanSubmenu();
+            events.fire('tool.localSegmentSelection');
         };
         const activateArtisanBoxVolume = () => {
             closeArtisanSubmenu();
@@ -463,6 +465,17 @@ class BottomToolbar extends Container {
             if (visible) {
                 positionSamModeWrap();
             }
+        };
+        const syncFloatingMenus = () => {
+            syncSamModeWrap();
+            syncArtisanSubmenuWrap();
+            syncRawBrushModeWrap();
+        };
+        const showOnlyFloatingMenu = (menu: 'sam' | 'artisan' | 'raw-brush' | null) => {
+            samModePinned = menu === 'sam';
+            artisanSubmenuPinned = menu === 'artisan';
+            rawBrushModePinned = menu === 'raw-brush';
+            syncFloatingMenus();
         };
         const activateBrushVariant = (variant: BrushSelectionVariant) => {
             const activeTool = events.invoke('tool.active');
@@ -495,6 +508,10 @@ class BottomToolbar extends Container {
             }
             showOnlyFloatingMenu(active && samModePinned ? null : 'sam');
         });
+        localSegment.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('tool.localSegmentSelection');
+        });
         artisan.dom.addEventListener('click', () => {
             showOnlyFloatingMenu(artisanSubmenuPinned ? null : 'artisan');
         });
@@ -505,6 +522,7 @@ class BottomToolbar extends Container {
         artisanSubmenuWrap.append(
             createArtisanSubmenuButton('Click', artisanClickSvg, activateArtisanClick),
             createArtisanSubmenuButton('Brush', artisanBrushSvg, activateArtisanBrush),
+            createArtisanSubmenuButton('Local Segment', samSvg, activateLocalSegment),
             createArtisanSubmenuButton('4-Click Box', boxVolumeSvg, activateArtisanBoxVolume),
             createArtisanSubmenuButton('Manual Box', boxSvg, activateArtisanManualBox)
         );
@@ -541,6 +559,7 @@ class BottomToolbar extends Container {
 
         tooltips.register(normal, tooltip('No Tool', 'tool.deactivate'));
         tooltips.register(touch, tooltip('Touch Select', 'tool.sam3Selection'));
+        tooltips.register(localSegment, 'Local Segment · browser SAM2');
         tooltips.register(artisan, 'ArtisanGS');
         tooltips.register(multiViewRefine, 'Multi-View Refine');
         tooltips.register(boxer, tooltip('Boxer Select', 'tool.boxerSelection'));
@@ -718,6 +737,7 @@ class BottomToolbar extends Container {
             artisanSubmenuPinned = false;
             normal.class[toolName === null ? 'add' : 'remove']('active');
             touch.class[toolName === 'sam3Selection' ? 'add' : 'remove']('active');
+            localSegment.class[toolName === 'localSegmentSelection' ? 'add' : 'remove']('active');
             artisan.class[isArtisanToolActive() ? 'add' : 'remove']('active');
             multiViewRefine.class[toolName === 'multiViewRefineSelection' ? 'add' : 'remove']('active');
             boxer.class[toolName === 'boxerSelection' ? 'add' : 'remove']('active');

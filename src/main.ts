@@ -29,6 +29,7 @@ import { BrushSelection } from './tools/brush-selection';
 import { EyedropperSelection } from './tools/eyedropper-selection';
 import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
+import { LocalSegmentSelection } from './tools/local-segment-selection';
 import { MeasureTool } from './tools/measure-tool';
 import { MoveTool } from './tools/move-tool';
 import { MultiViewRefineSelection } from './tools/multi-view-refine-selection';
@@ -176,6 +177,9 @@ declare global {
             setWalkInput: (input?: Record<string, unknown>) => void;
             clearWalkInput: () => void;
             probeVisibleCanvasCapture: (options?: { includeStats?: boolean; mimeType?: string; quality?: number }) => Promise<unknown>;
+            getLocalSegmentStatus: () => unknown;
+            getLastSegmentationCompare: () => unknown;
+            getSegmentationCompareBundles: () => unknown;
         };
     }
 }
@@ -393,6 +397,7 @@ const main = async () => {
     toolManager.register('boxVolume', new BoxVolumeTool(events, scene, editorUI.canvasContainer));
     toolManager.register('boxerSelection', new BoxerSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('sam3Selection', new Sam3Selection(events, scene, editorUI.canvasContainer.dom));
+    toolManager.register('localSegmentSelection', new LocalSegmentSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('artisanClickSelection', new ArtisanClickSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('multiViewRefineSelection', new MultiViewRefineSelection(events, scene, editorUI.canvasContainer.dom));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
@@ -685,6 +690,15 @@ const main = async () => {
         },
         probeVisibleCanvasCapture: (options?: { includeStats?: boolean; mimeType?: string; quality?: number }) => {
             return events.invoke('render.visibleCanvasProbe', options) as Promise<unknown>;
+        },
+        getLocalSegmentStatus: () => {
+            return events.invoke('localSegment.status');
+        },
+        getLastSegmentationCompare: () => {
+            return events.invoke('segmentationCompare.lastBundle');
+        },
+        getSegmentationCompareBundles: () => {
+            return events.invoke('segmentationCompare.bundles');
         }
     };
 
