@@ -50,7 +50,7 @@ const liftSegmentationResult = (
         imageWidth: frame.width,
         imageHeight: frame.height,
         op: 'set',
-        projectionMode: 'surface',
+        projectionMode: 'connected-volume',
         seed
     });
     if (!projection) return null;

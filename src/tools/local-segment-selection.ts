@@ -141,6 +141,10 @@ class LocalSegmentSelection {
             canvas.width = 256;
             canvas.height = 144;
             canvas.dataset.slot = slot;
+            canvas.tabIndex = 0;
+            canvas.role = 'button';
+            canvas.title = `Open ${slot.toUpperCase()} mask inspector`;
+            canvas.setAttribute('aria-label', `Open ${slot.toUpperCase()} mask inspector`);
             const preview = document.createElement('button');
             preview.type = 'button';
             preview.textContent = `Preview ${slot.toUpperCase()} in 3D`;
@@ -149,6 +153,38 @@ class LocalSegmentSelection {
             return { title, canvas, preview };
         };
         const candidateUi = { a: createCandidate('a'), b: createCandidate('b') };
+        const zoomHint = document.createElement('span');
+        zoomHint.className = 'segmentation-compare-zoom-hint';
+        zoomHint.textContent = 'Click either image to inspect and zoom.';
+        const inspector = document.createElement('div');
+        inspector.className = 'segmentation-mask-inspector hidden';
+        const inspectorDialog = document.createElement('div');
+        inspectorDialog.className = 'segmentation-mask-inspector-dialog';
+        inspectorDialog.setAttribute('role', 'dialog');
+        inspectorDialog.setAttribute('aria-modal', 'true');
+        const inspectorControls = document.createElement('div');
+        inspectorControls.className = 'segmentation-mask-inspector-controls';
+        const inspectorTitle = document.createElement('strong');
+        const zoomOut = document.createElement('button');
+        const zoomReset = document.createElement('button');
+        const zoomIn = document.createElement('button');
+        const inspectorClose = document.createElement('button');
+        zoomOut.type = zoomReset.type = zoomIn.type = inspectorClose.type = 'button';
+        zoomOut.textContent = '−';
+        zoomReset.textContent = 'Fit';
+        zoomIn.textContent = '+';
+        inspectorClose.textContent = 'Close';
+        zoomOut.setAttribute('aria-label', 'Zoom out');
+        zoomReset.setAttribute('aria-label', 'Fit mask to window');
+        zoomIn.setAttribute('aria-label', 'Zoom in');
+        inspectorControls.append(inspectorTitle, zoomOut, zoomReset, zoomIn, inspectorClose);
+        const inspectorViewport = document.createElement('div');
+        inspectorViewport.className = 'segmentation-mask-inspector-viewport';
+        const inspectorCanvas = document.createElement('canvas');
+        inspectorViewport.appendChild(inspectorCanvas);
+        inspectorDialog.append(inspectorControls, inspectorViewport);
+        inspector.appendChild(inspectorDialog);
+        comparePanel.appendChild(inspector);
         const maskGrade = document.createElement('div');
         const cutGrade = document.createElement('div');
         const createGradeRow = (label: string, parent: HTMLElement) => {
@@ -186,6 +222,7 @@ class LocalSegmentSelection {
             compareTitle,
             compareStatus,
             candidates,
+            zoomHint,
             clearPreview,
             maskGrade,
             cutGrade,
@@ -197,6 +234,7 @@ class LocalSegmentSelection {
         parent.appendChild(comparePanel);
 
         let compareSlots: Record<CompareSlot, CompareCandidate> | null = null;
+        let compareFrame: SegmentationFrame | null = null;
         let compareMapping: Record<CompareSlot, SegmentationResult['provider'] | 'failed'> | null = null;
         let maskGradeValue: BlindGrade | null = null;
         let cutGradeValue: BlindGrade | null = null;
@@ -254,7 +292,8 @@ class LocalSegmentSelection {
         cancelButton.addEventListener('click', () => runAbort?.abort());
 
         const drawMask = (target: HTMLCanvasElement, result: SegmentationResult | null, frame: SegmentationFrame) => {
-            target.height = Math.max(1, Math.round(target.width * frame.height / frame.width));
+            target.width = frame.width;
+            target.height = frame.height;
             const context = target.getContext('2d')!;
             context.clearRect(0, 0, target.width, target.height);
             if (!result) {
@@ -265,24 +304,86 @@ class LocalSegmentSelection {
                 return;
             }
             const frameMask = resampleMaskToFrame(result.mask, frame.width, frame.height);
-            const source = document.createElement('canvas');
-            source.width = frame.width;
-            source.height = frame.height;
-            const sourceContext = source.getContext('2d')!;
-            const image = sourceContext.createImageData(frame.width, frame.height);
+            const frameImage = context.createImageData(frame.width, frame.height);
+            frameImage.data.set(frame.rgba);
             for (let index = 0; index < frameMask.length; index++) {
                 const pixel = index * 4;
                 if (frameMask[index] > 0) {
-                    image.data[pixel] = 70;
-                    image.data[pixel + 1] = 255;
-                    image.data[pixel + 2] = 180;
-                    image.data[pixel + 3] = 255;
+                    frameImage.data[pixel] = Math.round(frameImage.data[pixel] * 0.4);
+                    frameImage.data[pixel + 1] = Math.round(frameImage.data[pixel + 1] * 0.4 + 245 * 0.6);
+                    frameImage.data[pixel + 2] = Math.round(frameImage.data[pixel + 2] * 0.4 + 220 * 0.6);
                 }
             }
-            sourceContext.putImageData(image, 0, 0);
-            context.imageSmoothingEnabled = false;
-            context.drawImage(source, 0, 0, target.width, target.height);
+            context.putImageData(frameImage, 0, 0);
         };
+
+        let inspectorZoom = 1;
+        let inspectorFocus: [number, number] | null = null;
+        const centerInspectorFocus = () => {
+            if (!inspectorFocus) return;
+            inspectorViewport.scrollLeft = inspectorFocus[0] * inspectorZoom - inspectorViewport.clientWidth * 0.5;
+            inspectorViewport.scrollTop = inspectorFocus[1] * inspectorZoom - inspectorViewport.clientHeight * 0.5;
+        };
+        const setInspectorZoom = (zoom: number) => {
+            inspectorZoom = Math.max(0.25, Math.min(8, zoom));
+            inspectorCanvas.style.width = `${Math.round(inspectorCanvas.width * inspectorZoom)}px`;
+            inspectorCanvas.style.height = `${Math.round(inspectorCanvas.height * inspectorZoom)}px`;
+            zoomReset.textContent = `${Math.round(inspectorZoom * 100)}%`;
+            window.requestAnimationFrame(centerInspectorFocus);
+        };
+        const fitInspector = () => {
+            const width = Math.max(1, inspectorViewport.clientWidth - 24);
+            const height = Math.max(1, inspectorViewport.clientHeight - 24);
+            setInspectorZoom(Math.min(1, width / inspectorCanvas.width, height / inspectorCanvas.height));
+        };
+        const closeInspector = () => inspector.classList.add('hidden');
+        const openInspector = (slot: CompareSlot) => {
+            const result = compareSlots?.[slot].result;
+            if (!compareFrame || !result) return;
+            inspectorTitle.textContent = `${slot.toUpperCase()} · image + mask overlay`;
+            drawMask(inspectorCanvas, result, compareFrame);
+            const frameMask = resampleMaskToFrame(result.mask, compareFrame.width, compareFrame.height);
+            let minX = compareFrame.width;
+            let minY = compareFrame.height;
+            let maxX = 0;
+            let maxY = 0;
+            for (let index = 0; index < frameMask.length; index++) {
+                if (frameMask[index] === 0) continue;
+                const x = index % compareFrame.width;
+                const y = Math.floor(index / compareFrame.width);
+                minX = Math.min(minX, x);
+                minY = Math.min(minY, y);
+                maxX = Math.max(maxX, x);
+                maxY = Math.max(maxY, y);
+            }
+            inspectorFocus = minX <= maxX && minY <= maxY ? [(minX + maxX) * 0.5, (minY + maxY) * 0.5] : null;
+            inspector.classList.remove('hidden');
+            window.requestAnimationFrame(fitInspector);
+        };
+        zoomOut.addEventListener('click', () => setInspectorZoom(inspectorZoom / 1.5));
+        zoomReset.addEventListener('click', fitInspector);
+        zoomIn.addEventListener('click', () => setInspectorZoom(inspectorZoom * 1.5));
+        inspectorClose.addEventListener('click', closeInspector);
+        inspector.addEventListener('click', (event) => {
+            if (event.target === inspector) closeInspector();
+        });
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && !inspector.classList.contains('hidden')) closeInspector();
+        });
+        inspectorCanvas.addEventListener('wheel', (event) => {
+            event.preventDefault();
+            setInspectorZoom(inspectorZoom * (event.deltaY < 0 ? 1.25 : 0.8));
+        }, { passive: false });
+        for (const slot of ['a', 'b'] as const) {
+            const candidateCanvas = candidateUi[slot].canvas;
+            candidateCanvas.addEventListener('click', () => openInspector(slot));
+            candidateCanvas.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openInspector(slot);
+                }
+            });
+        }
 
         const revealComparison = () => {
             if (!compareSlots || !compareMapping || !maskGradeValue || !cutGradeValue) return;
@@ -364,6 +465,7 @@ class LocalSegmentSelection {
         candidateUi.b.preview.addEventListener('click', () => previewCandidate('b'));
         close.addEventListener('click', () => {
             clearCandidatePreview();
+            closeInspector();
             comparePanel.classList.add('hidden');
         });
         download.addEventListener('click', () => {
@@ -408,6 +510,7 @@ class LocalSegmentSelection {
             };
             const local = lift(localSettled);
             const cloud = lift(cloudSettled);
+            compareFrame = frame;
             const swap = crypto.getRandomValues(new Uint32Array(1))[0] % 2 === 1;
             compareSlots = swap ? { a: cloud, b: local } : { a: local, b: cloud };
             compareMapping = {
@@ -437,6 +540,12 @@ class LocalSegmentSelection {
                 timings: candidate.result.timings,
                 liftMs: candidate.lifted?.liftMs,
                 selectedCount: candidate.lifted?.selectedIds.size,
+                projection: candidate.lifted ? {
+                    mode: candidate.lifted.projection.projectionMode,
+                    projectedCandidateCount: candidate.lifted.projection.projectedCandidateCount,
+                    surfaceCandidateCount: candidate.lifted.projection.surfaceCandidateCount,
+                    maskAreaRatio: candidate.lifted.projection.maskAreaRatio
+                } : null,
                 candidateCutRanges: candidate.lifted ? encodeIndexRanges(candidate.lifted.selectedIds) : [],
                 mask: {
                     width: candidate.result.mask.width,
@@ -585,6 +694,7 @@ class LocalSegmentSelection {
             this.active = false;
             toolbar.classList.add('hidden');
             comparePanel.classList.add('hidden');
+            closeInspector();
             parent.style.cursor = '';
             parent.removeEventListener('pointerdown', pointerHandler, true);
             runAbort?.abort();

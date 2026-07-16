@@ -34,7 +34,7 @@ const CLICK_ANCHOR_DEPTH_MAX_M = 0.22;
 const CLICK_ANCHOR_DEPTH_FRAC_OF_DEPTH = 0.018;
 
 type ArtisanSelectionMode = 'add' | 'remove' | 'set' | 'intersect';
-type ArtisanMaskProjectionMode = 'frustum' | 'surface' | 'connected-surface';
+type ArtisanMaskProjectionMode = 'frustum' | 'surface' | 'connected-surface' | 'connected-volume';
 type ArtisanMaskSource = 'click' | 'brush';
 type ArtisanPromptLabel = 0 | 1;
 type ArtisanPromptPoint = { click_xy: [number, number]; label: ArtisanPromptLabel };
@@ -1329,7 +1329,7 @@ const getMaskCentroid = (mask: Uint8Array, maskW: number, maskH: number, imgW: n
     return count > 0 ? [mx / count, my / count] : undefined;
 };
 
-const getSelectionWorldBounds = (candidates: Candidate[], pickedIdx: Set<number>): ArtisanSelectionBounds | undefined => {
+function getSelectionWorldBounds(candidates: Candidate[], pickedIdx: Set<number>): ArtisanSelectionBounds | undefined {
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     let count = 0;
@@ -1376,9 +1376,9 @@ const getSelectionWorldBounds = (candidates: Candidate[], pickedIdx: Set<number>
         radius: Math.max(radius, EPS_MIN_M),
         count
     };
-};
+}
 
-const encodeIndexRanges = (indices: Set<number>): [number, number][] => {
+function encodeIndexRanges(indices: Set<number>): [number, number][] {
     const sorted = Array.from(indices).sort((a, b) => a - b);
     const ranges: [number, number][] = [];
     let start: number | undefined;
@@ -1402,7 +1402,7 @@ const encodeIndexRanges = (indices: Set<number>): [number, number][] => {
     }
 
     return ranges;
-};
+}
 
 const revealSelection = (splat: Splat, pickedIdx: Set<number>) => {
     const centers = (splat.entity as any).gsplat.instance.sorter.centers as Float32Array;
@@ -1435,7 +1435,8 @@ const projectArtisanMaskSelection = (
 ): ArtisanSelectionProjection | null => {
     const t0 = performance.now();
     const intr = extractIntrinsics(scene.camera.camera, input.imageWidth, input.imageHeight);
-    const component = input.projectionMode === 'connected-surface' && input.seed ?
+    const connectedProjection = input.projectionMode === 'connected-surface' || input.projectionMode === 'connected-volume';
+    const component = connectedProjection && input.seed ?
         extractMaskComponentAroundSeed(
             input.mask,
             input.maskWidth,
@@ -1463,17 +1464,17 @@ const projectArtisanMaskSelection = (
     const surfaceCandidates = input.projectionMode === 'frustum' ?
         projectedCandidates :
         filterFrontSurfaceCandidates(projectedCandidates, input.imageWidth, input.imageHeight, visibleCandidates);
-    const visibleSurfaceCandidates = input.seed && input.projectionMode === 'connected-surface' ?
+    const visibleSurfaceCandidates = input.seed && connectedProjection ?
         filterFrontSurfaceCandidates(visibleCandidates, input.imageWidth, input.imageHeight, visibleCandidates) :
         [];
-    const clickAnchor = input.seed && input.projectionMode === 'connected-surface' ?
+    const clickAnchor = input.seed && connectedProjection ?
         buildClickAnchor(visibleSurfaceCandidates, input.seed[0], input.seed[1]) :
         undefined;
     const pickedIdx = new Set<number>();
     let seed = input.seed;
     let logDetails = '';
 
-    if (input.projectionMode === 'connected-surface') {
+    if (connectedProjection) {
         seed = seed ?? getMaskCentroid(projectionMask, input.maskWidth, input.maskHeight, input.imageWidth, input.imageHeight);
         if (!seed || surfaceCandidates.length === 0) {
             return null;
@@ -1484,7 +1485,8 @@ const projectArtisanMaskSelection = (
             return null;
         }
 
-        const clickDepth = surfaceCandidates[seedIndex].cz;
+        const seedCandidate = surfaceCandidates[seedIndex];
+        const clickDepth = seedCandidate.cz;
         const eps = Math.min(EPS_MAX_M, Math.max(EPS_MIN_M, clickDepth * EPS_FRAC_OF_DEPTH));
         const seedGrowLimits = estimateSeedGrowLimits(
             component?.bbox ?? getMaskBoundingBox(projectionMask, input.maskWidth, input.maskHeight),
@@ -1495,12 +1497,21 @@ const projectArtisanMaskSelection = (
             clickDepth,
             intr
         );
-        const kept = regionGrow(surfaceCandidates, seedIndex, eps, seedGrowLimits);
-        for (const k of kept) pickedIdx.add(surfaceCandidates[k].idx);
+        const growCandidates = input.projectionMode === 'connected-volume' ? projectedCandidates : surfaceCandidates;
+        const growSeedIndex = growCandidates.findIndex(candidate => candidate.idx === seedCandidate.idx);
+        if (growSeedIndex < 0) {
+            return null;
+        }
+        const kept = regionGrow(growCandidates, growSeedIndex, eps, seedGrowLimits);
+        if (input.projectionMode === 'connected-volume') {
+            for (const candidate of surfaceCandidates) pickedIdx.add(candidate.idx);
+        }
+        for (const k of kept) pickedIdx.add(growCandidates[k].idx);
         const componentDetails = component ?
             ` component=${component.componentArea}/${component.originalArea}${component.isolated ? '' : ' shared'} near=${(component.nearestDistancePx ?? 0).toFixed(1)}px` :
             '';
-        logDetails = `${componentDetails} depth=${clickDepth.toFixed(2)} eps=${eps.toFixed(3)} cap=${seedGrowLimits.maxSeedDistance.toFixed(2)} dz=${seedGrowLimits.maxDepthDelta.toFixed(2)} seed=${seedIndex} kept=${kept.size}`;
+        const volumeDetails = input.projectionMode === 'connected-volume' ? ` volume=${growCandidates.length}` : '';
+        logDetails = `${componentDetails}${volumeDetails} depth=${clickDepth.toFixed(2)} eps=${eps.toFixed(3)} cap=${seedGrowLimits.maxSeedDistance.toFixed(2)} dz=${seedGrowLimits.maxDepthDelta.toFixed(2)} seed=${growSeedIndex} kept=${kept.size}`;
     } else {
         for (const candidate of surfaceCandidates) pickedIdx.add(candidate.idx);
         logDetails = input.projectionMode === 'frustum' ? ' frustum=true' : ' surface=true';
