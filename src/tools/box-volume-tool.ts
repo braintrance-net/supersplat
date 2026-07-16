@@ -86,6 +86,7 @@ class BoxVolumeTool {
         let busy = false;
         let clickCandidate: { pointerId: number; startClient: [number, number] } | null = null;
         let hasWidth = false;
+        let boundaryAuthoring = false;
         let editMode: EditMode = 'resize';
         let activeDrag: {
             handle: ResizeHandle;
@@ -154,6 +155,7 @@ class BoxVolumeTool {
         const removeButton = new Button({ text: 'Remove', class: 'select-toolbar-button' });
         const saveTargetButton = new Button({ text: 'Save Target', class: 'select-toolbar-button' });
         const copyEvalButton = new Button({ text: 'Copy Click Eval', class: 'select-toolbar-button' });
+        const saveBoundaryButton = new Button({ text: 'Save Boundary', class: 'select-toolbar-button', hidden: true });
 
         const lenX = new NumericInput({ precision: 2, value: widthLen, placeholder: 'Width', width: 80, min: MIN_EXTENT });
         const lenY = new NumericInput({ precision: 2, value: heightLen, placeholder: 'Height', width: 80, min: MIN_EXTENT });
@@ -166,6 +168,7 @@ class BoxVolumeTool {
         selectToolbar.append(removeButton);
         selectToolbar.append(saveTargetButton);
         selectToolbar.append(copyEvalButton);
+        selectToolbar.append(saveBoundaryButton);
         selectToolbar.append(lenX);
         selectToolbar.append(lenY);
         selectToolbar.append(lenZ);
@@ -212,6 +215,19 @@ class BoxVolumeTool {
             synthetic: false
         });
 
+        const publishBoundaryDraft = () => {
+            if (!boundaryAuthoring || phase !== 'placed') return;
+            const boxState = currentBox();
+            events.fire('pointCloudBoundary.patch', {
+                boundsMode: 'manual',
+                manualBounds: {
+                    center: boxState.center,
+                    halfExtents: boxState.dimensions.map(value => value * 0.5),
+                    rotation: boxState.rotation
+                }
+            });
+        };
+
         try {
             events.function('boxVolume.currentBox', currentEvalTarget);
         } catch (err) {
@@ -227,6 +243,7 @@ class BoxVolumeTool {
                 active,
                 phase,
                 edit_mode: editMode,
+                boundary_authoring: boundaryAuthoring,
                 box_added: boxAdded,
                 current_box: currentEvalTarget()
             }));
@@ -261,7 +278,7 @@ class BoxVolumeTool {
             });
         };
 
-        const canRefreshLiveSelection = () => active && boxAdded && (phase === 'height' || phase === 'placed');
+        const canRefreshLiveSelection = () => !boundaryAuthoring && active && boxAdded && (phase === 'height' || phase === 'placed');
 
         async function runSelectionRefresh() {
             if (!canRefreshLiveSelection()) {
@@ -327,6 +344,7 @@ class BoxVolumeTool {
             updateOverlay();
             updateResizeHandles();
             maybePostBoxVolumeDebugSnapshot('box-visual-update');
+            publishBoundaryDraft();
             scene.forceRender = true;
         }
 
@@ -441,6 +459,13 @@ class BoxVolumeTool {
 
             await events.invoke('boxer.copyEvalCase', target);
         });
+        saveBoundaryButton.dom.addEventListener('pointerdown', e => e.stopPropagation());
+        saveBoundaryButton.dom.addEventListener('click', (e) => {
+            e.stopPropagation();
+            publishBoundaryDraft();
+            events.fire('toast', 'Point-cloud boundary saved.', 'info');
+            events.fire('tool.walk');
+        });
 
         lenX.on('change', () => {
             if (syncingInputs) return;
@@ -511,6 +536,7 @@ class BoxVolumeTool {
             updateOverlay();
             updateResizeHandles();
             maybePostBoxVolumeDebugSnapshot('box-visual-update');
+            publishBoundaryDraft();
             if (phase === 'height' || phase === 'placed') {
                 queueSelectionRefresh();
             }
@@ -1303,7 +1329,8 @@ class BoxVolumeTool {
                 syncInputs();
                 updateOverlay();
                 updateResizeHandles();
-                queueSelectionRefresh(true, true);
+                if (boundaryAuthoring) publishBoundaryDraft();
+                else queueSelectionRefresh(true, true);
             } else {
                 return;
             }
@@ -1347,6 +1374,57 @@ class BoxVolumeTool {
             scene.forceRender = true;
         };
 
+        const setToolbarPurpose = () => {
+            setButton.hidden = boundaryAuthoring;
+            addButton.hidden = boundaryAuthoring;
+            removeButton.hidden = boundaryAuthoring;
+            saveTargetButton.hidden = boundaryAuthoring;
+            copyEvalButton.hidden = boundaryAuthoring;
+            saveBoundaryButton.hidden = !boundaryAuthoring;
+        };
+
+        const loadBoundaryBounds = (bounds: {
+            center?: [number, number, number];
+            halfExtents?: [number, number, number];
+            rotation?: [[number, number, number], [number, number, number], [number, number, number]];
+        } | null | undefined) => {
+            boundaryAuthoring = true;
+            setToolbarPurpose();
+            if (!bounds?.center || !bounds.halfExtents || !bounds.rotation) {
+                reset();
+                boundaryAuthoring = true;
+                setToolbarPurpose();
+                return;
+            }
+            center.set(bounds.center[0], bounds.center[1], bounds.center[2]);
+            widthDir.set(bounds.rotation[0][0], 0, bounds.rotation[0][2]);
+            if (widthDir.length() < 1e-6) widthDir.set(1, 0, 0);
+            else widthDir.normalize();
+            widthLen = Math.max(MIN_EXTENT, bounds.halfExtents[0] * 2);
+            heightLen = Math.max(MIN_EXTENT, bounds.halfExtents[1] * 2);
+            depthAxis(perp);
+            const depthSign = perp.x * bounds.rotation[2][0] + perp.z * bounds.rotation[2][2] < 0 ? -1 : 1;
+            depthLen = depthSign * Math.max(MIN_EXTENT, bounds.halfExtents[2] * 2);
+            hasWidth = true;
+            phase = 'placed';
+            editMode = 'resize';
+            if (!boxAdded) {
+                scene.add(box);
+                scene.add(volumeShape);
+                boxAdded = true;
+                const render = (box.pivot as any).render;
+                if (render) render.enabled = false;
+            }
+            volumeShape.setVisible(true);
+            syncCornerFromCenter();
+            updateBox();
+            selectToolbar.hidden = false;
+            syncEditMode();
+            scene.forceRender = true;
+        };
+
+        events.on('boxVolume.beginBoundaryAuthoring', loadBoundaryBounds);
+
         const onKeyDown = (e: KeyboardEvent) => {
             if (active && e.key === 'Escape' && phase !== 'idle') {
                 reset();
@@ -1364,6 +1442,8 @@ class BoxVolumeTool {
 
         this.activate = () => {
             active = true;
+            boundaryAuthoring = false;
+            setToolbarPurpose();
             phase = 'idle';
             waitForCollisionSurface().catch(() => {});
             canvasContainer.dom.addEventListener('pointerdown', pointerdown);
@@ -1376,6 +1456,8 @@ class BoxVolumeTool {
         this.deactivate = () => {
             active = false;
             reset();
+            boundaryAuthoring = false;
+            setToolbarPurpose();
             canvasContainer.dom.removeEventListener('pointerdown', pointerdown);
             canvasContainer.dom.removeEventListener('pointermove', pointermove);
             canvasContainer.dom.removeEventListener('pointerup', pointerup, true);

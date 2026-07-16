@@ -209,6 +209,12 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const pointCloudBoundary = new Button({
+            id: 'bottom-toolbar-point-cloud-boundary',
+            class: 'bottom-toolbar-text-tool',
+            text: 'Points'
+        });
+
         const samModeWrap = document.createElement('div');
         samModeWrap.id = 'sam3-mode-wrap';
         samModeWrap.className = 'hidden';
@@ -343,6 +349,7 @@ class BottomToolbar extends Container {
             { node: boxerAll, shortcutId: 'tool.boxerDetectAll', fallbackOrder: 7 },
             { node: manualBox, shortcutId: 'tool.boxSelection', fallbackOrder: 8 },
             { node: boxVolume, shortcutId: 'tool.boxVolume', fallbackOrder: 9 },
+            { node: pointCloudBoundary, fallbackOrder: 10 },
             { node: semanticScan, fallbackOrder: 11 }
         ]);
         this.dom.appendChild(samModeWrap);
@@ -548,6 +555,10 @@ class BottomToolbar extends Container {
         events.on('tool.boxerDetectAll', runBoxerDetectAll);
         manualBox.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         boxVolume.dom.addEventListener('click', () => events.fire('tool.boxVolume'));
+        pointCloudBoundary.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('pointCloudBoundary.togglePanel');
+        });
         semanticScan.dom.addEventListener('click', () => {
             showOnlyFloatingMenu(null);
             events.fire('semanticScan.run');
@@ -570,6 +581,7 @@ class BottomToolbar extends Container {
         tooltips.register(boxerAll, tooltip('Boxer Detect All', 'tool.boxerDetectAll'));
         tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(boxVolume, tooltip('4-Click Box', 'tool.boxVolume'));
+        tooltips.register(pointCloudBoundary, 'Point-cloud boundary settings');
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
@@ -795,6 +807,10 @@ class BottomToolbar extends Container {
 
         events.on('assetBrowser.visible', (visible: boolean) => {
             simplifiedAssetBrowser.class[visible ? 'add' : 'remove']('active');
+        });
+
+        events.on('viewPanel.visible', (visible: boolean) => {
+            pointCloudBoundary.class[visible ? 'add' : 'remove']('active');
         });
 
         window.addEventListener('resize', () => {

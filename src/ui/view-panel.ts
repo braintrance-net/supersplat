@@ -1,7 +1,8 @@
-import { BooleanInput, ColorPicker, Container, Label, SelectInput, SliderInput } from '@playcanvas/pcui';
+import { BooleanInput, Button, ColorPicker, Container, Label, SelectInput, SliderInput } from '@playcanvas/pcui';
 import { Color } from 'playcanvas';
 
 import { Events } from '../events';
+import type { PointCloudBoundarySettings } from '../point-cloud-boundary';
 import { ShortcutManager } from '../shortcut-manager';
 import { localize } from './localization';
 import { Tooltips } from './tooltips';
@@ -341,6 +342,69 @@ class ViewPanel extends Container {
         voxelMeshRow.append(voxelMeshLabel);
         voxelMeshRow.append(voxelMeshToggle);
 
+        // point-cloud boundary effect
+        const pointCloudHeader = new Container({ class: 'view-panel-row' });
+        pointCloudHeader.append(new Label({ text: 'Point-cloud boundary', class: 'view-panel-row-label' }));
+
+        const pointCloudEnabled = new BooleanInput({
+            type: 'toggle',
+            class: 'view-panel-row-toggle',
+            value: false
+        });
+        pointCloudHeader.append(pointCloudEnabled);
+
+        const pointCloudBoundsRow = new Container({ class: 'view-panel-row' });
+        pointCloudBoundsRow.append(new Label({ text: 'Bounds', class: 'view-panel-row-label' }));
+        const pointCloudBoundsMode = new SelectInput({
+            class: 'view-panel-row-select',
+            defaultValue: 'automatic',
+            options: [
+                { v: 'automatic', t: 'Automatic splat bounds' },
+                { v: 'manual', t: 'Manual box' }
+            ]
+        });
+        pointCloudBoundsRow.append(pointCloudBoundsMode);
+
+        const pointCloudPreviewRow = new Container({ class: 'view-panel-row' });
+        pointCloudPreviewRow.append(new Label({ text: 'Preview', class: 'view-panel-row-label' }));
+        const pointCloudPreview = new SelectInput({
+            class: 'view-panel-row-select',
+            defaultValue: 'automatic',
+            options: [
+                { v: 'automatic', t: 'Automatic' },
+                { v: 'inside', t: 'Inside' },
+                { v: 'boundary', t: 'Boundary' },
+                { v: 'outside', t: 'Outside' }
+            ]
+        });
+        pointCloudPreviewRow.append(pointCloudPreview);
+
+        const createPointCloudSlider = (labelText: string, min: number, max: number, precision: number, value: number) => {
+            const row = new Container({ class: 'view-panel-row' });
+            row.append(new Label({ text: labelText, class: 'view-panel-row-label' }));
+            const input = new SliderInput({
+                class: 'view-panel-row-slider',
+                min,
+                max,
+                precision,
+                value
+            });
+            row.append(input);
+            return { row, input };
+        };
+        const pointCloudFade = createPointCloudSlider('Fade width', 0.01, 20, 2, 1);
+        const pointCloudRadius = createPointCloudSlider('Point radius', 0.5, 8, 1, 2);
+        const pointCloudOpacity = createPointCloudSlider('Point opacity', 0, 1, 2, 1);
+
+        const pointCloudManualRow = new Container({ class: 'view-panel-row' });
+        pointCloudManualRow.append(new Label({ text: 'Manual volume', class: 'view-panel-row-label' }));
+        const editBoundary = new Button({ text: 'Edit boundary', class: 'view-panel-row-select' });
+        pointCloudManualRow.append(editBoundary);
+
+        const pointCloudStatusRow = new Container({ class: 'view-panel-row' });
+        const pointCloudStatus = new Label({ text: 'Disabled', class: 'view-panel-row-label' });
+        pointCloudStatusRow.append(pointCloudStatus);
+
         this.append(header);
         this.append(clrRow);
         this.append(tonemappingRow);
@@ -354,6 +418,14 @@ class ViewPanel extends Container {
         this.append(showGridRow);
         this.append(showBoundRow);
         this.append(voxelMeshRow);
+        this.append(pointCloudHeader);
+        this.append(pointCloudBoundsRow);
+        this.append(pointCloudPreviewRow);
+        this.append(pointCloudFade.row);
+        this.append(pointCloudRadius.row);
+        this.append(pointCloudOpacity.row);
+        this.append(pointCloudManualRow);
+        this.append(pointCloudStatusRow);
 
         // handle panel visibility
 
@@ -377,6 +449,22 @@ class ViewPanel extends Container {
 
         events.on('viewPanel.toggleVisible', () => {
             setVisible(this.hidden);
+        });
+
+        events.on('pointCloudBoundary.togglePanel', () => {
+            if (!this.hidden) {
+                setVisible(false);
+                return;
+            }
+
+            setVisible(true);
+            window.requestAnimationFrame(() => {
+                pointCloudHeader.dom.scrollIntoView({ block: 'center' });
+                pointCloudHeader.dom.classList.add('point-cloud-boundary-focus');
+                window.setTimeout(() => {
+                    pointCloudHeader.dom.classList.remove('point-cloud-boundary-focus');
+                }, 1200);
+            });
         });
 
         events.on('colorPanel.visible', (visible: boolean) => {
@@ -476,6 +564,49 @@ class ViewPanel extends Container {
             events.fire('walk.collisionMeshVisualize', voxelMeshToggle.value);
         });
 
+        const patchPointCloud = (patch: Partial<PointCloudBoundarySettings>) => {
+            events.fire('pointCloudBoundary.patch', patch);
+        };
+        pointCloudEnabled.on('change', (value: boolean) => patchPointCloud({ enabled: value }));
+        pointCloudBoundsMode.on('change', (value: PointCloudBoundarySettings['boundsMode']) => {
+            patchPointCloud({ boundsMode: value });
+        });
+        pointCloudPreview.on('change', (value: PointCloudBoundarySettings['preview']) => {
+            patchPointCloud({ preview: value });
+        });
+        pointCloudFade.input.on('change', (value: number) => patchPointCloud({ fadeWidth: value }));
+        pointCloudRadius.input.on('change', (value: number) => patchPointCloud({ pointRadius: value }));
+        pointCloudOpacity.input.on('change', (value: number) => patchPointCloud({ pointOpacity: value }));
+        editBoundary.on('click', () => {
+            const settings = events.invoke('pointCloudBoundary.settings') as PointCloudBoundarySettings;
+            if (events.invoke('tool.active') !== 'boxVolume') events.fire('tool.boxVolume');
+            events.fire('boxVolume.beginBoundaryAuthoring', settings.manualBounds);
+        });
+
+        events.on('pointCloudBoundary.settings', (settings: PointCloudBoundarySettings) => {
+            pointCloudEnabled.value = settings.enabled;
+            pointCloudBoundsMode.value = settings.boundsMode;
+            pointCloudPreview.value = settings.preview;
+            pointCloudFade.input.value = settings.fadeWidth;
+            pointCloudRadius.input.value = settings.pointRadius;
+            pointCloudOpacity.input.value = settings.pointOpacity;
+        });
+        events.on('pointCloudBoundary.state', (state: {
+            enabled: boolean;
+            hasBounds: boolean;
+            boundsMode: string;
+            signedDistance: number | null;
+            weight: number;
+        }) => {
+            if (!state.enabled) {
+                pointCloudStatus.text = 'Disabled';
+            } else if (!state.hasBounds) {
+                pointCloudStatus.text = `No ${state.boundsMode} bounds`;
+            } else {
+                pointCloudStatus.text = `Distance ${state.signedDistance.toFixed(2)} · morph ${(state.weight * 100).toFixed(0)}%`;
+            }
+        });
+
         // background color
 
         bgClrPicker.on('change', (value: number[]) => {
@@ -523,6 +654,8 @@ class ViewPanel extends Container {
         tooltips.register(unselectedClrPicker, localize('panel.view-options.unselected-color'), 'top');
         tooltips.register(lockedClrPicker, localize('panel.view-options.locked-color'), 'top');
         tooltips.register(selectedSplatsOverlayLabel, 'Tint selected splats with their real Gaussian footprint', 'left');
+        tooltips.register(pointCloudHeader, 'Morph Gaussians to fixed-size centers outside the transition volume.', 'left');
+        tooltips.register(editBoundary, 'Place or edit the oriented transition volume without changing the selection.', 'left');
     }
 }
 

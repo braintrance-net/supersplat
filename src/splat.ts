@@ -408,6 +408,14 @@ class Splat extends Element {
         material.setParameter('artisanConfidenceActive', this.artisanConfidenceActive ? 1 : 0);
         material.setParameter('artisanConfidenceThreshold', this.artisanConfidenceThreshold);
         material.setParameter('artisanConfidenceIsolate', this.artisanConfidenceIsolate ? 1 : 0);
+        const pointCloudState = events.invoke('pointCloudBoundary.renderState') as {
+            weight?: number;
+            pointRadius?: number;
+            pointOpacity?: number;
+        } | undefined;
+        material.setParameter('pointCloudWeight', pointCloudState?.weight ?? 0);
+        material.setParameter('pointCloudRadius', pointCloudState?.pointRadius ?? 2);
+        material.setParameter('pointCloudOpacity', pointCloudState?.pointOpacity ?? 1);
 
         if (this.visible && selected) {
             // render bounding box

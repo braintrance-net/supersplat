@@ -125,6 +125,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             events.invoke('docDeserialize.view', document.view);
             events.invoke('docDeserialize.semantics', document.semantics);
             events.invoke('docDeserialize.artisanGs', document.artisanGs);
+            events.invoke('docDeserialize.pointCloudBoundary', document.pointCloudBoundary);
             scene.camera.docDeserialize(document.camera);
 
             // refresh the pivot to reflect the loaded transform
@@ -163,6 +164,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 timeline: events.invoke('docSerialize.timeline'),
                 semantics: events.invoke('docSerialize.semantics'),
                 artisanGs: events.invoke('docSerialize.artisanGs'),
+                pointCloudBoundary: events.invoke('docSerialize.pointCloudBoundary'),
                 splats: splats.map(s => s.docSerialize())
             };
 

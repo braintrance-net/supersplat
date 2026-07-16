@@ -253,7 +253,9 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     let visibleCanvasStreamReader: ReadableStreamDefaultReader<any> | null = null;
     const elapsedMs = (startMs: number) => Math.max(0, Math.round(performance.now() - startMs));
     const postRenderTimeoutMs = 5000;
-    const yieldAfterPostRender = () => new Promise<void>(resolve => window.setTimeout(resolve, 0));
+    const yieldAfterPostRender = () => new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 0);
+    });
 
     const getScratchCanvas = (
         current: HTMLCanvasElement | null,

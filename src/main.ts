@@ -10,6 +10,7 @@ import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
 import { registerPlySequenceEvents } from './ply-sequence';
+import { registerPointCloudBoundaryEvents } from './point-cloud-boundary-controller';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
 import { Scene } from './scene';
@@ -180,6 +181,10 @@ declare global {
             getLocalSegmentStatus: () => unknown;
             getLastSegmentationCompare: () => unknown;
             getSegmentationCompareBundles: () => unknown;
+            getPointCloudBoundary: () => unknown;
+            setPointCloudBoundary: (settings: unknown) => unknown;
+            getPointCloudBoundaryDiagnostics: () => unknown;
+            benchmarkPointCloudBoundary: (options?: { samples?: number }) => Promise<unknown>;
         };
     }
 }
@@ -287,6 +292,7 @@ const main = async () => {
         editorUI.canvas,
         graphicsDevice
     );
+    registerPointCloudBoundaryEvents(events, scene);
     registerArtisanGsLocalEvents(events, scene);
 
     // colors
@@ -699,6 +705,19 @@ const main = async () => {
         },
         getSegmentationCompareBundles: () => {
             return events.invoke('segmentationCompare.bundles');
+        },
+        getPointCloudBoundary: () => {
+            return events.invoke('pointCloudBoundary.settings');
+        },
+        setPointCloudBoundary: (settings: unknown) => {
+            events.fire('pointCloudBoundary.set', settings);
+            return events.invoke('pointCloudBoundary.settings');
+        },
+        getPointCloudBoundaryDiagnostics: () => {
+            return events.invoke('pointCloudBoundary.diagnostics');
+        },
+        benchmarkPointCloudBoundary: (options?: { samples?: number }) => {
+            return events.invoke('pointCloudBoundary.benchmark', options) as Promise<unknown>;
         }
     };
 
