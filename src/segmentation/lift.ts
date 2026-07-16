@@ -75,7 +75,7 @@ const previewLiftedSegmentation = (splat: Splat, lifted: LiftedSegmentation | nu
     }
     const confidence = new Float32Array(splat.splatData.numSplats);
     for (const index of lifted.selectedIds) confidence[index] = 1;
-    splat.setArtisanConfidencePreview(confidence, 0.5);
+    splat.setArtisanConfidencePreview(confidence, 0.5, true);
 };
 
 export {

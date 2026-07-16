@@ -74,6 +74,7 @@ class Splat extends Element {
     revealStartTime = 0;
     artisanConfidenceActive = false;
     artisanConfidenceThreshold = 0;
+    artisanConfidenceIsolate = false;
 
     _name = '';
     _tintClr = new Color(1, 1, 1);
@@ -406,6 +407,7 @@ class Splat extends Element {
         material.setParameter('revealRadius', this.revealRadius);
         material.setParameter('artisanConfidenceActive', this.artisanConfidenceActive ? 1 : 0);
         material.setParameter('artisanConfidenceThreshold', this.artisanConfidenceThreshold);
+        material.setParameter('artisanConfidenceIsolate', this.artisanConfidenceIsolate ? 1 : 0);
 
         if (this.visible && selected) {
             // render bounding box
@@ -444,7 +446,7 @@ class Splat extends Element {
         this.revealTexture.unlock();
     }
 
-    setArtisanConfidencePreview(confidence?: Float32Array | null, threshold = 0) {
+    setArtisanConfidencePreview(confidence?: Float32Array | null, threshold = 0, isolate = false) {
         const data = this.artisanConfidenceTexture.lock() as Uint8Array;
         data.fill(0);
 
@@ -458,6 +460,7 @@ class Splat extends Element {
         this.artisanConfidenceTexture.unlock();
         this.artisanConfidenceActive = !!confidence;
         this.artisanConfidenceThreshold = Math.max(0, Math.min(1, threshold));
+        this.artisanConfidenceIsolate = !!confidence && isolate;
         this.scene.forceRender = true;
     }
 

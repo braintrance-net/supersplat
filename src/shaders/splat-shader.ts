@@ -10,6 +10,7 @@ uniform vec4 selectionRemovePreviewClr;
 uniform vec4 selectionIntersectPreviewClr;
 uniform float artisanConfidenceActive;
 uniform float artisanConfidenceThreshold;
+uniform float artisanConfidenceIsolate;
 
 uniform vec3 clrOffset;
 uniform vec4 clrScale;
@@ -198,7 +199,18 @@ void main(void) {
             //   unselectable (conf 0)-> original color, untouched
             bool artisanSelected = (editState & 1u) != 0u;
             float confidence = texelFetch(artisanConfidence, splat.uv, 0).r;
-            if (artisanSelected) {
+            if (artisanConfidenceIsolate > 0.5) {
+                if (confidence >= artisanConfidenceThreshold) {
+                    float lum = dot(color.xyz, vec3(0.299, 0.587, 0.114));
+                    vec3 candidateCyan = vec3(0.05, 0.90, 1.00) * (0.58 + 0.42 * lum);
+                    color.xyz = mix(color.xyz, candidateCyan, 0.90);
+                    color.a = max(color.a, 0.96);
+                } else {
+                    // Retain faint scene context while making the proposed cut unambiguous.
+                    color.xyz *= 0.08;
+                    color.a *= 0.08;
+                }
+            } else if (artisanSelected) {
                 // Retain a little original luminance so surface form stays legible
                 // through the green, but keep it unmistakably solid green.
                 float lum = dot(color.xyz, vec3(0.299, 0.587, 0.114));

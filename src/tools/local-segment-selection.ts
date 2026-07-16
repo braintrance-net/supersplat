@@ -167,19 +167,33 @@ class LocalSegmentSelection {
         };
         const maskGradeButtons = createGradeRow('Better 2D mask:', maskGrade);
         const cutGradeButtons = createGradeRow('Better 3D cut:', cutGrade);
+        const clearPreview = document.createElement('button');
         const applyA = document.createElement('button');
         const applyB = document.createElement('button');
         const download = document.createElement('button');
         const close = document.createElement('button');
-        applyA.type = applyB.type = download.type = close.type = 'button';
+        clearPreview.type = applyA.type = applyB.type = download.type = close.type = 'button';
+        clearPreview.textContent = 'Show normal scene';
         applyA.textContent = 'Apply A';
         applyB.textContent = 'Apply B';
         download.textContent = 'Download benchmark bundle';
         close.textContent = 'Close';
+        clearPreview.disabled = true;
         applyA.disabled = true;
         applyB.disabled = true;
         download.disabled = true;
-        comparePanel.append(compareTitle, compareStatus, candidates, maskGrade, cutGrade, applyA, applyB, download, close);
+        comparePanel.append(
+            compareTitle,
+            compareStatus,
+            candidates,
+            clearPreview,
+            maskGrade,
+            cutGrade,
+            applyA,
+            applyB,
+            download,
+            close
+        );
         parent.appendChild(comparePanel);
 
         let compareSlots: Record<CompareSlot, CompareCandidate> | null = null;
@@ -297,6 +311,39 @@ class LocalSegmentSelection {
         attachGrades(maskGradeButtons, 'mask');
         attachGrades(cutGradeButtons, 'cut');
 
+        const normalComparisonStatus = () => {
+            return maskGradeValue && cutGradeValue ?
+                `2D: ${maskGradeValue.toUpperCase()} · 3D: ${cutGradeValue.toUpperCase()}` :
+                'Grade both outputs before identities are revealed.';
+        };
+        const clearCandidatePreview = () => {
+            const splat = events.invoke('selection') as Splat;
+            if (splat) previewLiftedSegmentation(splat, null);
+            candidateUi.a.preview.classList.remove('active');
+            candidateUi.b.preview.classList.remove('active');
+            clearPreview.disabled = true;
+            compareStatus.textContent = normalComparisonStatus();
+        };
+        const previewCandidate = (slot: CompareSlot) => {
+            const splat = events.invoke('selection') as Splat;
+            const candidate = compareSlots?.[slot];
+            if (!splat || !candidate?.lifted) return;
+            const startedAt = performance.now();
+            previewLiftedSegmentation(splat, candidate.lifted);
+            candidateUi.a.preview.classList.toggle('active', slot === 'a');
+            candidateUi.b.preview.classList.toggle('active', slot === 'b');
+            clearPreview.disabled = false;
+            compareStatus.textContent = `Previewing ${slot.toUpperCase()} · ${candidate.lifted.selectedIds.size.toLocaleString()} Gaussians · selection unchanged`;
+            if (lastBundle) {
+                lastBundle.preview = {
+                    slot,
+                    selectedCount: candidate.lifted.selectedIds.size,
+                    ms: preciseMs(performance.now() - startedAt)
+                };
+            }
+        };
+        clearPreview.addEventListener('click', clearCandidatePreview);
+
         const applySlot = async (slot: CompareSlot) => {
             const candidate = compareSlots?.[slot];
             if (!candidate?.lifted) return;
@@ -304,7 +351,7 @@ class LocalSegmentSelection {
             if (!splat) return;
             const startedAt = performance.now();
             await applyLiftedSegmentation(events, splat, candidate.lifted);
-            previewLiftedSegmentation(splat, null);
+            clearCandidatePreview();
             comparePanel.classList.add('hidden');
             if (lastBundle) {
                 lastBundle.applied = slot;
@@ -313,25 +360,10 @@ class LocalSegmentSelection {
         };
         applyA.addEventListener('click', () => applySlot('a'));
         applyB.addEventListener('click', () => applySlot('b'));
-        candidateUi.a.preview.addEventListener('click', () => {
-            const splat = events.invoke('selection') as Splat;
-            if (splat) {
-                const startedAt = performance.now();
-                previewLiftedSegmentation(splat, compareSlots?.a.lifted ?? null);
-                if (lastBundle) lastBundle.preview = { slot: 'a', ms: preciseMs(performance.now() - startedAt) };
-            }
-        });
-        candidateUi.b.preview.addEventListener('click', () => {
-            const splat = events.invoke('selection') as Splat;
-            if (splat) {
-                const startedAt = performance.now();
-                previewLiftedSegmentation(splat, compareSlots?.b.lifted ?? null);
-                if (lastBundle) lastBundle.preview = { slot: 'b', ms: preciseMs(performance.now() - startedAt) };
-            }
-        });
+        candidateUi.a.preview.addEventListener('click', () => previewCandidate('a'));
+        candidateUi.b.preview.addEventListener('click', () => previewCandidate('b'));
         close.addEventListener('click', () => {
-            const splat = events.invoke('selection') as Splat;
-            if (splat) previewLiftedSegmentation(splat, null);
+            clearCandidatePreview();
             comparePanel.classList.add('hidden');
         });
         download.addEventListener('click', () => {
@@ -351,6 +383,7 @@ class LocalSegmentSelection {
             signal: AbortSignal,
             captureTimings: unknown
         ) => {
+            clearCandidatePreview();
             compareStatus.textContent = 'Running both providers…';
             comparePanel.classList.remove('hidden');
             const prompts: SegmentationPrompt[] = [{ x: click[0], y: click[1], label: 1 }];
