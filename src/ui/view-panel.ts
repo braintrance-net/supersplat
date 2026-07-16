@@ -451,6 +451,22 @@ class ViewPanel extends Container {
             setVisible(this.hidden);
         });
 
+        events.on('pointCloudBoundary.togglePanel', () => {
+            if (!this.hidden) {
+                setVisible(false);
+                return;
+            }
+
+            setVisible(true);
+            window.requestAnimationFrame(() => {
+                pointCloudHeader.dom.scrollIntoView({ block: 'center' });
+                pointCloudHeader.dom.classList.add('point-cloud-boundary-focus');
+                window.setTimeout(() => {
+                    pointCloudHeader.dom.classList.remove('point-cloud-boundary-focus');
+                }, 1200);
+            });
+        });
+
         events.on('colorPanel.visible', (visible: boolean) => {
             if (visible) {
                 setVisible(false);

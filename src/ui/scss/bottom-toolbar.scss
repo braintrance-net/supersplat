@@ -131,10 +131,16 @@ body.advanced-ui {
 #bottom-toolbar-boxer-all,
 #bottom-toolbar-manual-box,
 #bottom-toolbar-box-volume,
+#bottom-toolbar-point-cloud-boundary,
 #bottom-toolbar-semantic-scan {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+#bottom-toolbar-point-cloud-boundary.active {
+    color: $clr-active;
+    background-color: $clr-hilight !important;
 }
 
 .bottom-toolbar-variant-tool {

@@ -197,6 +197,12 @@ class BottomToolbar extends Container {
             class: 'bottom-toolbar-tool'
         });
 
+        const pointCloudBoundary = new Button({
+            id: 'bottom-toolbar-point-cloud-boundary',
+            class: 'bottom-toolbar-text-tool',
+            text: 'Points'
+        });
+
         const samModeWrap = document.createElement('div');
         samModeWrap.id = 'sam3-mode-wrap';
         samModeWrap.className = 'hidden';
@@ -326,6 +332,7 @@ class BottomToolbar extends Container {
             { node: boxerAll, shortcutId: 'tool.boxerDetectAll', fallbackOrder: 7 },
             { node: manualBox, shortcutId: 'tool.boxSelection', fallbackOrder: 8 },
             { node: boxVolume, shortcutId: 'tool.boxVolume', fallbackOrder: 9 },
+            { node: pointCloudBoundary, fallbackOrder: 10 },
             { node: semanticScan, fallbackOrder: 11 }
         ]);
         this.dom.appendChild(samModeWrap);
@@ -398,17 +405,6 @@ class BottomToolbar extends Container {
             const activeTool = events.invoke('tool.active');
             return activeTool === 'artisanClickSelection' || activeTool === 'artisanBrushSelection';
         };
-        const syncFloatingMenus = () => {
-            syncSamModeWrap();
-            syncArtisanSubmenuWrap();
-            syncRawBrushModeWrap();
-        };
-        const showOnlyFloatingMenu = (menu: 'sam' | 'artisan' | 'raw-brush' | null) => {
-            samModePinned = menu === 'sam';
-            artisanSubmenuPinned = menu === 'artisan';
-            rawBrushModePinned = menu === 'raw-brush';
-            syncFloatingMenus();
-        };
         const syncArtisanSubmenuWrap = () => {
             const visible = artisanSubmenuPinned;
             artisanSubmenuWrap.classList.toggle('hidden', !visible);
@@ -455,6 +451,17 @@ class BottomToolbar extends Container {
             if (visible) {
                 positionSamModeWrap();
             }
+        };
+        const syncFloatingMenus = () => {
+            syncSamModeWrap();
+            syncArtisanSubmenuWrap();
+            syncRawBrushModeWrap();
+        };
+        const showOnlyFloatingMenu = (menu: 'sam' | 'artisan' | 'raw-brush' | null) => {
+            samModePinned = menu === 'sam';
+            artisanSubmenuPinned = menu === 'artisan';
+            rawBrushModePinned = menu === 'raw-brush';
+            syncFloatingMenus();
         };
         const activateBrushVariant = (variant: BrushSelectionVariant) => {
             const activeTool = events.invoke('tool.active');
@@ -518,6 +525,10 @@ class BottomToolbar extends Container {
         events.on('tool.boxerDetectAll', runBoxerDetectAll);
         manualBox.dom.addEventListener('click', () => events.fire('tool.boxSelection'));
         boxVolume.dom.addEventListener('click', () => events.fire('tool.boxVolume'));
+        pointCloudBoundary.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('pointCloudBoundary.togglePanel');
+        });
         semanticScan.dom.addEventListener('click', () => {
             showOnlyFloatingMenu(null);
             events.fire('semanticScan.run');
@@ -538,6 +549,7 @@ class BottomToolbar extends Container {
         tooltips.register(boxerAll, tooltip('Boxer Detect All', 'tool.boxerDetectAll'));
         tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(boxVolume, tooltip('4-Click Box', 'tool.boxVolume'));
+        tooltips.register(pointCloudBoundary, 'Point-cloud boundary settings');
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
@@ -761,6 +773,10 @@ class BottomToolbar extends Container {
 
         events.on('assetBrowser.visible', (visible: boolean) => {
             simplifiedAssetBrowser.class[visible ? 'add' : 'remove']('active');
+        });
+
+        events.on('viewPanel.visible', (visible: boolean) => {
+            pointCloudBoundary.class[visible ? 'add' : 'remove']('active');
         });
 
         window.addEventListener('resize', () => {
