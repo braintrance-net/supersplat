@@ -133,6 +133,24 @@ const formatSegmentationProvider = (provider: SegmentationProviderId | 'failed')
     return 'Failed';
 };
 
+const formatTimingDuration = (value: number) => {
+    return value >= 1000 ? `${(value / 1000).toFixed(2)}s` : `${Math.round(value)}ms`;
+};
+
+const formatLocalSegmentationTimings = (timings: SegmentationTimings, liftMs?: number) => {
+    const encoder = timings.encoderMs === 0 ? 'cached' : formatTimingDuration(timings.encoderMs);
+    const phases = [
+        `total ${formatTimingDuration(timings.totalMs)}`,
+        `init ${formatTimingDuration(timings.initializeMs)}`,
+        `prep ${formatTimingDuration(timings.preprocessMs)}`,
+        `encode ${encoder}`,
+        `decode ${formatTimingDuration(timings.decoderMs)}`,
+        `post ${formatTimingDuration(timings.postprocessMs)}`
+    ];
+    if (liftMs !== undefined) phases.push(`3D lift ${formatTimingDuration(liftMs)}`);
+    return phases.join(' · ');
+};
+
 const createBlindComparison = (
     local: SegmentationResult,
     cloud: SegmentationResult,
@@ -170,6 +188,7 @@ export {
     SegmentationContractError,
     applySelectionOperation,
     createBlindComparison,
+    formatLocalSegmentationTimings,
     formatSegmentationProvider,
     mapFramePointToMask,
     resampleMaskToFrame,

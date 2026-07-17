@@ -19,6 +19,7 @@ import {
 } from '../segmentation/lift';
 import { LocalSam2Provider, TOTAL_MODEL_BYTES, type LocalSam2Progress } from '../segmentation/local-sam2-provider';
 import {
+    formatLocalSegmentationTimings,
     formatSegmentationProvider,
     resampleMaskToFrame,
     type BlindGrade,
@@ -79,6 +80,7 @@ class LocalSegmentSelection {
         let runAbort: AbortController | null = null;
         let ready = false;
         let promptSession: LocalPromptSession | null = null;
+        let localClickCount = 0;
         let lastBundle: Record<string, unknown> | null = null;
         const bundles: Record<string, unknown>[] = [];
 
@@ -123,6 +125,25 @@ class LocalSegmentSelection {
         addModeButton('refine-positive', 'Refine +');
         addModeButton('refine-negative', 'Refine −');
         addModeButton('compare', 'Compare Local vs Cloud');
+        const timingHistory = document.createElement('div');
+        timingHistory.className = 'local-segment-timings hidden';
+        const recordLocalTiming = (
+            clickNumber: number,
+            clickMode: string,
+            result: SegmentationResult,
+            liftMs?: number
+        ) => {
+            const row = document.createElement('div');
+            const label = document.createElement('strong');
+            const details = document.createElement('span');
+            label.textContent = `#${clickNumber} ${clickMode}`;
+            details.textContent = formatLocalSegmentationTimings(result.timings, liftMs);
+            row.append(label, details);
+            timingHistory.prepend(row);
+            while (timingHistory.childElementCount > 5) timingHistory.lastElementChild?.remove();
+            timingHistory.classList.remove('hidden');
+        };
+        toolbar.appendChild(timingHistory);
         parent.appendChild(toolbar);
 
         const comparePanel = document.createElement('div');
@@ -132,6 +153,8 @@ class LocalSegmentSelection {
         const compareTitle = document.createElement('strong');
         compareTitle.textContent = 'Blind Local vs Cloud comparison';
         const compareStatus = document.createElement('span');
+        const compareLocalTiming = document.createElement('span');
+        compareLocalTiming.className = 'segmentation-compare-local-timing hidden';
         const compareReveal = document.createElement('strong');
         compareReveal.className = 'segmentation-compare-reveal hidden';
         const candidates = document.createElement('div');
@@ -224,6 +247,7 @@ class LocalSegmentSelection {
         comparePanel.append(
             compareTitle,
             compareStatus,
+            compareLocalTiming,
             compareReveal,
             candidates,
             zoomHint,
@@ -499,12 +523,14 @@ class LocalSegmentSelection {
             frame: SegmentationFrame,
             click: [number, number],
             signal: AbortSignal,
-            captureTimings: unknown
+            captureTimings: unknown,
+            clickNumber: number
         ) => {
             clearCandidatePreview();
             compareStatus.textContent = 'Running both providers…';
             compareReveal.classList.add('hidden');
             compareReveal.textContent = '';
+            compareLocalTiming.classList.add('hidden');
             comparePanel.classList.remove('hidden');
             const prompts: SegmentationPrompt[] = [{ x: click[0], y: click[1], label: 1 }];
             const startedAt = performance.now();
@@ -534,6 +560,12 @@ class LocalSegmentSelection {
             };
             const local = lift(localSettled);
             const cloud = lift(cloudSettled);
+            if (local.result) {
+                const details = formatLocalSegmentationTimings(local.result.timings, local.lifted?.liftMs);
+                compareLocalTiming.textContent = `Local #${clickNumber} · ${details}`;
+                compareLocalTiming.classList.remove('hidden');
+                recordLocalTiming(clickNumber, 'Compare', local.result, local.lifted?.liftMs);
+            }
             compareFrame = frame;
             const swap = crypto.getRandomValues(new Uint32Array(1))[0] % 2 === 1;
             compareSlots = swap ? { a: cloud, b: local } : { a: local, b: cloud };
@@ -621,12 +653,14 @@ class LocalSegmentSelection {
             const rect = canvas.getBoundingClientRect();
             const canvasPoint: [number, number] = [event.clientX - rect.left, event.clientY - rect.top];
             busy = true;
+            const clickNumber = ++localClickCount;
+            const clickMode = mode;
             runAbort = new AbortController();
             parent.style.cursor = 'wait';
             cancelButton.classList.remove('hidden');
             try {
-                if (mode !== 'compare') await ensureReady(runAbort.signal);
-                const refine = mode === 'refine-positive' || mode === 'refine-negative';
+                if (clickMode !== 'compare') await ensureReady(runAbort.signal);
+                const refine = clickMode === 'refine-positive' || clickMode === 'refine-negative';
                 let frame: SegmentationFrame;
                 let prompts: SegmentationPrompt[];
                 let operation: SegmentationOperation;
@@ -647,7 +681,7 @@ class LocalSegmentSelection {
                     prompts = [...promptSession.prompts, {
                         x: click[0],
                         y: click[1],
-                        label: mode === 'refine-positive' ? 1 : 0
+                        label: clickMode === 'refine-positive' ? 1 : 0
                     }];
                     operation = promptSession.operation;
                     baseSelection = promptSession.baseSelection;
@@ -661,13 +695,13 @@ class LocalSegmentSelection {
                         Math.round(canvasPoint[1] * captured.captureSize.scale)
                     ];
                     prompts = [{ x: click[0], y: click[1], label: 1 }];
-                    operation = mode === 'set' || mode === 'add' || mode === 'remove' || mode === 'intersect' ?
-                        mode :
+                    operation = clickMode === 'set' || clickMode === 'add' || clickMode === 'remove' || clickMode === 'intersect' ?
+                        clickMode :
                         'set';
                     baseSelection = currentSelectionIds(splat);
                 }
-                if (mode === 'compare') {
-                    await runCompare(splat, frame, click, runAbort.signal, captureTimings);
+                if (clickMode === 'compare') {
+                    await runCompare(splat, frame, click, runAbort.signal, captureTimings, clickNumber);
                     return;
                 }
                 const result = await localProvider.segment({
@@ -687,7 +721,9 @@ class LocalSegmentSelection {
                     baseSelection,
                     priorMask: result.mask.logits
                 };
-                status.textContent = `Local SAM2 · ${result.executionProvider} · ${result.timings.totalMs.toFixed(0)}ms`;
+                const modeLabel = buttons.get(clickMode)?.textContent ?? clickMode;
+                recordLocalTiming(clickNumber, modeLabel, result, lifted.liftMs);
+                status.textContent = `Local SAM2 · ${result.executionProvider} · click #${clickNumber} complete`;
             } catch (error: any) {
                 if (error?.name !== 'AbortError') {
                     console.error('[Local SAM2] selection failed', error);

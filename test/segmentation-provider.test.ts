@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     applySelectionOperation,
     createBlindComparison,
+    formatLocalSegmentationTimings,
     formatSegmentationProvider,
     mapFramePointToMask,
     resampleMaskToFrame,
@@ -109,6 +110,25 @@ test('provider identities use clear labels when a blind comparison is revealed',
     assert.equal(formatSegmentationProvider('local-sam2'), 'Local SAM2');
     assert.equal(formatSegmentationProvider('cloud-sam3'), 'Cloud SAM3');
     assert.equal(formatSegmentationProvider('failed'), 'Failed');
+});
+
+test('local timings expose every inference phase and cached encoders', () => {
+    assert.equal(formatLocalSegmentationTimings({
+        totalMs: 28003,
+        initializeMs: 2440,
+        preprocessMs: 16,
+        encoderMs: 15070,
+        decoderMs: 10460,
+        postprocessMs: 17
+    }, 162), 'total 28.00s · init 2.44s · prep 16ms · encode 15.07s · decode 10.46s · post 17ms · 3D lift 162ms');
+    assert.match(formatLocalSegmentationTimings({
+        totalMs: 122,
+        initializeMs: 0,
+        preprocessMs: 0,
+        encoderMs: 0,
+        decoderMs: 118,
+        postprocessMs: 4
+    }, 8), /encode cached/);
 });
 
 test('mask metrics use golden pixels as an independent answer key', () => {
