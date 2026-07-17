@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+    DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS,
     calculatePointCloudBoundaryState,
     deriveRobustAutomaticBounds,
     sanitizePointCloudBoundarySettings,
@@ -105,4 +106,8 @@ test('document settings reject malformed values and retain a safe manual volume'
     assert.equal(result.pointRadius, 8);
     assert.equal(result.pointOpacity, 1);
     assert.deepEqual(result.manualBounds?.halfExtents, [0.01, 0.01, 4]);
+});
+
+test('missing document settings enable automatic bounds out of the box', () => {
+    assert.deepEqual(sanitizePointCloudBoundarySettings(undefined), DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS);
 });

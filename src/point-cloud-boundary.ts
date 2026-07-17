@@ -36,7 +36,7 @@ const IDENTITY_ROTATION: Rotation3 = [
 ];
 
 const DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS: PointCloudBoundarySettings = {
-    enabled: false,
+    enabled: true,
     boundsMode: 'automatic',
     preview: 'automatic',
     fadeWidth: 1,
@@ -84,7 +84,7 @@ const sanitizePointCloudBoundarySettings = (value: unknown): PointCloudBoundaryS
     const preview = ['automatic', 'inside', 'boundary', 'outside'].includes(candidate.preview as string) ?
         candidate.preview as PointCloudBoundarySettings['preview'] : DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS.preview;
     return {
-        enabled: candidate.enabled === true,
+        enabled: candidate.enabled === undefined ? DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS.enabled : candidate.enabled === true,
         boundsMode,
         preview,
         fadeWidth: clamp(Number(candidate.fadeWidth) || DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS.fadeWidth, 0.01, 10000),

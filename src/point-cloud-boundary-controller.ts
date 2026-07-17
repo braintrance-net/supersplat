@@ -41,6 +41,7 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
     let settings = cloneSettings(DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS);
     let automaticBounds: OrientedBounds | null = null;
     let automaticBoundsDirty = true;
+    let automaticBoundsRetryAt = 0;
     let canonicalCaptureDepth = 0;
     const deletedCounts = new WeakMap<Splat, number>();
     let runtimeState: PointCloudBoundaryRuntimeState = {
@@ -56,6 +57,7 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
 
     const invalidateAutomaticBounds = () => {
         automaticBoundsDirty = true;
+        automaticBoundsRetryAt = 0;
     };
 
     const collectAutomaticBounds = () => {
@@ -81,7 +83,10 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
             }
         }
         automaticBounds = deriveRobustAutomaticBounds(samples);
-        automaticBoundsDirty = false;
+        // Splat elements can be added before their sorter centers are uploaded. Keep
+        // retrying until a populated scene yields usable bounds instead of caching the
+        // first empty result for the rest of the session.
+        automaticBoundsDirty = total > 0 && samples.length === 0;
     };
 
     const setSettings = (value: unknown) => {
@@ -92,6 +97,17 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
 
     const patchSettings = (patch: Partial<PointCloudBoundarySettings>) => {
         setSettings({ ...settings, ...patch });
+    };
+
+    const togglePointView = () => {
+        const forced = settings.enabled && settings.preview === 'outside';
+        patchSettings(forced ? {
+            enabled: false,
+            preview: 'automatic'
+        } : {
+            enabled: true,
+            preview: 'outside'
+        });
     };
 
     const useCurrentBox = () => {
@@ -167,7 +183,11 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
     };
 
     const update = () => {
-        if (settings.boundsMode === 'automatic' && automaticBoundsDirty) collectAutomaticBounds();
+        const now = performance.now();
+        if (settings.boundsMode === 'automatic' && automaticBoundsDirty && now >= automaticBoundsRetryAt) {
+            collectAutomaticBounds();
+            automaticBoundsRetryAt = now + 250;
+        }
         const camera = scene.camera.position;
         const calculated = calculatePointCloudBoundaryState(
             settings,
@@ -237,6 +257,7 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
 
     events.on('pointCloudBoundary.set', setSettings);
     events.on('pointCloudBoundary.patch', patchSettings);
+    events.on('pointCloudBoundary.togglePointView', togglePointView);
     events.on('scene.elementAdded', invalidateAutomaticBounds);
     events.on('scene.elementRemoved', invalidateAutomaticBounds);
     events.on('splat.stateChanged', (splat: Splat) => {

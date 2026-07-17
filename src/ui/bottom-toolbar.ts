@@ -215,6 +215,12 @@ class BottomToolbar extends Container {
             text: 'Points'
         });
 
+        const pointCloudView = new Button({
+            id: 'bottom-toolbar-point-cloud-view',
+            class: 'bottom-toolbar-text-tool',
+            text: 'Point view'
+        });
+
         const samModeWrap = document.createElement('div');
         samModeWrap.id = 'sam3-mode-wrap';
         samModeWrap.className = 'hidden';
@@ -349,7 +355,8 @@ class BottomToolbar extends Container {
             { node: boxerAll, shortcutId: 'tool.boxerDetectAll', fallbackOrder: 7 },
             { node: manualBox, shortcutId: 'tool.boxSelection', fallbackOrder: 8 },
             { node: boxVolume, shortcutId: 'tool.boxVolume', fallbackOrder: 9 },
-            { node: pointCloudBoundary, fallbackOrder: 10 },
+            { node: pointCloudView, fallbackOrder: 10 },
+            { node: pointCloudBoundary, fallbackOrder: 10.5 },
             { node: semanticScan, fallbackOrder: 11 }
         ]);
         this.dom.appendChild(samModeWrap);
@@ -559,6 +566,10 @@ class BottomToolbar extends Container {
             showOnlyFloatingMenu(null);
             events.fire('pointCloudBoundary.togglePanel');
         });
+        pointCloudView.dom.addEventListener('click', () => {
+            showOnlyFloatingMenu(null);
+            events.fire('pointCloudBoundary.togglePointView');
+        });
         semanticScan.dom.addEventListener('click', () => {
             showOnlyFloatingMenu(null);
             events.fire('semanticScan.run');
@@ -582,6 +593,7 @@ class BottomToolbar extends Container {
         tooltips.register(manualBox, tooltip('Manual Box', 'tool.boxSelection'));
         tooltips.register(boxVolume, tooltip('4-Click Box', 'tool.boxVolume'));
         tooltips.register(pointCloudBoundary, 'Point-cloud boundary settings');
+        tooltips.register(pointCloudView, 'Force the whole scene between Gaussian and point view');
         tooltips.register(semanticScan, 'Scan Semantic Labels');
         tooltips.register(simplifiedAssetBrowser, 'Asset Browser');
 
@@ -811,6 +823,12 @@ class BottomToolbar extends Container {
 
         events.on('viewPanel.visible', (visible: boolean) => {
             pointCloudBoundary.class[visible ? 'add' : 'remove']('active');
+        });
+
+        events.on('pointCloudBoundary.settings', (settings: { enabled: boolean; preview: string }) => {
+            const forced = settings.enabled && settings.preview === 'outside';
+            pointCloudView.class[forced ? 'add' : 'remove']('active');
+            pointCloudView.text = forced ? 'Points on' : 'Point view';
         });
 
         window.addEventListener('resize', () => {

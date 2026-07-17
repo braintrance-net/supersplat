@@ -349,9 +349,18 @@ class ViewPanel extends Container {
         const pointCloudEnabled = new BooleanInput({
             type: 'toggle',
             class: 'view-panel-row-toggle',
-            value: false
+            value: true
         });
         pointCloudHeader.append(pointCloudEnabled);
+
+        const pointCloudForceRow = new Container({ class: 'view-panel-row' });
+        pointCloudForceRow.append(new Label({ text: 'Force point view', class: 'view-panel-row-label' }));
+        const pointCloudForce = new BooleanInput({
+            type: 'toggle',
+            class: 'view-panel-row-toggle',
+            value: false
+        });
+        pointCloudForceRow.append(pointCloudForce);
 
         const pointCloudBoundsRow = new Container({ class: 'view-panel-row' });
         pointCloudBoundsRow.append(new Label({ text: 'Bounds', class: 'view-panel-row-label' }));
@@ -419,6 +428,7 @@ class ViewPanel extends Container {
         this.append(showBoundRow);
         this.append(voxelMeshRow);
         this.append(pointCloudHeader);
+        this.append(pointCloudForceRow);
         this.append(pointCloudBoundsRow);
         this.append(pointCloudPreviewRow);
         this.append(pointCloudFade.row);
@@ -568,6 +578,11 @@ class ViewPanel extends Container {
             events.fire('pointCloudBoundary.patch', patch);
         };
         pointCloudEnabled.on('change', (value: boolean) => patchPointCloud({ enabled: value }));
+        pointCloudForce.on('change', (value: boolean) => {
+            const current = events.invoke('pointCloudBoundary.settings') as PointCloudBoundarySettings;
+            const forced = current.enabled && current.preview === 'outside';
+            if (value !== forced) events.fire('pointCloudBoundary.togglePointView');
+        });
         pointCloudBoundsMode.on('change', (value: PointCloudBoundarySettings['boundsMode']) => {
             patchPointCloud({ boundsMode: value });
         });
@@ -585,6 +600,7 @@ class ViewPanel extends Container {
 
         events.on('pointCloudBoundary.settings', (settings: PointCloudBoundarySettings) => {
             pointCloudEnabled.value = settings.enabled;
+            pointCloudForce.value = settings.enabled && settings.preview === 'outside';
             pointCloudBoundsMode.value = settings.boundsMode;
             pointCloudPreview.value = settings.preview;
             pointCloudFade.input.value = settings.fadeWidth;
