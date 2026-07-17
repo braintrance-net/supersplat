@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
     applySelectionOperation,
     createBlindComparison,
+    formatSegmentationProvider,
     mapFramePointToMask,
     resampleMaskToFrame,
     validateSegmentationResult,
@@ -102,6 +103,12 @@ test('blind comparisons hide provider identity until a grade is recorded', () =>
     assert.equal(reveal.grade, 'a');
     assert.equal(reveal.mapping.a, 'cloud-sam3');
     assert.equal(reveal.mapping.b, 'local-sam2');
+});
+
+test('provider identities use clear labels when a blind comparison is revealed', () => {
+    assert.equal(formatSegmentationProvider('local-sam2'), 'Local SAM2');
+    assert.equal(formatSegmentationProvider('cloud-sam3'), 'Cloud SAM3');
+    assert.equal(formatSegmentationProvider('failed'), 'Failed');
 });
 
 test('mask metrics use golden pixels as an independent answer key', () => {

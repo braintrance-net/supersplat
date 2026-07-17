@@ -19,6 +19,7 @@ import {
 } from '../segmentation/lift';
 import { LocalSam2Provider, TOTAL_MODEL_BYTES, type LocalSam2Progress } from '../segmentation/local-sam2-provider';
 import {
+    formatSegmentationProvider,
     resampleMaskToFrame,
     type BlindGrade,
     type SegmentationFrame,
@@ -131,6 +132,8 @@ class LocalSegmentSelection {
         const compareTitle = document.createElement('strong');
         compareTitle.textContent = 'Blind Local vs Cloud comparison';
         const compareStatus = document.createElement('span');
+        const compareReveal = document.createElement('strong');
+        compareReveal.className = 'segmentation-compare-reveal hidden';
         const candidates = document.createElement('div');
         candidates.className = 'segmentation-compare-candidates';
         const createCandidate = (slot: CompareSlot) => {
@@ -221,6 +224,7 @@ class LocalSegmentSelection {
         comparePanel.append(
             compareTitle,
             compareStatus,
+            compareReveal,
             candidates,
             zoomHint,
             clearPreview,
@@ -247,10 +251,18 @@ class LocalSegmentSelection {
                 ready = true;
                 loadButton.classList.add('hidden');
                 cancelButton.classList.add('hidden');
-                status.textContent = `Local SAM2 ready · ${progress.executionProvider}`;
+                status.textContent = `Model loaded · ${progress.executionProvider} · first view still needs encoding`;
                 if (progress.executionProvider === 'wasm') {
                     events.fire('toast', 'Local SAM2 is using WASM fallback; expect slower inference.', 'warning');
                 }
+                return;
+            }
+            if (progress.phase === 'encode') {
+                status.textContent = `Encoding this view · ${progress.executionProvider} · first view can be slow`;
+                return;
+            }
+            if (progress.phase === 'decode') {
+                status.textContent = `Decoding mask · ${progress.executionProvider}`;
                 return;
             }
             cancelButton.classList.remove('hidden');
@@ -387,9 +399,13 @@ class LocalSegmentSelection {
 
         const revealComparison = () => {
             if (!compareSlots || !compareMapping || !maskGradeValue || !cutGradeValue) return;
-            candidateUi.a.title.textContent = `A · ${compareMapping.a}`;
-            candidateUi.b.title.textContent = `B · ${compareMapping.b}`;
+            const aProvider = formatSegmentationProvider(compareMapping.a);
+            const bProvider = formatSegmentationProvider(compareMapping.b);
+            candidateUi.a.title.textContent = `A · ${aProvider}`;
+            candidateUi.b.title.textContent = `B · ${bProvider}`;
             compareStatus.textContent = `2D: ${maskGradeValue.toUpperCase()} · 3D: ${cutGradeValue.toUpperCase()}`;
+            compareReveal.textContent = `Answer: A was ${aProvider} · B was ${bProvider}`;
+            compareReveal.classList.remove('hidden');
             applyA.disabled = !compareSlots.a.lifted;
             applyB.disabled = !compareSlots.b.lifted;
             download.disabled = false;
@@ -487,6 +503,8 @@ class LocalSegmentSelection {
         ) => {
             clearCandidatePreview();
             compareStatus.textContent = 'Running both providers…';
+            compareReveal.classList.add('hidden');
+            compareReveal.textContent = '';
             comparePanel.classList.remove('hidden');
             const prompts: SegmentationPrompt[] = [{ x: click[0], y: click[1], label: 1 }];
             const startedAt = performance.now();
@@ -494,6 +512,12 @@ class LocalSegmentSelection {
                 localProvider.segment({ frame, prompts, signal }),
                 cloudProvider.segment({ frame, prompts, signal })
             ]);
+            if (localSettled.status === 'fulfilled') {
+                const result = localSettled.value;
+                status.textContent = `Local SAM2 finished · ${result.executionProvider} · ${result.timings.totalMs.toFixed(0)}ms`;
+            } else {
+                status.textContent = 'Local SAM2 failed during comparison';
+            }
             const lift = (settled: PromiseSettledResult<SegmentationResult>): CompareCandidate => {
                 if (settled.status === 'rejected') {
                     return {

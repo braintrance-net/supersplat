@@ -26,7 +26,7 @@ type ModelArtifact = {
     sha256: string;
 };
 type LocalSam2Progress = {
-    phase: 'cache' | 'download' | 'verify' | 'initialize' | 'ready';
+    phase: 'cache' | 'download' | 'verify' | 'initialize' | 'ready' | 'encode' | 'decode';
     artifact?: ArtifactName;
     loadedBytes: number;
     totalBytes: number;
@@ -335,6 +335,12 @@ class LocalSam2Provider implements SegmentationProvider {
             const { tensor } = this.preprocess(request.frame, transform);
             timings.preprocessMs = performance.now() - preprocessStartedAt;
             const encoderStartedAt = performance.now();
+            this.progress({
+                phase: 'encode',
+                loadedBytes: TOTAL_MODEL_BYTES,
+                cacheState: this.cacheState,
+                executionProvider: this.executionProvider
+            });
             const encoded = await this.encoder!.run({ image: tensor }).finally(() => tensor.dispose());
             const names = this.encoder!.outputNames;
             const previousEmbeddings = this.embeddings;
@@ -365,6 +371,12 @@ class LocalSam2Provider implements SegmentationProvider {
             request.priorMask : new Float32Array(MASK_SIZE * MASK_SIZE);
         const hasPriorMask = request.priorMask && request.priorMask.length === MASK_SIZE * MASK_SIZE ? 1 : 0;
         const decoderStartedAt = performance.now();
+        this.progress({
+            phase: 'decode',
+            loadedBytes: TOTAL_MODEL_BYTES,
+            cacheState: this.cacheState,
+            executionProvider: this.executionProvider
+        });
         const decoded = await this.decoder!.run({
             ...this.embeddings,
             point_coords: new ort.Tensor('float32', Float32Array.from(coords), [1, request.prompts.length, 2]),

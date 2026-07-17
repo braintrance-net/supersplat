@@ -127,6 +127,12 @@ const blindCandidate = (result: SegmentationResult): BlindCandidate => ({
     mask: result.mask
 });
 
+const formatSegmentationProvider = (provider: SegmentationProviderId | 'failed') => {
+    if (provider === 'local-sam2') return 'Local SAM2';
+    if (provider === 'cloud-sam3') return 'Cloud SAM3';
+    return 'Failed';
+};
+
 const createBlindComparison = (
     local: SegmentationResult,
     cloud: SegmentationResult,
@@ -164,6 +170,7 @@ export {
     SegmentationContractError,
     applySelectionOperation,
     createBlindComparison,
+    formatSegmentationProvider,
     mapFramePointToMask,
     resampleMaskToFrame,
     validateSegmentationResult
