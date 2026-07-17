@@ -133,7 +133,7 @@ const calculatePointCloudBoundaryState = (
     }
     return {
         signedDistance,
-        weight: signedDistance === null ? 0 : smoothstep(-settings.fadeWidth, settings.fadeWidth, signedDistance),
+        weight: signedDistance === null ? 0 : smoothstep(0, settings.fadeWidth, signedDistance),
         boundsMode: settings.boundsMode
     };
 };

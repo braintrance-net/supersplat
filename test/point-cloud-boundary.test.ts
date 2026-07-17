@@ -53,13 +53,14 @@ test('oriented box distance follows rotated local axes', () => {
     assert.equal(signedDistanceToOrientedBox([1, 0, 0], rotated), 0);
 });
 
-test('automatic state transitions continuously across the configured fade band', () => {
+test('automatic state stays Gaussian inside and transitions only after crossing the boundary', () => {
     assert.deepEqual(calculatePointCloudBoundaryState(settings(), [-3, 0, 0]), {
         signedDistance: -2,
         weight: 0,
         boundsMode: 'manual'
     });
-    assert.equal(calculatePointCloudBoundaryState(settings(), [5, 0, 0]).weight, 0.5);
+    assert.equal(calculatePointCloudBoundaryState(settings(), [5, 0, 0]).weight, 0);
+    assert.equal(calculatePointCloudBoundaryState(settings(), [6, 0, 0]).weight, 0.5);
     assert.equal(calculatePointCloudBoundaryState(settings(), [7, 0, 0]).weight, 1);
 });
 
