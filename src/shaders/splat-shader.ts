@@ -13,7 +13,12 @@ uniform float artisanConfidenceThreshold;
 uniform float artisanConfidenceIsolate;
 uniform float pointCloudWeight;
 uniform float pointCloudRadius;
+uniform float pointCloudShape;
+uniform float pointCloudGaussianScale;
 uniform float pointCloudOpacity;
+uniform vec3 pointCloudTint;
+uniform float pointCloudTintStrength;
+uniform float pointCloudSaturation;
 
 uniform vec3 clrOffset;
 uniform vec4 clrScale;
@@ -123,11 +128,13 @@ void main(void) {
 
     #if FORWARD_PASS
         // Display-only point-cloud morph. Keep canonical Gaussian geometry for pick/depth
-        // passes, but continuously shrink the forward footprint to a fixed screen-space disc.
-        vec3 pointOffset = vec3(
+        // passes, but continuously shrink the forward footprint to the configured point shape.
+        vec3 fixedPointOffset = vec3(
             source.cornerUV * pointCloudRadius * center.proj.ww * viewport_size.zw,
             0.0
         );
+        vec3 gaussianPointOffset = corner.offset * pointCloudGaussianScale;
+        vec3 pointOffset = mix(fixedPointOffset, gaussianPointOffset, pointCloudShape);
         corner.offset = mix(corner.offset, pointOffset, clamp(pointCloudWeight, 0.0, 1.0));
     #endif
 
@@ -189,9 +196,16 @@ void main(void) {
         // apply saturation
         color.xyz = applySaturation(color.xyz);
 
+        // Apply point-only recoloring continuously with the geometry morph.
+        float pointWeight = clamp(pointCloudWeight, 0.0, 1.0);
+        vec3 pointGrey = vec3(dot(color.xyz, vec3(0.299, 0.587, 0.114)));
+        vec3 pointColor = mix(pointGrey, color.xyz, pointCloudSaturation);
+        pointColor = mix(pointColor, pointCloudTint, pointCloudTintStrength);
+        color.xyz = mix(color.xyz, pointColor, pointWeight);
+
         // don't allow out-of-range alpha
         color.a = clamp(color.a, 0.0, 1.0);
-        color.a *= mix(1.0, pointCloudOpacity, clamp(pointCloudWeight, 0.0, 1.0));
+        color.a *= mix(1.0, pointCloudOpacity, pointWeight);
 
         // apply tonemapping
         color = vec4(prepareOutputFromGamma(max(color.xyz, 0.0)), color.w);

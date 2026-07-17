@@ -411,11 +411,21 @@ class Splat extends Element {
         const pointCloudState = events.invoke('pointCloudBoundary.renderState') as {
             weight?: number;
             pointRadius?: number;
+            pointShape?: 'fixed' | 'gaussian';
+            gaussianScale?: number;
             pointOpacity?: number;
+            pointTint?: [number, number, number];
+            pointTintStrength?: number;
+            pointSaturation?: number;
         } | undefined;
         material.setParameter('pointCloudWeight', pointCloudState?.weight ?? 0);
         material.setParameter('pointCloudRadius', pointCloudState?.pointRadius ?? 2);
+        material.setParameter('pointCloudShape', pointCloudState?.pointShape === 'gaussian' ? 1 : 0);
+        material.setParameter('pointCloudGaussianScale', pointCloudState?.gaussianScale ?? 0.25);
         material.setParameter('pointCloudOpacity', pointCloudState?.pointOpacity ?? 1);
+        material.setParameter('pointCloudTint', pointCloudState?.pointTint ?? [1, 1, 1]);
+        material.setParameter('pointCloudTintStrength', pointCloudState?.pointTintStrength ?? 0);
+        material.setParameter('pointCloudSaturation', pointCloudState?.pointSaturation ?? 1);
 
         if (this.visible && selected) {
             // render bounding box

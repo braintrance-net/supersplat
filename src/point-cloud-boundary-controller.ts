@@ -5,9 +5,11 @@ import { Events } from './events';
 import {
     DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS,
     calculatePointCloudBoundaryState,
+    deriveAutomaticSceneEnvelope,
     deriveRobustAutomaticBounds,
     sanitizePointCloudBoundarySettings,
     type AutomaticBoundsSample,
+    type AutomaticSceneEnvelope,
     type OrientedBounds,
     type PointCloudBoundarySettings,
     type PointCloudBoundaryState,
@@ -20,16 +22,22 @@ import { State } from './splat-state';
 type PointCloudBoundaryRuntimeState = PointCloudBoundaryState & {
     enabled: boolean;
     pointRadius: number;
+    pointShape: PointCloudBoundarySettings['pointShape'];
+    gaussianScale: number;
     pointOpacity: number;
+    pointTint: Vec3Tuple;
+    pointTintStrength: number;
+    pointSaturation: number;
     preview: PointCloudBoundarySettings['preview'];
     hasBounds: boolean;
 };
 
-const MAX_AUTOMATIC_BOUND_SAMPLES = 100000;
+const MAX_AUTOMATIC_BOUND_SAMPLES = 30000;
 const position = new Vec3();
 
 const cloneSettings = (settings: PointCloudBoundarySettings): PointCloudBoundarySettings => ({
     ...settings,
+    pointTint: [...settings.pointTint],
     manualBounds: settings.manualBounds ? {
         center: [...settings.manualBounds.center],
         halfExtents: [...settings.manualBounds.halfExtents],
@@ -40,6 +48,7 @@ const cloneSettings = (settings: PointCloudBoundarySettings): PointCloudBoundary
 const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
     let settings = cloneSettings(DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS);
     let automaticBounds: OrientedBounds | null = null;
+    let automaticEnvelope: AutomaticSceneEnvelope | null = null;
     let automaticBoundsDirty = true;
     let automaticBoundsRetryAt = 0;
     let canonicalCaptureDepth = 0;
@@ -50,7 +59,12 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
         weight: 0,
         boundsMode: settings.boundsMode,
         pointRadius: settings.pointRadius,
+        pointShape: settings.pointShape,
+        gaussianScale: settings.gaussianScale,
         pointOpacity: settings.pointOpacity,
+        pointTint: [...settings.pointTint],
+        pointTintStrength: settings.pointTintStrength,
+        pointSaturation: settings.pointSaturation,
         preview: settings.preview,
         hasBounds: false
     };
@@ -82,7 +96,10 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
                 });
             }
         }
-        automaticBounds = deriveRobustAutomaticBounds(samples);
+        const trimFraction = settings.automaticTrimPercent / 100;
+        automaticEnvelope = deriveAutomaticSceneEnvelope(samples, trimFraction, settings.automaticPadding);
+        automaticBounds = automaticEnvelope?.bounds ??
+            deriveRobustAutomaticBounds(samples, trimFraction, settings.automaticPadding);
         // Splat elements can be added before their sorter centers are uploaded. Keep
         // retrying until a populated scene yields usable bounds instead of caching the
         // first empty result for the rest of the session.
@@ -90,7 +107,12 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
     };
 
     const setSettings = (value: unknown) => {
+        const previous = settings;
         settings = sanitizePointCloudBoundarySettings(value);
+        if (settings.automaticTrimPercent !== previous.automaticTrimPercent ||
+            settings.automaticPadding !== previous.automaticPadding) {
+            invalidateAutomaticBounds();
+        }
         scene.forceRender = true;
         events.fire('pointCloudBoundary.settings', cloneSettings(settings));
     };
@@ -192,13 +214,18 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
         const calculated = calculatePointCloudBoundaryState(
             settings,
             [camera.x, camera.y, camera.z],
-            automaticBounds
+            settings.automaticShape === 'footprint' ? automaticEnvelope : automaticBounds
         );
         const next: PointCloudBoundaryRuntimeState = {
             ...calculated,
             enabled: settings.enabled,
             pointRadius: settings.pointRadius,
+            pointShape: settings.pointShape,
+            gaussianScale: settings.gaussianScale,
             pointOpacity: settings.pointOpacity,
+            pointTint: settings.pointTint,
+            pointTintStrength: settings.pointTintStrength,
+            pointSaturation: settings.pointSaturation,
             preview: settings.preview,
             hasBounds: calculated.signedDistance !== null
         };
@@ -207,7 +234,12 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
             next.signedDistance !== runtimeState.signedDistance ||
             next.boundsMode !== runtimeState.boundsMode ||
             next.pointRadius !== runtimeState.pointRadius ||
+            next.pointShape !== runtimeState.pointShape ||
+            next.gaussianScale !== runtimeState.gaussianScale ||
             next.pointOpacity !== runtimeState.pointOpacity ||
+            next.pointTint.some((value, index) => value !== runtimeState.pointTint[index]) ||
+            next.pointTintStrength !== runtimeState.pointTintStrength ||
+            next.pointSaturation !== runtimeState.pointSaturation ||
             next.preview !== runtimeState.preview ||
             next.hasBounds !== runtimeState.hasBounds;
         runtimeState = next;
@@ -244,6 +276,11 @@ const registerPointCloudBoundaryEvents = (events: Events, scene: Scene) => {
             ...runtimeState,
             settings: cloneSettings(settings),
             automaticBounds,
+            automaticEnvelope: automaticEnvelope ? {
+                cellSize: automaticEnvelope.footprint.cellSize,
+                width: automaticEnvelope.footprint.width,
+                height: automaticEnvelope.footprint.height
+            } : null,
             frameTimeMs: appStats?.frame?.ms ?? null,
             gpuTimeMs: appStats?.frame?.gpuMs ?? null,
             drawCalls: appStats?.drawCalls?.total ?? null,

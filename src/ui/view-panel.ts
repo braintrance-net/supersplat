@@ -343,8 +343,14 @@ class ViewPanel extends Container {
         voxelMeshRow.append(voxelMeshToggle);
 
         // point-cloud boundary effect
+        const createPointCloudSection = (text: string) => {
+            const section = new Container({ class: 'view-panel-section' });
+            section.append(new Label({ text, class: 'view-panel-section-label' }));
+            return section;
+        };
+        const pointCloudTransitionSection = createPointCloudSection('WHEN POINTS APPEAR');
         const pointCloudHeader = new Container({ class: 'view-panel-row' });
-        pointCloudHeader.append(new Label({ text: 'Point-cloud boundary', class: 'view-panel-row-label' }));
+        pointCloudHeader.append(new Label({ text: 'Enable transition', class: 'view-panel-row-label' }));
 
         const pointCloudEnabled = new BooleanInput({
             type: 'toggle',
@@ -354,7 +360,7 @@ class ViewPanel extends Container {
         pointCloudHeader.append(pointCloudEnabled);
 
         const pointCloudForceRow = new Container({ class: 'view-panel-row' });
-        pointCloudForceRow.append(new Label({ text: 'Force point view', class: 'view-panel-row-label' }));
+        pointCloudForceRow.append(new Label({ text: 'Preview all as points', class: 'view-panel-row-label' }));
         const pointCloudForce = new BooleanInput({
             type: 'toggle',
             class: 'view-panel-row-toggle',
@@ -363,27 +369,28 @@ class ViewPanel extends Container {
         pointCloudForceRow.append(pointCloudForce);
 
         const pointCloudBoundsRow = new Container({ class: 'view-panel-row' });
-        pointCloudBoundsRow.append(new Label({ text: 'Bounds', class: 'view-panel-row-label' }));
-        const pointCloudBoundsMode = new SelectInput({
+        pointCloudBoundsRow.append(new Label({ text: 'Boundary source', class: 'view-panel-row-label' }));
+        const pointCloudBoundarySource = new SelectInput({
             class: 'view-panel-row-select',
-            defaultValue: 'automatic',
+            defaultValue: 'automatic-footprint',
             options: [
-                { v: 'automatic', t: 'Automatic splat bounds' },
+                { v: 'automatic-footprint', t: 'Automatic scene footprint' },
+                { v: 'automatic-box', t: 'Automatic bounding box' },
                 { v: 'manual', t: 'Manual box' }
             ]
         });
-        pointCloudBoundsRow.append(pointCloudBoundsMode);
+        pointCloudBoundsRow.append(pointCloudBoundarySource);
 
         const pointCloudPreviewRow = new Container({ class: 'view-panel-row' });
-        pointCloudPreviewRow.append(new Label({ text: 'Preview', class: 'view-panel-row-label' }));
+        pointCloudPreviewRow.append(new Label({ text: 'Transition test', class: 'view-panel-row-label' }));
         const pointCloudPreview = new SelectInput({
             class: 'view-panel-row-select',
             defaultValue: 'automatic',
             options: [
-                { v: 'automatic', t: 'Automatic' },
-                { v: 'inside', t: 'Inside' },
-                { v: 'boundary', t: 'Boundary' },
-                { v: 'outside', t: 'Outside' }
+                { v: 'automatic', t: 'Follow camera position' },
+                { v: 'inside', t: 'Force original Gaussians' },
+                { v: 'boundary', t: 'Force 50% transition' },
+                { v: 'outside', t: 'Force points' }
             ]
         });
         pointCloudPreviewRow.append(pointCloudPreview);
@@ -401,9 +408,9 @@ class ViewPanel extends Container {
             row.append(input);
             return { row, input };
         };
-        const pointCloudFade = createPointCloudSlider('Fade width', 0.01, 20, 2, 1);
-        const pointCloudRadius = createPointCloudSlider('Point radius', 0.5, 8, 1, 2);
-        const pointCloudOpacity = createPointCloudSlider('Point opacity', 0, 1, 2, 1);
+        const pointCloudAutoTrim = createPointCloudSlider('Auto outlier trim %', 0, 5, 2, 0.5);
+        const pointCloudAutoPadding = createPointCloudSlider('Auto edge padding', -5, 10, 2, 0.35);
+        const pointCloudFade = createPointCloudSlider('Transition distance', 0.01, 20, 2, 1);
 
         const pointCloudManualRow = new Container({ class: 'view-panel-row' });
         pointCloudManualRow.append(new Label({ text: 'Manual volume', class: 'view-panel-row-label' }));
@@ -413,6 +420,32 @@ class ViewPanel extends Container {
         const pointCloudStatusRow = new Container({ class: 'view-panel-row' });
         const pointCloudStatus = new Label({ text: 'Disabled', class: 'view-panel-row-label' });
         pointCloudStatusRow.append(pointCloudStatus);
+
+        const pointCloudAppearanceSection = createPointCloudSection('HOW POINTS LOOK');
+        const pointCloudShapeRow = new Container({ class: 'view-panel-row' });
+        pointCloudShapeRow.append(new Label({ text: 'Point shape', class: 'view-panel-row-label' }));
+        const pointCloudShape = new SelectInput({
+            class: 'view-panel-row-select',
+            defaultValue: 'fixed',
+            options: [
+                { v: 'fixed', t: 'Fixed round points' },
+                { v: 'gaussian', t: 'Keep Gaussian shape' }
+            ]
+        });
+        pointCloudShapeRow.append(pointCloudShape);
+        const pointCloudRadius = createPointCloudSlider('Fixed size (pixels)', 0.5, 8, 1, 2);
+        const pointCloudGaussianScale = createPointCloudSlider('Gaussian scale %', 1, 200, 0, 25);
+        const pointCloudOpacity = createPointCloudSlider('Opacity %', 0, 100, 0, 100);
+        const pointCloudTintRow = new Container({ class: 'view-panel-row' });
+        pointCloudTintRow.append(new Label({ text: 'Tint color', class: 'view-panel-row-label' }));
+        const pointCloudTint = new ColorPicker({
+            class: 'point-cloud-color-picker',
+            channels: 3,
+            value: [1, 1, 1]
+        });
+        pointCloudTintRow.append(pointCloudTint);
+        const pointCloudTintStrength = createPointCloudSlider('Tint mix %', 0, 100, 0, 0);
+        const pointCloudSaturation = createPointCloudSlider('Saturation %', 0, 200, 0, 100);
 
         this.append(header);
         this.append(clrRow);
@@ -427,15 +460,24 @@ class ViewPanel extends Container {
         this.append(showGridRow);
         this.append(showBoundRow);
         this.append(voxelMeshRow);
+        this.append(pointCloudTransitionSection);
         this.append(pointCloudHeader);
         this.append(pointCloudForceRow);
         this.append(pointCloudBoundsRow);
         this.append(pointCloudPreviewRow);
+        this.append(pointCloudAutoTrim.row);
+        this.append(pointCloudAutoPadding.row);
         this.append(pointCloudFade.row);
-        this.append(pointCloudRadius.row);
-        this.append(pointCloudOpacity.row);
         this.append(pointCloudManualRow);
         this.append(pointCloudStatusRow);
+        this.append(pointCloudAppearanceSection);
+        this.append(pointCloudShapeRow);
+        this.append(pointCloudRadius.row);
+        this.append(pointCloudGaussianScale.row);
+        this.append(pointCloudOpacity.row);
+        this.append(pointCloudTintRow);
+        this.append(pointCloudTintStrength.row);
+        this.append(pointCloudSaturation.row);
 
         // handle panel visibility
 
@@ -583,45 +625,82 @@ class ViewPanel extends Container {
             const forced = current.enabled && current.preview === 'outside';
             if (value !== forced) events.fire('pointCloudBoundary.togglePointView');
         });
-        pointCloudBoundsMode.on('change', (value: PointCloudBoundarySettings['boundsMode']) => {
-            patchPointCloud({ boundsMode: value });
+        pointCloudBoundarySource.on('change', (value: string) => {
+            if (value === 'manual') {
+                patchPointCloud({ boundsMode: 'manual' });
+            } else {
+                patchPointCloud({
+                    boundsMode: 'automatic',
+                    automaticShape: value === 'automatic-box' ? 'box' : 'footprint'
+                });
+            }
         });
         pointCloudPreview.on('change', (value: PointCloudBoundarySettings['preview']) => {
             patchPointCloud({ preview: value });
         });
+        pointCloudAutoTrim.input.on('change', (value: number) => patchPointCloud({ automaticTrimPercent: value }));
+        pointCloudAutoPadding.input.on('change', (value: number) => patchPointCloud({ automaticPadding: value }));
         pointCloudFade.input.on('change', (value: number) => patchPointCloud({ fadeWidth: value }));
+        pointCloudShape.on('change', (value: PointCloudBoundarySettings['pointShape']) => {
+            patchPointCloud({ pointShape: value });
+        });
         pointCloudRadius.input.on('change', (value: number) => patchPointCloud({ pointRadius: value }));
-        pointCloudOpacity.input.on('change', (value: number) => patchPointCloud({ pointOpacity: value }));
+        pointCloudGaussianScale.input.on('change', (value: number) => patchPointCloud({ gaussianScale: value / 100 }));
+        pointCloudOpacity.input.on('change', (value: number) => patchPointCloud({ pointOpacity: value / 100 }));
+        pointCloudTint.on('change', (value: number[]) => patchPointCloud({
+            pointTint: [value[0], value[1], value[2]]
+        }));
+        pointCloudTintStrength.input.on('change', (value: number) => patchPointCloud({ pointTintStrength: value / 100 }));
+        pointCloudSaturation.input.on('change', (value: number) => patchPointCloud({ pointSaturation: value / 100 }));
         editBoundary.on('click', () => {
             const settings = events.invoke('pointCloudBoundary.settings') as PointCloudBoundarySettings;
             if (events.invoke('tool.active') !== 'boxVolume') events.fire('tool.boxVolume');
             events.fire('boxVolume.beginBoundaryAuthoring', settings.manualBounds);
         });
 
-        events.on('pointCloudBoundary.settings', (settings: PointCloudBoundarySettings) => {
+        const syncPointCloudSettings = (settings: PointCloudBoundarySettings) => {
             pointCloudEnabled.value = settings.enabled;
             pointCloudForce.value = settings.enabled && settings.preview === 'outside';
-            pointCloudBoundsMode.value = settings.boundsMode;
+            pointCloudBoundarySource.value = settings.boundsMode === 'manual' ?
+                'manual' : `automatic-${settings.automaticShape}`;
             pointCloudPreview.value = settings.preview;
+            pointCloudAutoTrim.input.value = settings.automaticTrimPercent;
+            pointCloudAutoPadding.input.value = settings.automaticPadding;
             pointCloudFade.input.value = settings.fadeWidth;
+            pointCloudShape.value = settings.pointShape;
             pointCloudRadius.input.value = settings.pointRadius;
-            pointCloudOpacity.input.value = settings.pointOpacity;
-        });
-        events.on('pointCloudBoundary.state', (state: {
+            pointCloudGaussianScale.input.value = settings.gaussianScale * 100;
+            pointCloudOpacity.input.value = settings.pointOpacity * 100;
+            pointCloudTint.value = settings.pointTint;
+            pointCloudTintStrength.input.value = settings.pointTintStrength * 100;
+            pointCloudSaturation.input.value = settings.pointSaturation * 100;
+            pointCloudAutoTrim.row.hidden = settings.boundsMode !== 'automatic';
+            pointCloudAutoPadding.row.hidden = settings.boundsMode !== 'automatic';
+            pointCloudManualRow.hidden = settings.boundsMode !== 'manual';
+            pointCloudRadius.row.hidden = settings.pointShape !== 'fixed';
+            pointCloudGaussianScale.row.hidden = settings.pointShape !== 'gaussian';
+        };
+        type PointCloudUiState = {
             enabled: boolean;
             hasBounds: boolean;
             boundsMode: string;
             signedDistance: number | null;
             weight: number;
-        }) => {
+        };
+        const syncPointCloudStatus = (state: PointCloudUiState) => {
             if (!state.enabled) {
                 pointCloudStatus.text = 'Disabled';
             } else if (!state.hasBounds) {
                 pointCloudStatus.text = `No ${state.boundsMode} bounds`;
             } else {
-                pointCloudStatus.text = `Distance ${state.signedDistance.toFixed(2)} · morph ${(state.weight * 100).toFixed(0)}%`;
+                const settings = events.invoke('pointCloudBoundary.settings') as PointCloudBoundarySettings;
+                const source = settings.boundsMode === 'manual' ? 'Manual box' :
+                    settings.automaticShape === 'footprint' ? 'Scene footprint' : 'Scene box';
+                pointCloudStatus.text = `${source} · distance ${state.signedDistance.toFixed(2)} · points ${(state.weight * 100).toFixed(0)}%`;
             }
-        });
+        };
+        events.on('pointCloudBoundary.settings', syncPointCloudSettings);
+        events.on('pointCloudBoundary.state', syncPointCloudStatus);
 
         // background color
 
@@ -670,7 +749,10 @@ class ViewPanel extends Container {
         tooltips.register(unselectedClrPicker, localize('panel.view-options.unselected-color'), 'top');
         tooltips.register(lockedClrPicker, localize('panel.view-options.locked-color'), 'top');
         tooltips.register(selectedSplatsOverlayLabel, 'Tint selected splats with their real Gaussian footprint', 'left');
-        tooltips.register(pointCloudHeader, 'Morph Gaussians to fixed-size centers outside the transition volume.', 'left');
+        tooltips.register(pointCloudHeader, 'Morph Gaussians into the configured point style after the camera leaves the detected scene.', 'left');
+        tooltips.register(pointCloudAutoTrim.row, 'Ignore this percentage of extreme splat centers on each side of automatic detection.', 'left');
+        tooltips.register(pointCloudAutoPadding.row, 'Expand positive or shrink negative the automatically detected scene edge in world units.', 'left');
+        tooltips.register(pointCloudShapeRow, 'Choose fixed screen-space points or retain each Gaussian aspect ratio while scaling it down.', 'left');
         tooltips.register(editBoundary, 'Place or edit the oriented transition volume without changing the selection.', 'left');
     }
 }

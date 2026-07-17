@@ -1,10 +1,12 @@
 @use 'colors.scss' as *;
 
 #view-panel {
-    top: 50%;
-    transform: translate(0, -50%);
+    top: 12px;
+    transform: none;
     right: 102px;
     width: 320px;
+    max-height: calc(100vh - 112px);
+    overflow-y: auto;
     flex-direction: column;
 
     &:not(.pcui-hidden) {
@@ -70,9 +72,31 @@
         }
     }
 
+    & > .view-panel-row.pcui-hidden {
+        display: none;
+    }
+
     .point-cloud-boundary-focus {
         border-radius: 4px;
         background-color: rgba($clr-hilight, 0.4);
         transition: background-color 180ms ease-out;
+    }
+
+    & > .view-panel-section {
+        display: flex;
+        min-height: 26px;
+        margin-top: 6px;
+        padding: 7px 8px 3px;
+        border-top: 1px solid $bcg-dark;
+        color: $text-secondary;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        align-items: center;
+    }
+
+    .point-cloud-color-picker {
+        width: 187px;
+        margin: 0;
     }
 }

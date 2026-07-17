@@ -4,8 +4,10 @@ import test from 'node:test';
 import {
     DEFAULT_POINT_CLOUD_BOUNDARY_SETTINGS,
     calculatePointCloudBoundaryState,
+    deriveAutomaticSceneEnvelope,
     deriveRobustAutomaticBounds,
     sanitizePointCloudBoundarySettings,
+    signedDistanceToAutomaticSceneEnvelope,
     signedDistanceToOrientedBox,
     type PointCloudBoundarySettings
 } from '../src/point-cloud-boundary.ts';
@@ -25,8 +27,16 @@ const settings = (patch: Partial<PointCloudBoundarySettings> = {}): PointCloudBo
     boundsMode: 'manual',
     preview: 'automatic',
     fadeWidth: 2,
+    automaticShape: 'footprint',
+    automaticTrimPercent: 0.5,
+    automaticPadding: 0.35,
+    pointShape: 'fixed',
     pointRadius: 2,
+    gaussianScale: 0.25,
     pointOpacity: 1,
+    pointTint: [1, 1, 1],
+    pointTintStrength: 0,
+    pointSaturation: 1,
     manualBounds: identityBox,
     ...patch
 });
@@ -88,14 +98,42 @@ test('robust automatic bounds ignore hidden, deleted, invalid, and extreme float
     assert.deepEqual(result?.halfExtents, [1.5, 1.5, 1.5]);
 });
 
+test('automatic footprint detects empty courtyards that remain inside a scene box', () => {
+    const samples = [];
+    for (let x = 0; x <= 8; x += 0.25) {
+        for (let z = 0; z <= 8; z += 0.25) {
+            if (x < 2 || x > 6 || z < 2 || z > 6) {
+                samples.push({
+                    position: [x, 0, z] as [number, number, number],
+                    visible: true,
+                    deleted: false
+                });
+            }
+        }
+    }
+    const envelope = deriveAutomaticSceneEnvelope(samples, 0, 0.2);
+    assert.ok(envelope);
+    assert.ok(signedDistanceToAutomaticSceneEnvelope([1, 0, 4], envelope) < 0);
+    assert.ok(signedDistanceToAutomaticSceneEnvelope([4, 0, 4], envelope) > 0);
+    assert.ok(signedDistanceToOrientedBox([4, 0, 4], envelope.bounds) < 0);
+});
+
 test('document settings reject malformed values and retain a safe manual volume', () => {
     const result = sanitizePointCloudBoundarySettings({
         enabled: true,
         boundsMode: 'manual',
         preview: 'automatic',
         fadeWidth: -5,
+        automaticShape: 'invalid',
+        automaticTrimPercent: 50,
+        automaticPadding: -50,
+        pointShape: 'gaussian',
         pointRadius: 200,
+        gaussianScale: 10,
         pointOpacity: 4,
+        pointTint: [2, -1, 0.5],
+        pointTintStrength: 2,
+        pointSaturation: -1,
         manualBounds: {
             center: [1, 2, 3],
             halfExtents: [-1, 0, 4],
@@ -104,8 +142,16 @@ test('document settings reject malformed values and retain a safe manual volume'
     });
 
     assert.equal(result.fadeWidth, 0.01);
+    assert.equal(result.automaticShape, 'footprint');
+    assert.equal(result.automaticTrimPercent, 5);
+    assert.equal(result.automaticPadding, -5);
+    assert.equal(result.pointShape, 'gaussian');
     assert.equal(result.pointRadius, 8);
+    assert.equal(result.gaussianScale, 2);
     assert.equal(result.pointOpacity, 1);
+    assert.deepEqual(result.pointTint, [1, 0, 0.5]);
+    assert.equal(result.pointTintStrength, 1);
+    assert.equal(result.pointSaturation, 0);
     assert.deepEqual(result.manualBounds?.halfExtents, [0.01, 0.01, 4]);
 });
 
