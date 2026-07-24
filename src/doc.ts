@@ -5,7 +5,7 @@ import { BrowserFileSystem, BlobReadSource } from './io';
 import { recentFiles } from './recent-files';
 import { Scene } from './scene';
 import { Splat } from './splat';
-import { serializePly } from './splat-serialize';
+import { writeSplatFile } from './splat-serialize';
 import { Transform } from './transform';
 import { i18n } from './ui/localization';
 
@@ -91,6 +91,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
         const zipFs = new ZipReadFileSystem(blobSource);
 
         try {
+            // the document's view settings are applied through the same events
+            // as user changes - suspend preference capture so they don't
+            // overwrite the user's stored preferences. resumed in the finally
+            // below so a failed load can't leave capture suspended.
+            events.fire('preferences.suspend');
+
             // reset the scene
             resetScene();
 
@@ -130,8 +136,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             if (currentSelection) {
                 const pivot = events.invoke('pivot');
                 const transform = new Transform();
-                const pivotOrigin = events.invoke('pivot.origin');
-                currentSelection.getPivot(pivotOrigin, false, transform);
+                currentSelection.getPivot(transform);
                 pivot.place(transform);
             }
         } catch (error) {
@@ -141,9 +146,13 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 message: `'${error.message ?? error}'`
             });
         } finally {
+            // fire events before cleanup so a throwing close can't leave
+            // preference capture suspended or the spinner running
+            events.fire('preferences.resume');
+            events.fire('stopSpinner');
+
             // Clean up resources
             zipFs.close();
-            events.fire('stopSpinner');
         }
     };
 
@@ -183,7 +192,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
             // Write each splat as PLY
             for (let i = 0; i < splats.length; ++i) {
-                await serializePly([splats[i]], serializeSettings, zipFs, `splat_${i}.ply`);
+                await writeSplatFile([splats[i]], serializeSettings, 'ply', `splat_${i}.ply`, {}, zipFs);
             }
 
             // Close zip (also closes underlying browser writer)
@@ -205,6 +214,9 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             return false;
         }
         resetScene();
+        // new documents start from the user's stored preferences rather than
+        // whatever view state the previous document left behind
+        events.fire('preferences.apply');
         return true;
     });
 

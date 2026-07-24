@@ -11,6 +11,7 @@ import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
 import { initIframeIntegration } from './iframe-integration';
+import { registerPreferences } from './preferences';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
 import { Scene } from './scene';
@@ -26,6 +27,7 @@ import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
 import { MeasureTool } from './tools/measure-tool';
 import { MoveTool } from './tools/move-tool';
+import { OrientTool } from './tools/orient-tool';
 import { PolygonSelection } from './tools/polygon-selection';
 import { RectSelection } from './tools/rect-selection';
 import { RotateTool } from './tools/rotate-tool';
@@ -38,6 +40,7 @@ import { AnnotationOverlay } from './ui/annotation-overlay';
 import { BoundDimensionsOverlay } from './ui/bound-dimensions-overlay';
 import { EditorUI } from './ui/editor';
 import { i18n } from './ui/localization';
+import { registerSelectCursor } from './ui/select-cursor';
 import { ViewManager } from './view-manager';
 
 declare global {
@@ -134,8 +137,10 @@ const main = async () => {
         powerPreference: 'high-performance'
     });
 
+    const urlArgs = getURLArgs();
+
     const overrides = [
-        getURLArgs()
+        urlArgs
     ];
 
     // resolve scene config
@@ -243,17 +248,21 @@ const main = async () => {
     toolManager.register('floodSelection', new FloodSelection(events, editorUI.toolsContainer.dom, mask, editorUI.canvasContainer));
     toolManager.register('polygonSelection', new PolygonSelection(events, editorUI.toolsContainer.dom, mask));
     toolManager.register('lassoSelection', new LassoSelection(events, editorUI.toolsContainer.dom, mask));
-    toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer));
-    toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer));
+    toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer, editorUI.tooltips));
+    toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer, editorUI.tooltips));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('move', new MoveTool(events, scene));
     toolManager.register('rotate', new RotateTool(events, scene));
     toolManager.register('scale', new ScaleTool(events, scene));
-    toolManager.register('measure', new MeasureTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
+    toolManager.register('measure', new MeasureTool(events, scene, editorUI.canvasContainer));
+    toolManager.register('orient', new OrientTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
 
     const boundDimensionsOverlay = new BoundDimensionsOverlay(events, scene, editorUI.canvasContainer);
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
+
+    // show the active selection op (add/remove/intersect) at the cursor
+    registerSelectCursor(events, editorUI.toolsContainer.dom);
 
     window.scene = scene;
 
@@ -273,6 +282,11 @@ const main = async () => {
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
+
+    // apply stored user preferences and start capturing changes to them.
+    // registered after the boot-time initialization events above so they are
+    // never captured as user changes.
+    registerPreferences(events, sceneConfig, urlArgs);
 
     // load async models
     scene.start();

@@ -2,7 +2,7 @@ import { MemoryFileSystem } from '@playcanvas/splat-transform';
 
 import { Events } from './events';
 import { Scene } from './scene';
-import { serializePlyCompressed } from './splat-serialize';
+import { writeSplatFile } from './splat-serialize';
 
 /**
  * Checks if the app is running inside an iframe
@@ -119,7 +119,7 @@ const exportPly = async (events: Events): Promise<{ filename: string, data: Arra
             minOpacity: 1 / 255,
             removeInvalid: true
         };
-        await serializePlyCompressed(splats, serializeSettings, memFs);
+        await writeSplatFile(splats, serializeSettings, 'compressed-ply', 'output.compressed.ply', {}, memFs);
 
         // Get the written file from memory (serializer uses 'output.compressed.ply')
         const data = memFs.results.get('output.compressed.ply');
