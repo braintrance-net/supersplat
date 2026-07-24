@@ -35,6 +35,7 @@ class EditorUI {
     toolsContainer: Container;
     canvas: HTMLCanvasElement;
     popup: Popup;
+    tooltips: Tooltips;
 
     constructor(events: Events) {
         // favicon
@@ -166,9 +167,22 @@ class EditorUI {
         this.toolsContainer = toolsContainer;
         this.canvas = canvas;
         this.popup = popup;
+        this.tooltips = tooltips;
 
         document.body.appendChild(appContainer.dom);
         document.body.setAttribute('tabIndex', '-1');
+
+        // don't let pointer-clicked buttons keep focus (which would swallow
+        // control keys like Space from the global shortcuts). keyboard
+        // activation (e.detail === 0) keeps focus for tab navigation, and
+        // modals keep focus inside so their shortcut blocking stays intact
+        document.addEventListener('click', (e) => {
+            if (e.detail === 0) return;
+            const button = (e.target as Element)?.closest?.('button');
+            if (button && button === document.activeElement && !button.closest('.blocks-shortcuts')) {
+                button.blur();
+            }
+        });
 
         events.on('show.shortcuts', () => {
             shortcutsPopup.hidden = false;

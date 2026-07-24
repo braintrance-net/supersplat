@@ -10,6 +10,7 @@ import { Scene } from './scene';
 import { injectSphericalMetadata } from './spherical-metadata';
 import { Splat } from './splat';
 import { i18n } from './ui/localization';
+import { buildVideoEncoderConfig, getVideoCodecType, VideoSettings } from './video-config';
 
 const nullClr = new Color(0, 0, 0, 0);
 
@@ -21,12 +22,8 @@ const FORMAT_CONFIG: Record<string, { create: (streaming: boolean) => Mp4OutputF
     mkv: { create: () => new MkvOutputFormat(), extension: 'mkv' }
 };
 
-const CODEC_CONFIG: Record<string, { type: 'avc' | 'hevc' | 'vp9' | 'av1'; codec: (height: number) => string }> = {
-    h264: { type: 'avc', codec: h => (h < 1080 ? 'avc1.420028' : 'avc1.640033') }, // H.264 Constrained Baseline/High profile
-    h265: { type: 'hevc', codec: () => 'hev1.1.6.L120.B0' },                       // H.265 Main profile, Level 4.0
-    vp9: { type: 'vp9', codec: () => 'vp09.00.10.08' },                            // VP9 Profile 0, Level 1.0
-    av1: { type: 'av1', codec: () => 'av01.0.05M.08' }                             // AV1 Main Profile, Level 3.1
-};
+// backpressure high-water mark for the encoder queue and pending muxer writes
+const MAX_QUEUE_SIZE = 5;
 
 type ImageSettings = {
     width: number;
@@ -35,21 +32,6 @@ type ImageSettings = {
     showDebug: boolean;
     format: 'png' | 'jpeg' | 'webp';
     quality?: number;           // 0..1, jpeg only
-    projection?: 'standard' | 'equirect';
-    levelHorizon?: boolean;
-};
-
-type VideoSettings = {
-    startFrame: number;
-    endFrame: number;
-    frameRate: number;
-    width: number;
-    height: number;
-    bitrate: number;
-    transparentBg: boolean;
-    showDebug: boolean;
-    format: 'mp4' | 'webm' | 'mov' | 'mkv';
-    codec: 'h264' | 'h265' | 'vp9' | 'av1';
     projection?: 'standard' | 'equirect';
     levelHorizon?: boolean;
 };
@@ -117,6 +99,10 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     };
 
     events.function('render.baseFilename', baseFilename);
+
+    // largest render target dimension the device supports; used by the render
+    // dialogs to disable resolutions the gpu cannot produce
+    events.function('render.maxTextureSize', () => scene.graphicsDevice.maxTextureSize);
 
     // wait for postrender to fire
     const postRender = () => {
@@ -379,6 +365,8 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
             let equirect: EquirectRenderer | null = null;
             let savedFov = 0;
             let savedOrtho = false;
+            let output: Output | null = null;
+            let muxerWrites = Promise.resolve();
 
             try {
                 const { startFrame, endFrame, frameRate, width, height, bitrate, transparentBg, showDebug, format, codec: codecChoice, projection, levelHorizon } = videoSettings;
@@ -397,11 +385,10 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 const outputFormat = formatConfig.create(taggable || !!fileStream);
                 const fileExtension = formatConfig.extension;
 
-                const codecConfig = CODEC_CONFIG[codecChoice] ?? CODEC_CONFIG.h264;
-                const codecType = codecConfig.type;
-                const codec = codecConfig.codec(height);
+                const encoderConfig = buildVideoEncoderConfig(videoSettings);
+                const codecType = getVideoCodecType(codecChoice);
 
-                const output = new Output({
+                output = new Output({
                     format: outputFormat,
                     target
                 });
@@ -415,26 +402,49 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                 await output.start();
 
                 let encoderError: Error | null = null;
+                let muxerError: Error | null = null;
+                let muxerQueueSize = 0;
 
                 // helper to create and configure a VideoEncoder instance
                 const createEncoder = () => {
                     encoderError = null;
                     const enc = new VideoEncoder({
-                        output: async (chunk, meta) => {
+                        output: (chunk, meta) => {
                             const encodedPacket = EncodedPacket.fromEncodedChunk(chunk);
-                            await videoSource.add(encodedPacket, meta);
+                            muxerQueueSize++;
+
+                            // WebCodecs ignores a Promise returned by its output
+                            // callback: awaiting the muxer here provides no
+                            // backpressure, and a rejected write becomes an
+                            // unhandled rejection that silently drops packets
+                            // from the finished file. Chain the writes instead
+                            // so failures surface via muxerError, muxerQueueSize
+                            // drives backpressure in the encode loop, and every
+                            // write has settled before output.finalize().
+                            muxerWrites = muxerWrites
+                            .then(async () => {
+                                if (!muxerError) {
+                                    await videoSource.add(encodedPacket, meta);
+                                }
+                            })
+                            .catch((error) => {
+                                muxerError = error instanceof Error ? error : new Error(String(error));
+                            })
+                            .finally(() => {
+                                muxerQueueSize--;
+                            });
                         },
                         error: (error) => {
                             encoderError = error;
                         }
                     });
-                    enc.configure({ codec, width, height, bitrate });
+                    enc.configure(encoderConfig);
                     return enc;
                 };
 
                 // fail fast on unsupported configurations (e.g. encoder
                 // dimension limits) instead of erroring mid-render
-                const support = await VideoEncoder.isConfigSupported({ codec, width, height, bitrate });
+                const support = await VideoEncoder.isConfigSupported(encoderConfig);
                 if (!support.supported) {
                     throw new Error(`Unsupported video configuration (${codecChoice} @ ${width}x${height})`);
                 }
@@ -528,10 +538,16 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     });
 
                     // wait for encoder queue to drain if necessary (backpressure handling)
-                    while (encoder.encodeQueueSize > 5) {
+                    while (encoder.encodeQueueSize > MAX_QUEUE_SIZE) {
                         await new Promise<void>((resolve) => {
                             setTimeout(resolve, 1);
                         });
+                    }
+                    // muxerQueueSize is decremented by the write chain settling
+                    // during the await
+                    // eslint-disable-next-line no-unmodified-loop-condition
+                    while (muxerQueueSize > MAX_QUEUE_SIZE) {
+                        await muxerWrites;
                     }
 
                     // if the codec was reclaimed (e.g. browser backgrounded the tab),
@@ -543,9 +559,9 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
                     }
 
                     // check for non-recoverable encoder errors
-                    if (encoderError) {
+                    if (encoderError || muxerError) {
                         videoFrame.close();
-                        throw encoderError;
+                        throw encoderError ?? muxerError;
                     }
 
                     encoder.encode(videoFrame, { keyFrame: forceKeyFrame });
@@ -665,6 +681,10 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 // Flush and finalize output
                 await encoder.flush();
+                await muxerWrites;
+                if (muxerError) {
+                    throw muxerError;
+                }
                 await output.finalize();
 
                 const filename = () => `${baseFilename()}.${fileExtension}`;
@@ -699,6 +719,35 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
 
                 return !cancelled;
             } catch (error) {
+                // stop the encoder so no further packets are queued while
+                // cleaning up
+                if (encoder && encoder.state !== 'closed') {
+                    encoder.close();
+                }
+
+                // the output's stream target holds a writer lock on the
+                // destination file stream. drain in-flight muxer writes and
+                // cancel the output to release it, otherwise the caller
+                // cannot remove the partial file
+                if (output) {
+                    try {
+                        await muxerWrites;
+                        await output.cancel();
+                    } catch {
+                        // output already finalized or its target already closed
+                    }
+                }
+
+                // tagged 360 exports write to the file stream directly, so
+                // close it here too (mirrors render.image failure handling)
+                if (fileStream) {
+                    try {
+                        await fileStream.close();
+                    } catch {
+                        // stream already closed or still locked by the output
+                    }
+                }
+
                 await events.invoke('showPopup', {
                     type: 'error',
                     header: i18n.t('panel.render.failed'),
@@ -740,4 +789,5 @@ const registerRenderEvents = (scene: Scene, events: Events) => {
     });
 };
 
-export { ImageSettings, VideoSettings, registerRenderEvents };
+export { ImageSettings, registerRenderEvents };
+export type { VideoSettings } from './video-config';

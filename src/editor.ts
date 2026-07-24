@@ -1,10 +1,11 @@
 import { MemoryFileSystem } from '@playcanvas/splat-transform';
-import { Color, Mat4, path, Texture, Vec3, Vec4 } from 'playcanvas';
+import { Color, Mat4, path, Quat, Texture, Vec3, Vec4 } from 'playcanvas';
 
 import { EditHistory } from './edit-history';
-import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp } from './edit-ops';
+import { SelectAllOp, SelectNoneOp, SelectInvertOp, SelectOp, HideSelectionOp, UnhideAllOp, DeleteSelectionOp, ResetOp, MultiOp, AddSplatOp, SetLocalFrameOp } from './edit-ops';
 import { Element, ElementType } from './element';
 import { Events } from './events';
+import type { GridPlane } from './infinite-grid';
 import { MappedReadFileSystem } from './io';
 import { Scene } from './scene';
 import { Splat } from './splat';
@@ -105,6 +106,23 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     setGridVisible(scene.config.show.grid);
+
+    // grid.plane
+
+    const setGridPlane = (plane: GridPlane) => {
+        if (plane !== scene.grid.plane) {
+            scene.grid.plane = plane;
+            events.fire('grid.plane', plane);
+        }
+    };
+
+    events.function('grid.plane', () => {
+        return scene.grid.plane;
+    });
+
+    events.on('grid.setPlane', (plane: GridPlane) => {
+        setGridPlane(plane);
+    });
 
     // camera.fovDolly
 
@@ -263,6 +281,17 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // camera.focus
 
     events.on('camera.focus', () => {
+        // the active tool's focus target (e.g. orient points) takes precedence
+        const toolFocus: { position: Vec3, radius: number } | null = events.invoke('tool.focus');
+        if (toolFocus) {
+            scene.camera.focus({
+                focalPoint: toolFocus.position,
+                radius: toolFocus.radius,
+                speed: 1
+            });
+            return;
+        }
+
         const splat = selectedSplats()[0];
         if (splat) {
             // use current bounds (caller should have awaited the operation that changed data)
@@ -281,6 +310,34 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
                 speed: 1
             });
         }
+    });
+
+    // pivot.reset
+
+    // reset the selection's local frame back to the model's own frame, or,
+    // with toCenter, to the bound center (the selection bound while gaussians
+    // are selected). resets orientation in both cases
+    events.on('pivot.reset', (toCenter: boolean) => {
+        const splat = selectedSplats()[0];
+        if (!splat) {
+            return;
+        }
+
+        const bound = splat.numSelected > 0 ? splat.selectionBound : splat.localBound;
+        const newOrigin = toCenter ? bound.center.clone() : new Vec3();
+        const newFrame = new Quat();
+
+        if (splat.localFrameOrigin.equals(newOrigin) && splat.localFrame.equals(newFrame)) {
+            return;
+        }
+
+        events.fire('edit.add', new SetLocalFrameOp({
+            splat,
+            oldOrigin: splat.localFrameOrigin.clone(),
+            oldFrame: splat.localFrame.clone(),
+            newOrigin,
+            newFrame
+        }));
     });
 
     events.on('camera.reset', () => {
@@ -352,18 +409,20 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         });
     };
 
-    events.on('select.bySphere', async (op: 'add'|'remove'|'set'|'intersect', sphere: number[]) => {
+    // transform maps the unit sphere (diameter 1) to world space
+    events.on('select.bySphere', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
         for (const splat of selectedSplats()) {
             await runSelectIntersect(splat, op, {
-                sphere: { x: sphere[0], y: sphere[1], z: sphere[2], radius: sphere[3] }
+                sphere: { transform }
             });
         }
     });
 
-    events.on('select.byBox', async (op: 'add'|'remove'|'set'|'intersect', box: number[]) => {
+    // transform maps the unit cube (side 1) to world space
+    events.on('select.byBox', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
         for (const splat of selectedSplats()) {
             await runSelectIntersect(splat, op, {
-                box: { x: box[0], y: box[1], z: box[2], lenx: box[3], leny: box[4], lenz: box[5] }
+                box: { transform }
             });
         }
     });
@@ -584,14 +643,18 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     events.on('select.unhide', () => {
-        selectedSplats().forEach((splat) => {
-            events.fire('edit.add', new UnhideAllOp(splat));
-        });
+        const ops = (scene.getElementsByType(ElementType.splat) as Splat[])
+        .map(splat => new UnhideAllOp(splat))
+        .filter(op => !op.ranges.empty);
+
+        if (ops.length > 0) {
+            events.fire('edit.add', ops.length === 1 ? ops[0] : new MultiOp(ops));
+        }
     });
 
     events.on('select.delete', () => {
-        // Don't delete gaussians when measure tool is active (backspace deletes measure points instead)
-        if (events.invoke('tool.active') === 'measure') {
+        // Don't delete gaussians when a point-placing tool is active (backspace deletes its points instead)
+        if (['measure', 'orient'].includes(events.invoke('tool.active'))) {
             return;
         }
         // Don't delete gaussians while a polygon selection is in progress (backspace removes the last point instead)
@@ -864,6 +927,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             centersSize: events.invoke('camera.splatSize'),
             outlineSelection: events.invoke('view.outlineSelection'),
             showGrid: events.invoke('grid.visible'),
+            gridPlane: events.invoke('grid.plane'),
             showBound: events.invoke('camera.bound'),
             showBoundDimensions: events.invoke('camera.boundDimensions'),
             showCameraPoses: events.invoke('camera.showPoses'),
@@ -883,6 +947,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('camera.setSplatSize', docView.centersSize);
         events.fire('view.setOutlineSelection', docView.outlineSelection);
         events.fire('grid.setVisible', docView.showGrid);
+        events.fire('grid.setPlane', docView.gridPlane ?? 'xz');
         events.fire('camera.setBound', docView.showBound);
         events.fire('camera.setBoundDimensions', docView.showBoundDimensions ?? false);
         events.fire('camera.setShowPoses', docView.showCameraPoses ?? false);

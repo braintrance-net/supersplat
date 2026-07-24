@@ -22,7 +22,7 @@ class ImageSettingsDialog extends Container {
         args = {
             ...args,
             id: 'image-settings-dialog',
-            class: 'settings-dialog',
+            class: ['settings-dialog', 'blocks-shortcuts'],
             hidden: true,
             tabIndex: -1
         };
@@ -51,8 +51,8 @@ class ImageSettingsDialog extends Container {
             defaultValue: 'standard'
         });
         i18n.bindOptions(projectionSelect, () => [
-            { v: 'standard', t: i18n.t('popup.render-image.projection-standard') },
-            { v: 'equirect', t: i18n.t('popup.render-image.projection-360') }
+            { v: 'standard', t: i18n.t('popup.render-image.projection.standard') },
+            { v: 'equirect', t: i18n.t('popup.render-image.projection.equirectangular') }
         ]);
         const projectionRow = new Container({ class: 'row' });
         projectionRow.append(projectionLabel);
@@ -60,21 +60,22 @@ class ImageSettingsDialog extends Container {
 
         // preset
 
-        // 360 output is 2:1 equirectangular, capped at 4096 wide to stay
-        // within common encoder dimension limits (mirrors video's presets)
+        // 360 output is 2:1 equirectangular (mirrors video's presets)
         const buildPresetOptions = () => {
             return projectionSelect.value === 'equirect' ? [
                 { v: '360-1k', t: '1024x512' },
                 { v: '360-2k', t: '2048x1024' },
                 { v: '360-4k', t: '3840x1920' },
                 { v: '360-4096', t: '4096x2048' },
-                { v: 'custom', t: i18n.t('popup.render-image.resolution-custom') }
+                { v: '360-8k', t: '7680x3840' },
+                { v: '360-8192', t: '8192x4096' },
+                { v: 'custom', t: i18n.t('popup.render-image.resolution.custom') }
             ] : [
-                { v: 'viewport', t: i18n.t('popup.render-image.resolution-current') },
+                { v: 'viewport', t: i18n.t('popup.render-image.resolution.current') },
                 { v: 'HD', t: 'HD' },
                 { v: 'QHD', t: 'QHD' },
                 { v: '4K', t: '4K' },
-                { v: 'custom', t: i18n.t('popup.render-image.resolution-custom') }
+                { v: 'custom', t: i18n.t('popup.render-image.resolution.custom') }
             ];
         };
 
@@ -155,7 +156,7 @@ class ImageSettingsDialog extends Container {
         // transparent background
 
         const transparentBgLabel = new Label({ class: 'label' });
-        i18n.bindText(transparentBgLabel, 'popup.render-image.transparent-bg');
+        i18n.bindText(transparentBgLabel, 'popup.render-image.transparent-background');
         const transparentBgBoolean = new BooleanInput({ class: 'boolean', value: false });
         const transparentBgRow = new Container({ class: 'row' });
         transparentBgRow.append(transparentBgLabel);
@@ -164,7 +165,7 @@ class ImageSettingsDialog extends Container {
         // show debug overlays
 
         const showDebugLabel = new Label({ class: 'label' });
-        i18n.bindText(showDebugLabel, 'popup.render-image.show-debug');
+        i18n.bindText(showDebugLabel, 'popup.render-image.show-debug-overlays');
         const showDebugBoolean = new BooleanInput({ class: 'boolean', value: false });
         const showDebugRow = new Container({ class: 'row' });
         showDebugRow.append(showDebugLabel);
@@ -218,7 +219,9 @@ class ImageSettingsDialog extends Container {
                 '360-1k': 1024,
                 '360-2k': 2048,
                 '360-4k': 3840,
-                '360-4096': 4096
+                '360-4096': 4096,
+                '360-8k': 7680,
+                '360-8192': 8192
             };
 
             const heights: Record<string, number> = {
@@ -229,7 +232,9 @@ class ImageSettingsDialog extends Container {
                 '360-1k': 512,
                 '360-2k': 1024,
                 '360-4k': 1920,
-                '360-4096': 2048
+                '360-4096': 2048,
+                '360-8k': 3840,
+                '360-8192': 4096
             };
 
             resolutionValue.value = [
