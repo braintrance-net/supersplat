@@ -1,14 +1,15 @@
 import { Container, Label } from '@playcanvas/pcui';
-import { Mat4, path, Vec3 } from 'playcanvas';
+import { Mat4 } from 'playcanvas';
 
 import { DataPanel } from './data-panel';
 import { Events } from '../events';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
+import { CameraInfoOverlay } from './camera-info-overlay';
 import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
-import { localize, localizeInit } from './localization';
+import { i18n } from './localization';
 import { Menu } from './menu';
 import { ModeToggle } from './mode-toggle';
 import logo from './playcanvas-logo.png';
@@ -17,21 +18,18 @@ import { Progress } from './progress';
 import { PublishSettingsDialog } from './publish-settings-dialog';
 import { RightToolbar } from './right-toolbar';
 import { ScenePanel } from './scene-panel';
+import { SettingsPanel } from './settings-panel';
 import { ShortcutsPopup } from './shortcuts-popup';
 import { Spinner } from './spinner';
+import { StatusBar } from './status-bar';
 import { TimelinePanel } from './timeline-panel';
 import { Tooltips } from './tooltips';
 import { VideoSettingsDialog } from './video-settings-dialog';
 import { ViewCube } from './view-cube';
-import { ViewPanel } from './view-panel';
 import { version } from '../../package.json';
 
 // ts compiler and vscode find this type, but eslint does not
 type FilePickerAcceptType = unknown;
-
-const removeExtension = (filename: string) => {
-    return filename.substring(0, filename.length - path.getExtension(filename).length);
-};
 
 class EditorUI {
     appContainer: Container;
@@ -40,6 +38,7 @@ class EditorUI {
     toolsContainer: Container;
     canvas: HTMLCanvasElement;
     popup: Popup;
+    tooltips: Tooltips;
 
     constructor(events: Events) {
         // favicon
@@ -78,32 +77,6 @@ class EditorUI {
             text: `SUPERSPLAT v${version}`
         });
 
-        // cursor label
-        const cursorLabel = new Label({
-            id: 'cursor-label'
-        });
-
-        let fullprecision = '';
-
-        events.on('camera.focalPointPicked', (details: { position: Vec3 }) => {
-            cursorLabel.text = `${details.position.x.toFixed(2)}, ${details.position.y.toFixed(2)}, ${details.position.z.toFixed(2)}`;
-            fullprecision = `${details.position.x}, ${details.position.y}, ${details.position.z}`;
-        });
-
-        ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'dblclick'].forEach((eventName) => {
-            cursorLabel.dom.addEventListener(eventName, (event: Event) => event.stopPropagation());
-        });
-
-        cursorLabel.dom.addEventListener('pointerdown', () => {
-            navigator.clipboard.writeText(fullprecision);
-
-            const orig = cursorLabel.text;
-            cursorLabel.text = localize('cursor.copied');
-            setTimeout(() => {
-                cursorLabel.text = orig;
-            }, 1000);
-        });
-
         // canvas container
         const canvasContainer = new Container({
             id: 'canvas-container'
@@ -120,19 +93,20 @@ class EditorUI {
 
         // bottom toolbar
         const scenePanel = new ScenePanel(events, tooltips);
-        const viewPanel = new ViewPanel(events, tooltips);
+        const settingsPanel = new SettingsPanel(events, tooltips);
         const colorPanel = new ColorPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
         const modeToggle = new ModeToggle(events, tooltips);
         const menu = new Menu(events);
+        const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
 
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(appLabel);
-        canvasContainer.append(cursorLabel);
+        canvasContainer.append(cameraInfoOverlay);
         canvasContainer.append(toolsContainer);
         canvasContainer.append(scenePanel);
-        canvasContainer.append(viewPanel);
+        canvasContainer.append(settingsPanel);
         canvasContainer.append(colorPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
@@ -152,15 +126,23 @@ class EditorUI {
         });
 
         const timelinePanel = new TimelinePanel(events, tooltips);
-        const dataPanel = new DataPanel(events);
+        const dataPanel = new DataPanel(events, tooltips);
+        const statusBar = new StatusBar(events, tooltips);
+
+        timelinePanel.hidden = true;
 
         mainContainer.append(canvasContainer);
         mainContainer.append(timelinePanel);
         mainContainer.append(dataPanel);
+        mainContainer.append(statusBar);
+
+        // Wire up status bar panel toggles
+        events.on('statusBar.panelChanged', (panel: string | null) => {
+            timelinePanel.hidden = panel !== 'timeline';
+            dataPanel.hidden = panel !== 'splatData';
+        });
 
         editorContainer.append(mainContainer);
-
-        tooltips.register(cursorLabel, localize('cursor.click-to-copy'), 'top');
 
         // message popup
         const popup = new Popup(tooltips);
@@ -201,9 +183,22 @@ class EditorUI {
         this.toolsContainer = toolsContainer;
         this.canvas = canvas;
         this.popup = popup;
+        this.tooltips = tooltips;
 
         document.body.appendChild(appContainer.dom);
         document.body.setAttribute('tabIndex', '-1');
+
+        // don't let pointer-clicked buttons keep focus (which would swallow
+        // control keys like Space from the global shortcuts). keyboard
+        // activation (e.detail === 0) keeps focus for tab navigation, and
+        // modals keep focus inside so their shortcut blocking stays intact
+        document.addEventListener('click', (e) => {
+            if (e.detail === 0) return;
+            const button = (e.target as Element)?.closest?.('button');
+            if (button && button === document.activeElement && !button.closest('.blocks-shortcuts')) {
+                button.blur();
+            }
+        });
 
         events.on('show.shortcuts', () => {
             shortcutsPopup.hidden = false;
@@ -219,8 +214,8 @@ class EditorUI {
             if (!userStatus) {
                 await events.invoke('showPopup', {
                     type: 'error',
-                    header: localize('popup.error'),
-                    message: localize('popup.publish.please-log-in')
+                    header: i18n.t('popup.error'),
+                    message: i18n.t('popup.publish.please-log-in')
                 });
                 return false;
             }
@@ -238,7 +233,48 @@ class EditorUI {
             const imageSettings = await imageSettingsDialog.show();
 
             if (imageSettings) {
-                await events.invoke('render.image', imageSettings);
+                try {
+                    let writable;
+                    let fileHandle: FileSystemFileHandle | undefined;
+
+                    const imageFileTypes: Record<string, { description: string, accept: Record<`${string}/${string}`, `.${string}`[]>, extension: string }> = {
+                        png: { description: 'PNG Image', accept: { 'image/png': ['.png'] }, extension: '.png' },
+                        jpeg: { description: 'JPEG Image', accept: { 'image/jpeg': ['.jpg', '.jpeg'] }, extension: '.jpg' },
+                        webp: { description: 'WebP Image', accept: { 'image/webp': ['.webp'] }, extension: '.webp' }
+                    };
+                    const imageFileType = imageFileTypes[imageSettings.format];
+
+                    if (window.showSaveFilePicker) {
+                        fileHandle = await window.showSaveFilePicker({
+                            id: 'SuperSplatImageFileExport',
+                            types: [{
+                                description: imageFileType.description,
+                                accept: imageFileType.accept
+                            }],
+                            suggestedName: `${events.invoke('render.baseFilename')}${imageFileType.extension}`
+                        });
+
+                        writable = await fileHandle.createWritable();
+                    }
+
+                    const result = await events.invoke('render.image', imageSettings, writable);
+
+                    // if the render failed, remove the empty file left on disk
+                    if (result === false && fileHandle?.remove) {
+                        await fileHandle.remove();
+                    }
+                } catch (error) {
+                    if (error instanceof DOMException && error.name === 'AbortError') {
+                        // user cancelled save dialog
+                        return;
+                    }
+
+                    await events.invoke('showPopup', {
+                        type: 'error',
+                        header: i18n.t('panel.render.failed'),
+                        message: `'${error.message ?? error}'`
+                    });
+                }
             }
         });
 
@@ -248,8 +284,6 @@ class EditorUI {
             if (videoSettings) {
 
                 try {
-                    const docName = events.invoke('doc.name');
-
                     // Determine file extension and mime type based on format
                     let fileExtension: string;
                     let filePickerTypes: FilePickerAcceptType[];
@@ -289,12 +323,13 @@ class EditorUI {
                         }];
                     }
 
-                    const suggested = `${removeExtension(docName ?? 'supersplat')}${fileExtension}`;
+                    const suggested = `${events.invoke('render.baseFilename')}${fileExtension}`;
 
                     let writable;
+                    let fileHandle: FileSystemFileHandle | undefined;
 
                     if (window.showSaveFilePicker) {
-                        const fileHandle = await window.showSaveFilePicker({
+                        fileHandle = await window.showSaveFilePicker({
                             id: 'SuperSplatVideoFileExport',
                             types: filePickerTypes,
                             suggestedName: suggested
@@ -303,7 +338,12 @@ class EditorUI {
                         writable = await fileHandle.createWritable();
                     }
 
-                    await events.invoke('render.video', videoSettings, writable);
+                    const result = await events.invoke('render.video', videoSettings, writable);
+
+                    // if the render was cancelled, remove the empty file left on disk
+                    if (result === false && fileHandle?.remove) {
+                        await fileHandle.remove();
+                    }
                 } catch (error) {
                     if (error instanceof DOMException && error.name === 'AbortError') {
                         // user cancelled save dialog
@@ -312,7 +352,7 @@ class EditorUI {
 
                     await events.invoke('showPopup', {
                         type: 'error',
-                        header: 'Failed to render video',
+                        header: i18n.t('panel.render.failed'),
                         message: `'${error.message ?? error}'`
                     });
                 }
@@ -353,9 +393,13 @@ class EditorUI {
 
         topContainer.append(progress);
 
-        events.on('progressStart', (header: string) => {
+        events.on('progressStart', (header: string, cancellable?: boolean) => {
             progress.hidden = false;
             progress.setHeader(header);
+            progress.setText('');
+            progress.setProgress(0);
+            progress.showCancelButton(!!cancellable);
+            progress.onCancel = cancellable ? () => events.fire('progressCancel') : null;
         });
 
         events.on('progressUpdate', (options: { text?: string, progress?: number }) => {
@@ -369,6 +413,8 @@ class EditorUI {
 
         events.on('progressEnd', () => {
             progress.hidden = true;
+            progress.showCancelButton(false);
+            progress.onCancel = null;
         });
 
         // initialize canvas to correct size before creating graphics device etc

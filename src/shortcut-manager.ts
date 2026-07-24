@@ -17,6 +17,7 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'camera.toggleOverlay': { keys: ['Tab'] },
     'camera.toggleMode': { keys: ['m'] },
     'grid.toggleVisible': { keys: ['g'] },
+    'camera.toggleShowInfo': { keys: ['i'] },
     'select.hide': { keys: ['h'] },
     'select.unhide': { keys: ['h'], shift: 'required' },
 
@@ -26,8 +27,8 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'timeline.nextFrame': { keys: ['.'], repeat: true },
     'timeline.prevKey': { keys: ['<'], shift: 'optional', repeat: true },
     'timeline.nextKey': { keys: ['>'], shift: 'optional', repeat: true },
-    'timeline.addKey': { keys: ['Enter'] },
-    'timeline.removeKey': { keys: ['Enter'], shift: 'required' },
+    'track.addKey': { keys: ['Enter'] },
+    'track.removeKey': { keys: ['Enter'], shift: 'required' },
 
     // Selection
     'select.all': { keys: ['a'], ctrl: 'required', capture: true },
@@ -36,9 +37,12 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'select.delete': { keys: ['Delete', 'Backspace'] },
 
     // Tools
-    'tool.move': { keys: ['1'] },
-    'tool.rotate': { keys: ['2'] },
-    'tool.scale': { keys: ['3'] },
+    // 1/2/3 don't fire tool.move/rotate/scale directly: while a shape
+    // selection tool (box/sphere) is active they switch its gizmo mode
+    // instead of switching tools (see ToolManager)
+    'tool.moveShortcut': { keys: ['1'] },
+    'tool.rotateShortcut': { keys: ['2'] },
+    'tool.scaleShortcut': { keys: ['3'] },
     'tool.rectSelection': { keys: ['r'] },
     'tool.lassoSelection': { keys: ['l'] },
     'tool.polygonSelection': { keys: ['p'] },
@@ -54,6 +58,7 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'edit.undo': { keys: ['z'], ctrl: 'required', repeat: true, capture: true },
     'edit.redo': { keys: ['z'], ctrl: 'required', shift: 'required', repeat: true, capture: true },
     'dataPanel.toggle': { keys: ['d'], ctrl: 'required', capture: true },
+    'timelinePanel.toggle': { keys: ['t'], ctrl: 'required', capture: true },
 
     // Camera fly keys - use physical positions (codes) for WASD layout on non-QWERTY keyboards
     'camera.fly.forward': { codes: ['KeyW'], held: true, shift: 'optional', alt: 'optional' },

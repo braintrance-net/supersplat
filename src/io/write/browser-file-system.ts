@@ -18,6 +18,10 @@ class BrowserFileWriter implements Writer {
         this.ready = this.stream.seek(0);
     }
 
+    get bytesWritten(): number {
+        return this.cursor;
+    }
+
     async write(data: Uint8Array): Promise<void> {
         await this.ready;
         this.cursor += data.byteLength;
@@ -28,6 +32,15 @@ class BrowserFileWriter implements Writer {
         await this.ready;
         await this.stream.truncate(this.cursor);
         await this.stream.close();
+    }
+
+    async abort(): Promise<void> {
+        await this.ready;
+        try {
+            await this.stream.abort();
+        } catch {
+            // already failing — ignore
+        }
     }
 }
 
@@ -72,6 +85,10 @@ class BrowserDownloadWriter implements Writer {
         this.innerWriter = this.memFs.createWriter(filename);
     }
 
+    get bytesWritten(): number {
+        return this.innerWriter.bytesWritten;
+    }
+
     write(data: Uint8Array): void {
         this.innerWriter.write(data);
     }
@@ -82,6 +99,11 @@ class BrowserDownloadWriter implements Writer {
         if (data) {
             triggerDownload(data, this.filename);
         }
+    }
+
+    abort(): void {
+        // discard buffered data without triggering a download
+        this.innerWriter.abort();
     }
 }
 
