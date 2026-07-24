@@ -14,7 +14,7 @@
     "license": "MIT",
     "main": "index.js",
     "scripts": {
-        "build": "rm -rf dist &&rollup -c",
+        "build": "rm -rf dist && rollup -c",
         "watch": "rollup -c -w",
         "serve": "serve dist -C -l 8000",
         "develop": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\"",
