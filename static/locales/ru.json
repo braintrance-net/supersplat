@@ -296,6 +296,8 @@
     "orient.set-pivot": "Задать опорную точку",
     "orient.clear": "Очистить",
 
+    "orbit-point.hint": "Нажмите на сцену, чтобы переместить точку орбиты",
+
     "status-bar.splats": "Сплаты",
     "status-bar.selected": "Выбрано",
     "status-bar.locked": "Заблокировано",
@@ -307,6 +309,7 @@
     "tooltip.right-toolbar.show-hide": "Показать/Скрыть сплаты",
     "tooltip.right-toolbar.orbit-camera": "Орбитальная камера",
     "tooltip.right-toolbar.fly-camera": "Камера полёта",
+    "tooltip.right-toolbar.orbit-point": "Задать точку орбиты",
     "tooltip.right-toolbar.frame-selection": "Обрамить выделение",
     "tooltip.right-toolbar.reset-camera": "Сбросить камеру",
     "tooltip.right-toolbar.colors": "Цвета",

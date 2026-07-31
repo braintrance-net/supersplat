@@ -296,6 +296,8 @@
     "orient.set-pivot": "Set Pivot",
     "orient.clear": "Clear",
 
+    "orbit-point.hint": "Click the scene to recenter the orbit point",
+
     "status-bar.splats": "Splats",
     "status-bar.selected": "Selected",
     "status-bar.locked": "Locked",
@@ -307,6 +309,7 @@
     "tooltip.right-toolbar.show-hide": "Show/Hide Splats",
     "tooltip.right-toolbar.orbit-camera": "Orbit Camera",
     "tooltip.right-toolbar.fly-camera": "Fly Camera",
+    "tooltip.right-toolbar.orbit-point": "Set Orbit Point",
     "tooltip.right-toolbar.frame-selection": "Frame Selection",
     "tooltip.right-toolbar.reset-camera": "Reset Camera",
     "tooltip.right-toolbar.colors": "Colors",

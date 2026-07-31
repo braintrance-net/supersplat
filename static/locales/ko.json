@@ -296,6 +296,8 @@
     "orient.set-pivot": "피벗 설정",
     "orient.clear": "지우기",
 
+    "orbit-point.hint": "장면을 클릭하여 오빗 중심 이동",
+
     "status-bar.splats": "스플랫",
     "status-bar.selected": "선택됨",
     "status-bar.locked": "잠김",
@@ -307,6 +309,7 @@
     "tooltip.right-toolbar.show-hide": "스플래츠 표시/숨기기",
     "tooltip.right-toolbar.orbit-camera": "오빗 카메라",
     "tooltip.right-toolbar.fly-camera": "플라이 카메라",
+    "tooltip.right-toolbar.orbit-point": "오빗 중심 설정",
     "tooltip.right-toolbar.frame-selection": "프레임 선택",
     "tooltip.right-toolbar.reset-camera": "카메라 재설정",
     "tooltip.right-toolbar.colors": "색상",

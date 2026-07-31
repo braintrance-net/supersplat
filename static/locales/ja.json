@@ -296,6 +296,8 @@
     "orient.set-pivot": "ピボットを設定",
     "orient.clear": "クリア",
 
+    "orbit-point.hint": "シーンをクリックしてオービット中心を移動",
+
     "status-bar.splats": "スプラット",
     "status-bar.selected": "選択済み",
     "status-bar.locked": "ロック済み",
@@ -307,6 +309,7 @@
     "tooltip.right-toolbar.show-hide": "スプラットの表示/非表示",
     "tooltip.right-toolbar.orbit-camera": "オービットカメラ",
     "tooltip.right-toolbar.fly-camera": "フライカメラ",
+    "tooltip.right-toolbar.orbit-point": "オービット中心を設定",
     "tooltip.right-toolbar.frame-selection": "選択をフレームイン",
     "tooltip.right-toolbar.reset-camera": "カメラをリセット",
     "tooltip.right-toolbar.colors": "色",

@@ -296,6 +296,8 @@
     "orient.set-pivot": "Définir le pivot",
     "orient.clear": "Effacer",
 
+    "orbit-point.hint": "Cliquez sur la scène pour recentrer le point d'orbite",
+
     "status-bar.splats": "Splats",
     "status-bar.selected": "Sélectionnés",
     "status-bar.locked": "Verrouillés",
@@ -307,6 +309,7 @@
     "tooltip.right-toolbar.show-hide": "Afficher/cacher les splats",
     "tooltip.right-toolbar.orbit-camera": "Caméra orbitale",
     "tooltip.right-toolbar.fly-camera": "Caméra de vol",
+    "tooltip.right-toolbar.orbit-point": "Définir le point d'orbite",
     "tooltip.right-toolbar.frame-selection": "Cadrer la sélection",
     "tooltip.right-toolbar.reset-camera": "Réinitialiser la caméra",
     "tooltip.right-toolbar.colors": "Couleurs",
