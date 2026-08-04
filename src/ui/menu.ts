@@ -251,16 +251,19 @@ class Menu extends Container {
             text: () => i18n.t('menu.select.all'),
             icon: createSvg(selectAll),
             extra: shortcutManager.formatShortcut('select.all'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.all')
         }, {
             text: () => i18n.t('menu.select.none'),
             icon: createSvg(selectNone),
             extra: shortcutManager.formatShortcut('select.none'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.none')
         }, {
             text: () => i18n.t('menu.select.invert'),
             icon: createSvg(selectInverse),
             extra: shortcutManager.formatShortcut('select.invert'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.invert')
         }, {
             // separator
@@ -274,6 +277,7 @@ class Menu extends Container {
             text: () => i18n.t('menu.select.unlock'),
             icon: createSvg(selectUnlock),
             extra: shortcutManager.formatShortcut('select.unhide'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.unhide')
         }, {
             text: () => i18n.t('menu.select.delete'),
@@ -283,6 +287,7 @@ class Menu extends Container {
             onSelect: () => events.fire('select.delete')
         }, {
             text: () => i18n.t('menu.select.reset'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('scene.reset')
         }]);
 

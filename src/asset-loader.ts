@@ -11,6 +11,11 @@ class AssetLoader {
     app: AppBase;
     events: Events;
 
+    // LOD chosen by the user on the most recent multi-LOD load. lets a follow-up
+    // load of the same file (the skybox copy made at import) reuse the answer
+    // instead of asking again.
+    lastLodIndex: number | null = null;
+
     constructor(app: AppBase, events: Events) {
         this.app = app;
         this.events = events;
@@ -26,7 +31,7 @@ class AssetLoader {
         return asset;
     }
 
-    async load(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean) {
+    async load(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean, lodIndex?: number) {
         if (!animationFrame) {
             this.events.fire('startSpinner');
         }
@@ -56,14 +61,22 @@ class AssetLoader {
                             link: `${window.location.origin}/upload`
                         }
                     });
-                    return result.action === 'ok' ? parseInt(result.value, 10) : null;
+                    const chosen = result.action === 'ok' ? parseInt(result.value, 10) : null;
+                    this.lastLodIndex = chosen;
+                    return chosen;
                 } finally {
                     this.events.fire('startSpinner');
                 }
             };
 
+            // an explicit lodIndex answers for the caller (a repeat load of a file
+            // the user has already picked a LOD for), so the popup stays away
+            const chooseLod = lodIndex !== undefined ?
+                () => Promise.resolve(lodIndex) :
+                (animationFrame ? undefined : pickLod);
+
             // Skip reordering for animation frames (speed) or when explicitly requested (already ordered)
-            const result = await loadGSplatData(filename, fileSystem, skipReorder || animationFrame, animationFrame ? undefined : pickLod);
+            const result = await loadGSplatData(filename, fileSystem, skipReorder || animationFrame, chooseLod);
             if (!result) {
                 // user cancelled LOD selection
                 return null;

@@ -83,6 +83,7 @@ const registerPreferences = (events: Events, config: SceneConfig, urlArgs: any) 
         color('lockedClr', 'setLockedClr', () => config.lockedClr),
         { key: 'camera.tonemapping', setCommand: 'camera.setTonemapping', urlPath: 'camera.toneMapping', getDefault: () => config.camera.toneMapping, validate: isEnum(['linear', 'neutral', 'aces', 'aces2', 'filmic', 'hejl']) },
         { key: 'camera.fovDolly', setCommand: 'camera.setFovDolly', getDefault: () => false, validate: isBool },
+        { key: 'import.createSkybox', setCommand: 'import.setCreateSkybox', getDefault: () => true, validate: isBool },
         { key: 'camera.fov', setCommand: 'camera.setFov', urlPath: 'camera.fov', getDefault: () => config.camera.fov, validate: isNumber(10, 120) },
         { key: 'view.bands', setCommand: 'view.setBands', urlPath: 'show.shBands', getDefault: () => config.show.shBands, validate: v => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 3 },
         { key: 'camera.flySpeed', setCommand: 'camera.setFlySpeed', getDefault: () => 1, validate: isNumber(0.1, 30) },

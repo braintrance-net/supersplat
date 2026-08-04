@@ -33,6 +33,14 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return selected?.visible ? [selected] : [];
     };
 
+    // the selected splats the user is allowed to modify. a locked layer stays
+    // selectable so it can be inspected and framed, but every mutating path
+    // goes through here and so refuses it. read-only consumers (camera framing)
+    // use selectedSplats directly.
+    const editableSplats = () => {
+        return selectedSplats().filter(splat => !splat.locked);
+    };
+
     let lastExportCursor = 0;
 
     // add unsaved changes warning message.
@@ -60,7 +68,30 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // When a splat is removed from the scene, remove all edit operations that reference it
     events.on('scene.elementRemoved', (element: Element) => {
         if (element.type === ElementType.splat) {
-            editHistory.removeForSplat(element as Splat);
+            const splat = element as Splat;
+            editHistory.removeForSplat(splat);
+
+            // drop skybox links in either direction so a removed layer isn't
+            // kept alive by its partner
+            splat.skybox = null;
+            (scene.getElementsByType(ElementType.splat) as Splat[]).forEach((other) => {
+                if (other.skybox === splat) {
+                    other.skybox = null;
+                }
+            });
+        }
+    });
+
+    // a skybox backdrop only fills holes while it sits exactly where the layer
+    // it was copied from sits, and it's locked so the user can't realign it by
+    // hand. mirror the source layer's entity transform onto it. gaussian-level
+    // edits are deliberately not mirrored — leaving the original geometry
+    // behind is the entire point of the backdrop
+    events.on('splat.moved', (splat: Splat) => {
+        const { skybox } = splat;
+        if (skybox) {
+            const { entity } = splat;
+            skybox.move(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
         }
     });
 
@@ -141,6 +172,27 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('camera.setFovDolly', (value: boolean) => {
         setFovDolly(value);
+    });
+
+    // import.createSkybox
+
+    // when set, importing a splat file also loads a locked 'Skybox' copy of it
+    // behind the scene layer, so deleting parts of the scene doesn't leave holes
+    let createSkybox = true;
+
+    const setCreateSkybox = (value: boolean) => {
+        if (value !== createSkybox) {
+            createSkybox = value;
+            events.fire('import.createSkybox', createSkybox);
+        }
+    };
+
+    events.function('import.createSkybox', () => {
+        return createSkybox;
+    });
+
+    events.on('import.setCreateSkybox', (value: boolean) => {
+        setCreateSkybox(value);
     });
 
     // camera.fov
@@ -318,7 +370,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // with toCenter, to the bound center (the selection bound while gaussians
     // are selected). resets orientation in both cases
     events.on('pivot.reset', (toCenter: boolean) => {
-        const splat = selectedSplats()[0];
+        const splat = editableSplats()[0];
         if (!splat) {
             return;
         }
@@ -365,32 +417,38 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         scene.camera.ortho = true;
     });
 
-    // returns true if the selected splat has selected gaussians
+    // returns true if the selected splat has selected gaussians the user may edit
     events.function('selection.splats', () => {
         const splat = events.invoke('selection') as Splat;
-        return splat?.numSelected > 0;
+        return !splat?.locked && splat?.numSelected > 0;
+    });
+
+    // returns true if there is a selected splat the user may edit. drives the
+    // enabled state of the menu actions that operate on the whole layer
+    events.function('selection.editable', () => {
+        return editableSplats().length > 0;
     });
 
     events.on('select.all', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectAllOp(splat));
         });
     });
 
     events.on('select.none', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectNoneOp(splat));
         });
     });
 
     events.on('select.invert', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectInvertOp(splat));
         });
     });
 
     events.on('select.mask', (op: 'add'|'remove'|'set'|'intersect', mask: Uint8Array | Uint32Array) => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectOp(splat, op, mask));
         });
     });
@@ -411,7 +469,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // transform maps the unit sphere (diameter 1) to world space
     events.on('select.bySphere', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             await runSelectIntersect(splat, op, {
                 sphere: { transform }
             });
@@ -420,7 +478,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // transform maps the unit cube (side 1) to world space
     events.on('select.byBox', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             await runSelectIntersect(splat, op, {
                 box: { transform }
             });
@@ -430,7 +488,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     events.function('select.rect', async (op: 'add'|'remove'|'set'|'intersect', rect: any) => {
         const mode = events.invoke('camera.mode');
 
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             if (mode === 'centers') {
                 await runSelectIntersect(splat, op, {
                     rect: { x1: rect.start.x, y1: rect.start.y, x2: rect.end.x, y2: rect.end.y }
@@ -455,7 +513,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     events.function('select.byMask', async (op: 'add'|'remove'|'set'|'intersect', canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => {
         const mode = events.invoke('camera.mode');
 
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             if (mode === 'centers') {
                 // create mask texture
                 if (!maskTexture || maskTexture.width !== canvas.width || maskTexture.height !== canvas.height) {
@@ -529,7 +587,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const { width, height } = scene.targetSize;
         const mode = events.invoke('camera.mode');
 
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             const splatData = splat.splatData;
 
             if (mode === 'centers') {
@@ -583,7 +641,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // -  alternative distance metrics such as HSV.
     // -  alternative UI for threshold, two handles for min/max?
     events.function('select.colorMatch', async (op: 'add'|'remove'|'set', point: { x: number, y: number }, threshold = 0) => {
-        const splats = selectedSplats();
+        const splats = editableSplats();
         const targetSize = scene.targetSize;
         if (!splats.length || !targetSize || !point) {
             return;
@@ -637,7 +695,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     events.on('select.hide', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new HideSelectionOp(splat));
         });
     });
@@ -661,13 +719,13 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         if (events.invoke('polygonSelection.removeLastPoint')) {
             return;
         }
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             editHistory.add(new DeleteSelectionOp(splat));
         });
     });
 
     const performSelectionFunc = async (func: 'duplicate' | 'separate') => {
-        const splats = selectedSplats();
+        const splats = editableSplats();
 
         const memFs = new MemoryFileSystem();
 
@@ -711,7 +769,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     events.on('scene.reset', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             editHistory.add(new ResetOp(splat));
         });
     });

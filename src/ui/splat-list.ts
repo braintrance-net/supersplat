@@ -4,8 +4,11 @@ import { SplatRenameOp } from '../edit-ops';
 import { Element, ElementType } from '../element';
 import { Events } from '../events';
 import { Splat } from '../splat';
+import { i18n } from './localization';
 import deleteSvg from './svg/delete.svg';
 import hiddenSvg from './svg/hidden.svg';
+import lockedSvg from './svg/select-lock.svg';
+import unlockedSvg from './svg/select-unlock.svg';
 import shownSvg from './svg/shown.svg';
 
 const createSvg = (svgString: string) => {
@@ -20,6 +23,8 @@ class SplatItem extends Container {
     setSelected: (value: boolean) => void;
     getVisible: () => boolean;
     setVisible: (value: boolean) => void;
+    getLocked: () => boolean;
+    setLocked: (value: boolean) => void;
     destroy: () => void;
 
     constructor(name: string, edit: TextInput, args = {}) {
@@ -46,12 +51,28 @@ class SplatItem extends Container {
             hidden: true
         });
 
+        // padlock pair, mirroring the shown/hidden pair: exactly one is visible
+        // at a time. the closed lock stays on screen permanently (see the
+        // 'locked' class in splat-list.scss) so a pinned layer is obvious
+        const locked = new PcuiElement({
+            dom: createSvg(lockedSvg),
+            class: 'splat-item-locked',
+            hidden: true
+        });
+
+        const unlocked = new PcuiElement({
+            dom: createSvg(unlockedSvg),
+            class: 'splat-item-locked'
+        });
+
         const remove = new PcuiElement({
             dom: createSvg(deleteSvg),
             class: 'splat-item-delete'
         });
 
         this.append(text);
+        this.append(locked);
+        this.append(unlocked);
         this.append(visible);
         this.append(invisible);
         this.append(remove);
@@ -98,9 +119,32 @@ class SplatItem extends Container {
             }
         };
 
+        this.getLocked = () => {
+            return this.class.contains('locked');
+        };
+
+        this.setLocked = (value: boolean) => {
+            if (value !== this.locked) {
+                locked.hidden = !value;
+                unlocked.hidden = value;
+                if (value) {
+                    this.class.add('locked');
+                    this.emit('locked', this);
+                } else {
+                    this.class.remove('locked');
+                    this.emit('unlocked', this);
+                }
+            }
+        };
+
         const toggleVisible = (event: MouseEvent) => {
             event.stopPropagation();
             this.visible = !this.visible;
+        };
+
+        const toggleLocked = (event: MouseEvent) => {
+            event.stopPropagation();
+            this.locked = !this.locked;
         };
 
         const handleRemove = (event: MouseEvent) => {
@@ -130,11 +174,15 @@ class SplatItem extends Container {
         // handle clicks
         visible.dom.addEventListener('click', toggleVisible);
         invisible.dom.addEventListener('click', toggleVisible);
+        locked.dom.addEventListener('click', toggleLocked);
+        unlocked.dom.addEventListener('click', toggleLocked);
         remove.dom.addEventListener('click', handleRemove);
 
         this.destroy = () => {
             visible.dom.removeEventListener('click', toggleVisible);
             invisible.dom.removeEventListener('click', toggleVisible);
+            locked.dom.removeEventListener('click', toggleLocked);
+            unlocked.dom.removeEventListener('click', toggleLocked);
             remove.dom.removeEventListener('click', handleRemove);
         };
     }
@@ -161,6 +209,14 @@ class SplatItem extends Container {
 
     get visible() {
         return this.getVisible();
+    }
+
+    set locked(value) {
+        this.setLocked(value);
+    }
+
+    get locked() {
+        return this.getLocked();
     }
 }
 
@@ -205,6 +261,14 @@ class SplatList extends Container {
                 item.on('invisible', () => {
                     splat.visible = false;
                 });
+                item.on('locked', () => {
+                    splat.locked = true;
+                });
+                item.on('unlocked', () => {
+                    splat.locked = false;
+                });
+
+                item.locked = splat.locked;
                 item.on('rename', (value: string) => {
                     events.fire('edit.add', new SplatRenameOp(splat, value));
                 });
@@ -270,6 +334,13 @@ class SplatList extends Container {
             }
         });
 
+        events.on('splat.locked', (splat: Splat) => {
+            const item = items.get(splat);
+            if (item) {
+                item.locked = splat.locked;
+            }
+        });
+
         this.on('click', (item: SplatItem) => {
             for (const [key, value] of items) {
                 if (item === value) {
@@ -292,6 +363,16 @@ class SplatList extends Container {
             }
 
             if (!splat) {
+                return;
+            }
+
+            // a locked layer can't be removed until the user unlocks it
+            if (splat.locked) {
+                await events.invoke('showPopup', {
+                    type: 'info',
+                    header: i18n.t('splat-list.locked-header'),
+                    message: i18n.t('splat-list.locked-remove', { name: splat.name })
+                });
                 return;
             }
 

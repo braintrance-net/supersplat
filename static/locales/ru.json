@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Поле зрения",
     "panel.settings.fov-dolly": "Авто-долли FOV",
+    "panel.settings.create-skybox": "Слой скайбокса при импорте",
     "panel.settings.sh-bands": "Полосы SH",
     "panel.settings.fly-speed": "Скорость полёта",
     "panel.settings.center-size": "Размер центров",
@@ -297,6 +298,9 @@
     "orient.clear": "Очистить",
 
     "orbit-point.hint": "Нажмите на сцену, чтобы переместить точку орбиты",
+
+    "splat-list.locked-header": "Слой заблокирован",
+    "splat-list.locked-remove": "«{{name}}» заблокирован. Разблокируйте слой в менеджере сцены, прежде чем удалять его.",
 
     "status-bar.splats": "Сплаты",
     "status-bar.selected": "Выбрано",

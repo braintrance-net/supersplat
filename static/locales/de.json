@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Sichtfeld (FoV)",
     "panel.settings.fov-dolly": "FOV-Auto-Dolly",
+    "panel.settings.create-skybox": "Skybox-Ebene beim Import",
     "panel.settings.sh-bands": "SH Bänder",
     "panel.settings.fly-speed": "Kamera Geschwindigkeit",
     "panel.settings.center-size": "Punktgrößen",
@@ -297,6 +298,9 @@
     "orient.clear": "Leeren",
 
     "orbit-point.hint": "In die Szene klicken, um den Orbit-Punkt neu zu zentrieren",
+
+    "splat-list.locked-header": "Ebene gesperrt",
+    "splat-list.locked-remove": "„{{name}}“ ist gesperrt. Entsperren Sie die Ebene im Szenen-Manager, bevor Sie sie entfernen.",
 
     "status-bar.splats": "Splats",
     "status-bar.selected": "Ausgewählt",

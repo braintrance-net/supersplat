@@ -50,7 +50,12 @@ const registerSelectionEvents = (events: Events, scene: Scene) => {
     });
 
     events.on('camera.focalPointPicked', (details: { splat: Splat }) => {
-        setSelection(details.splat);
+        // clicking a locked layer recentres the camera on it but doesn't make it
+        // the edit target — that would silently pull focus away from the layer
+        // the user is working on
+        if (!details.splat?.locked) {
+            setSelection(details.splat);
+        }
     });
 };
 

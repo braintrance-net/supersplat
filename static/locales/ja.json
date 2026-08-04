@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "視野 ( FOV )",
     "panel.settings.fov-dolly": "FOV自動ドリー",
+    "panel.settings.create-skybox": "インポート時にスカイボックスレイヤー",
     "panel.settings.sh-bands": "球面調和関数のバンド",
     "panel.settings.fly-speed": "カメラの移動速度",
     "panel.settings.center-size": "センターサイズ",
@@ -297,6 +298,9 @@
     "orient.clear": "クリア",
 
     "orbit-point.hint": "シーンをクリックしてオービット中心を移動",
+
+    "splat-list.locked-header": "レイヤーがロックされています",
+    "splat-list.locked-remove": "「{{name}}」はロックされています。削除する前にシーンマネージャーでロックを解除してください。",
 
     "status-bar.splats": "スプラット",
     "status-bar.selected": "選択済み",

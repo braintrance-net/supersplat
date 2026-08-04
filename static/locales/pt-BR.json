@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Campo de Visão",
     "panel.settings.fov-dolly": "Dolly Automático de FOV",
+    "panel.settings.create-skybox": "Camada de Skybox ao Importar",
     "panel.settings.sh-bands": "Bandas SH",
     "panel.settings.fly-speed": "Velocidade de Voo",
     "panel.settings.center-size": "Tamanho dos Centros",
@@ -297,6 +298,9 @@
     "orient.clear": "Limpar",
 
     "orbit-point.hint": "Clique na cena para recentralizar o ponto de órbita",
+
+    "splat-list.locked-header": "Camada Bloqueada",
+    "splat-list.locked-remove": "'{{name}}' está bloqueada. Desbloqueie-a no gerenciador de cena antes de removê-la.",
 
     "status-bar.splats": "Splats",
     "status-bar.selected": "Selecionados",

@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Field of View",
     "panel.settings.fov-dolly": "FOV Auto Dolly",
+    "panel.settings.create-skybox": "Skybox Layer On Import",
     "panel.settings.sh-bands": "SH Bands",
     "panel.settings.fly-speed": "Fly Speed",
     "panel.settings.center-size": "Center Size",
@@ -297,6 +298,9 @@
     "orient.clear": "Clear",
 
     "orbit-point.hint": "Click the scene to recenter the orbit point",
+
+    "splat-list.locked-header": "Layer Locked",
+    "splat-list.locked-remove": "'{{name}}' is locked. Unlock it in the scene manager before removing it.",
 
     "status-bar.splats": "Splats",
     "status-bar.selected": "Selected",

@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Champ de vision",
     "panel.settings.fov-dolly": "Dolly auto du FOV",
+    "panel.settings.create-skybox": "Calque skybox à l'import",
     "panel.settings.sh-bands": "Ordres d'HS",
     "panel.settings.fly-speed": "Vitesse de vol",
     "panel.settings.center-size": "Échelle des centres",
@@ -297,6 +298,9 @@
     "orient.clear": "Effacer",
 
     "orbit-point.hint": "Cliquez sur la scène pour recentrer le point d'orbite",
+
+    "splat-list.locked-header": "Calque verrouillé",
+    "splat-list.locked-remove": "« {{name}} » est verrouillé. Déverrouillez-le dans le gestionnaire de scène avant de le supprimer.",
 
     "status-bar.splats": "Splats",
     "status-bar.selected": "Sélectionnés",

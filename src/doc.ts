@@ -107,6 +107,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             const document = JSON.parse(new TextDecoder().decode(docData));
 
             // run through each splat and load it
+            const loadedSplats: Splat[] = [];
             for (let i = 0; i < document.splats.length; ++i) {
                 const filename = `splat_${i}.ply`;
                 const splatSettings = document.splats[i];
@@ -118,7 +119,18 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 await scene.add(splat);
 
                 splat.docDeserialize(splatSettings);
+                loadedSplats.push(splat);
             }
+
+            // wire up skybox links once every layer exists. done after the load
+            // loop so docDeserialize's move() can't push a transform onto a
+            // backdrop that hasn't been restored yet
+            document.splats.forEach((splatSettings: any, i: number) => {
+                const index = splatSettings.skyboxIndex;
+                if (typeof index === 'number' && loadedSplats[index]) {
+                    loadedSplats[i].skybox = loadedSplats[index];
+                }
+            });
 
             // FIXME: trigger scene bound calc in a better way
             const tmp = scene.bound;
@@ -168,7 +180,12 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                 view: events.invoke('docSerialize.view'),
                 poseSets: events.invoke('docSerialize.poseSets'),
                 timeline: events.invoke('docSerialize.timeline'),
-                splats: splats.map(s => s.docSerialize())
+                // skyboxIndex points at the layer's backdrop copy, by position in
+                // this same array, so the pairing survives a save/load round trip
+                splats: splats.map(s => ({
+                    ...s.docSerialize(),
+                    skyboxIndex: s.skybox ? splats.indexOf(s.skybox) : undefined
+                }))
             };
 
             const serializeSettings = {

@@ -393,10 +393,25 @@ class ColorPanel extends Container {
             }
         });
 
+        // colour adjustments are edits like any other, so a locked layer greys
+        // the controls out; its current grade stays on screen for reference
+        const updateEnabled = () => {
+            const enabled = !!selected && !selected.locked;
+            [
+                tintPicker, temperatureSlider, saturationSlider, brightnessSlider,
+                blackPointSlider, whitePointSlider, transparencySlider, reset
+            ].forEach((control) => {
+                control.enabled = enabled;
+            });
+        };
+
         events.on('selection.changed', (splat) => {
             selected = splat;
             updateUIFromState(splat);
+            updateEnabled();
         });
+
+        events.on('splat.locked', updateEnabled);
 
         events.on('splat.tintClr', updateUIFromState);
         events.on('splat.temperature', updateUIFromState);

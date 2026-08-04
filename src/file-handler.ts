@@ -265,6 +265,38 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         });
     };
 
+    // Load a second, independent copy of the file just imported and park it as a
+    // locked 'Skybox' layer behind the scene. Deleting parts of the scene layer
+    // then reveals the untouched copy instead of punching a hole through to
+    // nothing. It has to be a real second copy: the per-gaussian state channel
+    // (selected/locked/deleted) lives inside the shared gsplat data, so two
+    // layers backed by one asset would delete in lockstep.
+    const addSkyboxLayer = async (filename: string, fileSystem: MappedReadFileSystem, scene: Scene) => {
+        try {
+            const skybox = await scene.assetLoader.load(
+                filename,
+                fileSystem,
+                false,
+                false,
+                scene.assetLoader.lastLodIndex ?? undefined
+            );
+            if (!skybox) {
+                return null;
+            }
+            // name and lock only after the element joins the scene: both setters
+            // notify through scene.events, which isn't wired up until then
+            await scene.add(skybox);
+            skybox.name = 'Skybox';
+            skybox.locked = true;
+            return skybox;
+        } catch (error) {
+            // the scene layer already loaded, so a failed backdrop is a warning,
+            // not a failed import
+            console.warn('failed to create skybox layer', error);
+            return null;
+        }
+    };
+
     // import splat model(s) - handles single files, SOG, and LCC formats
     const importSplatModel = async (files: ImportFile[], animationFrame: boolean) => {
         try {
@@ -306,6 +338,25 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 return null;
             }
             await scene.add(model);
+
+            // animation frames stream through this path per frame, and a document
+            // load restores whatever layers were saved, so neither gets a backdrop
+            if (!animationFrame && events.invoke('import.createSkybox')) {
+                const skybox = await addSkyboxLayer(filename, fileSystem, scene);
+                if (skybox) {
+                    // slave the backdrop's transform to the layer it backs
+                    model.skybox = skybox;
+                    skybox.move(
+                        model.entity.getLocalPosition(),
+                        model.entity.getLocalRotation(),
+                        model.entity.getLocalScale()
+                    );
+                    // scene.add selects whatever was added last; put the user back
+                    // on the editable layer rather than the locked backdrop
+                    events.fire('selection', model);
+                }
+            }
+
             return model;
         } catch (error) {
             const displayName = files[0]?.filename ?? 'unknown';

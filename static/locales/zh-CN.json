@@ -80,6 +80,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "视野角",
     "panel.settings.fov-dolly": "FOV 自动推轨",
+    "panel.settings.create-skybox": "导入时创建天空盒图层",
     "panel.settings.sh-bands": "SH 带",
     "panel.settings.fly-speed": "相机飞行速度",
     "panel.settings.center-size": "中心大小",
@@ -297,6 +298,9 @@
     "orient.clear": "清除",
 
     "orbit-point.hint": "点击场景以重新设置轨道中心",
+
+    "splat-list.locked-header": "图层已锁定",
+    "splat-list.locked-remove": "“{{name}}”已锁定。请先在场景管理器中解锁，然后再移除。",
 
     "status-bar.splats": "高斯点",
     "status-bar.selected": "已选择",
