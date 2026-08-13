@@ -1,4 +1,5 @@
 import { Events } from '../events';
+import { opFromModifiers } from '../select-op';
 
 type Point = { x: number, y: number };
 
@@ -32,7 +33,7 @@ class LassoSelection {
 
         const paint = () => {
             polygon.setAttribute('points', [...points, currentPoint].reduce((prev, current) => `${prev}${current.x}, ${current.y} `, ''));
-            polygon.setAttribute('stroke', isClosed() ? '#fa6' : '#f60');
+            polygon.setAttribute('stroke', '#fff');
         };
 
         let dragId: number | undefined;
@@ -65,7 +66,7 @@ class LassoSelection {
             context.clearRect(0, 0, canvas.width, canvas.height);
 
             context.beginPath();
-            context.fillStyle = '#f60';
+            context.fillStyle = '#fff';
             context.beginPath();
             points.forEach((p, idx) => {
                 if (idx === 0) {
@@ -80,7 +81,7 @@ class LassoSelection {
             // wait for selection to complete
             await events.invoke(
                 'select.byMask',
-                e.shiftKey ? 'add' : (e.ctrlKey ? 'remove' : 'set'),
+                opFromModifiers(e),
                 canvas,
                 context
             );

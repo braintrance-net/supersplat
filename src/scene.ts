@@ -15,6 +15,8 @@ import {
 
 import { AssetLoader } from './asset-loader';
 import { Camera } from './camera';
+import { CameraPoseGizmos } from './camera-pose-gizmos';
+import { CommandQueue } from './command-queue';
 import { DataProcessor } from './data-processor';
 import { Element, ElementType, ElementTypeList } from './element';
 import { Events } from './events';
@@ -73,6 +75,7 @@ class Scene {
     app: PCApp;
     worldLayer: Layer;
     splatLayer: Layer;
+    overlayLayer: Layer;
     gizmoLayer: Layer;
     sceneState = [new SceneState(), new SceneState()];
     elements: Element[] = [];
@@ -92,10 +95,16 @@ class Scene {
     dataProcessor: DataProcessor;
     assetLoader: AssetLoader;
     camera: Camera;
+    cameraPoseGizmos: CameraPoseGizmos;
     splatOverlay: SplatOverlay;
     grid: Grid;
     outline: Outline;
     underlay: Underlay;
+
+    // shared queue for serialising async splat work. exposed so subsystems that
+    // need to order their async work alongside edit-history operations can do so
+    // without going through edit-history directly.
+    commandQueue: CommandQueue;
 
     contentRoot: Entity;
     cameraRoot: Entity;
@@ -104,11 +113,13 @@ class Scene {
         events: Events,
         config: SceneConfig,
         canvas: HTMLCanvasElement,
-        graphicsDevice: GraphicsDevice
+        graphicsDevice: GraphicsDevice,
+        commandQueue: CommandQueue
     ) {
         this.events = events;
         this.config = config;
         this.canvas = canvas;
+        this.commandQueue = commandQueue;
 
         // configure the playcanvas application. we render to an offscreen buffer so require
         // only the simplest of backbuffers.
@@ -192,11 +203,20 @@ class Scene {
         });
         this.splatLayer.customCalculateSortValues = specialSort;
 
-        // gizmo layer
-        this.gizmoLayer = new Layer({ name: 'Gizmo' });
+        // tool overlay layer - drawn after the splats (e.g. ghost passes of the
+        // measure/orient tool overlays, which show through occluding gaussians)
+        this.overlayLayer = new Layer({ name: 'ToolOverlay' });
+
+        // gizmo layer - clear scene depth before drawing gizmos so they remain visible
+        this.gizmoLayer = new Layer({
+            name: 'Gizmo',
+            clearDepthBuffer: true,
+            clearStencilBuffer: true
+        });
 
         const layers = this.app.scene.layers;
         layers.push(this.splatLayer);
+        layers.push(this.overlayLayer);
         layers.push(this.gizmoLayer);
 
         this.dataProcessor = new DataProcessor(this.app.graphicsDevice);
@@ -212,6 +232,9 @@ class Scene {
         // create elements
         this.camera = new Camera();
         this.add(this.camera);
+
+        this.cameraPoseGizmos = new CameraPoseGizmos();
+        this.add(this.cameraPoseGizmos);
 
         this.splatOverlay = new SplatOverlay();
         this.add(this.splatOverlay);
@@ -257,8 +280,13 @@ class Scene {
     // remove an element from the scene
     remove(element: Element) {
         if (element.scene === this) {
-            // remove from list
-            this.elements.splice(this.elements.indexOf(element), 1);
+            // remove from list. guard the index: if add() hasn't completed its
+            // await yet the element isn't registered, and splice(-1) would
+            // evict an unrelated element
+            const index = this.elements.indexOf(element);
+            if (index !== -1) {
+                this.elements.splice(index, 1);
+            }
 
             // notify listeners
             this.events.fire('scene.elementRemoved', element);
@@ -359,7 +387,7 @@ class Scene {
 
         this.forEachElement(e => e.onPreRender());
 
-        this.events.fire('prerender', this.camera.worldTransform);
+        this.events.fire('prerender', this.camera.displayTransform);
 
         // debug - display scene bound
         if (this.config.debug.showBound) {
