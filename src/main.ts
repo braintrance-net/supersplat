@@ -1,8 +1,9 @@
-import { WebPCodec } from '@playcanvas/splat-transform';
+import { WebPCodec, WorkerQueue } from '@playcanvas/splat-transform';
 import { Color, createGraphicsDevice } from 'playcanvas';
 
 import { AnnotationManager } from './annotation-manager';
 import { registerCameraPosesEvents } from './camera-poses';
+import { CommandQueue } from './command-queue';
 import { registerDocEvents } from './doc';
 import { EditHistory } from './edit-history';
 import { registerEditorEvents } from './editor';
@@ -10,12 +11,13 @@ import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
 import { initIframeIntegration } from './iframe-integration';
-import { registerPlySequenceEvents } from './ply-sequence';
+import { registerPreferences } from './preferences';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
 import { Scene } from './scene';
 import { getSceneConfig } from './scene-config';
 import { registerSelectionEvents } from './selection';
+import { registerSequenceEvents } from './sequence';
 import { ShortcutManager } from './shortcut-manager';
 import { registerTimelineEvents } from './timeline';
 import { BoxSelection } from './tools/box-selection';
@@ -25,6 +27,7 @@ import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
 import { MeasureTool } from './tools/measure-tool';
 import { MoveTool } from './tools/move-tool';
+import { OrientTool } from './tools/orient-tool';
 import { PolygonSelection } from './tools/polygon-selection';
 import { RectSelection } from './tools/rect-selection';
 import { RotateTool } from './tools/rotate-tool';
@@ -34,9 +37,11 @@ import { ToolManager } from './tools/tool-manager';
 import { registerTrackManagerEvents } from './track-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
 import { AnnotationOverlay } from './ui/annotation-overlay';
+import { BoundDimensionsOverlay } from './ui/bound-dimensions-overlay';
 import { BraintranceUI } from './ui/braintrance/braintrance-ui';
 import { EditorUI } from './ui/editor';
-import { localizeInit } from './ui/localization';
+import { i18n } from './ui/localization';
+import { registerSelectCursor } from './ui/select-cursor';
 import { ViewManager } from './view-manager';
 
 declare global {
@@ -85,21 +90,34 @@ const main = async () => {
     // url
     const url = new URL(window.location.href);
 
-    // edit history
-    const editHistory = new EditHistory(events);
+    // shared command queue for all async splat work (GPU readbacks + history mutations).
+    // every consumer that needs ordering relative to other commands enqueues here.
+    const commandQueue = new CommandQueue();
+
+    // edit history (uses the shared queue internally)
+    const editHistory = new EditHistory(events, commandQueue);
+
+    // expose the queue as an event for any module that needs to serialise async work
+    // alongside history mutations.
+    events.function('queue', (fn: () => Promise<void> | void) => commandQueue.enqueue(fn));
 
     // init localization
-    await localizeInit();
+    await i18n.init();
 
     // Configure WebP WASM for SOG format (used for both reading and writing)
     WebPCodec.wasmUrl = new URL('static/lib/webp/webp.wasm', document.baseURI).toString();
+
+    // Run SOG writing inline rather than in worker threads. We don't ship
+    // splat-transform's worker.mjs, so leaving the pool enabled makes it try to
+    // spawn a worker that 404s; under SOG's parallel task load it then hangs
+    // instead of falling back, producing an empty export.
+    WorkerQueue.maxWorkers = 0;
 
     // register events that only need the events object (before UI is created)
     registerTimelineEvents(events);
     registerCameraPosesEvents(events);
     registerTrackManagerEvents(events);
     registerTransformHandlerEvents(events);
-    registerPlySequenceEvents(events);
     registerPublishEvents(events);
     registerIframeApi(events);
 
@@ -124,8 +142,10 @@ const main = async () => {
         powerPreference: 'high-performance'
     });
 
+    const urlArgs = getURLArgs();
+
     const overrides = [
-        getURLArgs()
+        urlArgs
     ];
 
     // resolve scene config
@@ -136,7 +156,8 @@ const main = async () => {
         events,
         sceneConfig,
         editorUI.canvas,
-        graphicsDevice
+        graphicsDevice,
+        commandQueue
     );
 
     // braintrance prototype: drop a placeholder object into the live scene and
@@ -236,15 +257,21 @@ const main = async () => {
     toolManager.register('floodSelection', new FloodSelection(events, editorUI.toolsContainer.dom, mask, editorUI.canvasContainer));
     toolManager.register('polygonSelection', new PolygonSelection(events, editorUI.toolsContainer.dom, mask));
     toolManager.register('lassoSelection', new LassoSelection(events, editorUI.toolsContainer.dom, mask));
-    toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer));
-    toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer));
+    toolManager.register('sphereSelection', new SphereSelection(events, scene, editorUI.canvasContainer, editorUI.tooltips));
+    toolManager.register('boxSelection', new BoxSelection(events, scene, editorUI.canvasContainer, editorUI.tooltips));
     toolManager.register('eyedropperSelection', new EyedropperSelection(events, editorUI.toolsContainer.dom, editorUI.canvasContainer));
     toolManager.register('move', new MoveTool(events, scene));
     toolManager.register('rotate', new RotateTool(events, scene));
     toolManager.register('scale', new ScaleTool(events, scene));
-    toolManager.register('measure', new MeasureTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
+    toolManager.register('measure', new MeasureTool(events, scene, editorUI.canvasContainer));
+    toolManager.register('orient', new OrientTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer));
+
+    const boundDimensionsOverlay = new BoundDimensionsOverlay(events, scene, editorUI.canvasContainer);
 
     editorUI.toolsContainer.dom.appendChild(maskCanvas);
+
+    // show the active selection op (add/remove/intersect) at the cursor
+    registerSelectCursor(events, editorUI.toolsContainer.dom);
 
     window.scene = scene;
 
@@ -260,9 +287,15 @@ const main = async () => {
     // register events that need scene or other dependencies
     registerEditorEvents(events, editHistory, scene);
     registerSelectionEvents(events, scene);
+    registerSequenceEvents(events, scene);
     registerDocEvents(scene, events);
     registerRenderEvents(scene, events);
     initFileHandler(scene, events, editorUI.appContainer.dom);
+
+    // apply stored user preferences and start capturing changes to them.
+    // registered after the boot-time initialization events above so they are
+    // never captured as user changes.
+    registerPreferences(events, sceneConfig, urlArgs);
 
     // load async models
     scene.start();

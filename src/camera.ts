@@ -18,6 +18,7 @@ import {
     Color,
     Entity,
     Mat4,
+    Quat,
     Ray,
     RenderPass,
     RenderPassForward,
@@ -84,7 +85,6 @@ class Camera extends Element {
     // when true, pointer orbit/pan/look is suppressed (e.g. while a transform
     // gizmo is being dragged, so the drag isn't stolen by the camera)
     inputDisabled = false;
-
     // during fly-mode look, stores the camera position that must stay fixed
     // while the azim/elev tween smoothly converges
     lookCameraPos: Vec3 | null = null;
@@ -107,6 +107,16 @@ class Camera extends Element {
 
     // overridden target size
     targetSizeOverride: { width: number, height: number } = null;
+
+    // when set, overrides the tween-driven pose, fov and clipping planes each
+    // update (used by 360 capture to render arbitrary face orientations that
+    // the azim/elev pose system cannot express)
+    poseOverride: { position: Vec3, rotation: Quat, fov: number, near: number, far: number } | null = null;
+
+    // world transform of the user-facing camera pose. while a pose override
+    // is active this holds the last tween-driven pose, so ui elements (view
+    // cube, overlays) don't track the internal capture poses
+    displayTransform = new Mat4();
 
     renderOverlays = true;
 
@@ -278,6 +288,13 @@ class Camera extends Element {
         this.setDistance(l / this.sceneRadius * this.fovFactor, dampingFactorFactor);
     }
 
+    // set or clear the pose override and apply it immediately so subsequent
+    // splat sorting and rendering see the new transform
+    setPoseOverride(override: Camera['poseOverride']) {
+        this.poseOverride = override;
+        this.onUpdate(0);
+    }
+
     // transform the world space coordinate to normalized screen coordinate
     worldToScreen(world: Vec3, screen: Vec3) {
         const { camera } = this;
@@ -300,6 +317,7 @@ class Camera extends Element {
         this.mainCamera.camera.layers = [
             scene.worldLayer.id,
             scene.splatLayer.id,
+            scene.overlayLayer.id,
             scene.gizmoLayer.id
         ];
 
@@ -429,7 +447,7 @@ class Camera extends Element {
         this.splatPass?.destroy();
         this.gizmoPass?.destroy();
         this.finalPass?.destroy();
-        this.camera.renderPasses = null;
+        this.camera.framePasses = null;
 
         scene.cameraRoot.removeChild(this.mainCamera);
 
@@ -541,17 +559,18 @@ class Camera extends Element {
             this.splatPass.addLayer(this.camera, scene.splatLayer, false, false);
             this.splatPass.addLayer(this.camera, scene.splatLayer, true, false);
 
-            // configure gizmo pass
+            // configure gizmo pass. the gizmo layer clears depth and stencil
+            // before its opaque step, after the depth-independent tool overlay
             this.gizmoPass.init(this.mainTarget);
-            this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, false, false);
+            this.gizmoPass.addLayer(this.camera, scene.overlayLayer, false, false);
+            this.gizmoPass.addLayer(this.camera, scene.overlayLayer, true, false);
+            this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, false, true);
             this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, true, false);
-            this.gizmoPass.renderActions[0].clearDepth = true;
-            this.gizmoPass.renderActions[0].clearStencil = true;
 
             this.finalPass.init(null);
 
             // assign render passes to camera
-            this.camera.renderPasses = [this.clearPass, this.mainPass, this.splatPass, this.gizmoPass, this.finalPass];
+            this.camera.framePasses = [this.clearPass, this.mainPass, this.splatPass, this.gizmoPass, this.finalPass];
         } else {
             // resize existing render targets
             const { splatTarget, colorTarget, workTarget } = this;
@@ -580,7 +599,6 @@ class Camera extends Element {
         const distance = this.distanceTween.value;
 
         Camera.calcForwardVec(forwardVec, azimElev.azim, azimElev.elev);
-
         if (this.lookCameraPos) {
             cameraPosition.copy(this.lookCameraPos);
             if (this.azimElevTween.timer >= this.azimElevTween.transitionTime) {
@@ -592,10 +610,22 @@ class Camera extends Element {
             cameraPosition.add(this.focalPointTween.value);
         }
 
-        this.mainCamera.setLocalPosition(cameraPosition);
-        this.mainCamera.setLocalEulerAngles(azimElev.elev, azimElev.azim, 0);
+        if (this.poseOverride) {
+            // cameraRoot has identity transform, so local space is world space
+            const { position, rotation, fov, near, far } = this.poseOverride;
+            this.mainCamera.setLocalPosition(position);
+            this.mainCamera.setLocalRotation(rotation);
+            this.camera.fov = fov;
+            this.near = near;
+            this.far = far;
+        } else {
+            this.mainCamera.setLocalPosition(cameraPosition);
+            this.mainCamera.setLocalEulerAngles(azimElev.elev, azimElev.azim, 0);
 
-        this.fitClippingPlanes(this.mainCamera.getLocalPosition(), this.mainCamera.forward);
+            this.fitClippingPlanes(this.mainCamera.getLocalPosition(), this.mainCamera.forward);
+
+            this.displayTransform.copy(this.mainCamera.getWorldTransform());
+        }
 
         const { camera } = this.mainCamera;
         const { targetSize } = this;
@@ -740,7 +770,7 @@ class Camera extends Element {
     // pick mode
 
     // render picker contents
-    pickPrep(splat: Splat, mode: 'add' | 'remove' | 'set') {
+    pickPrep(splat: Splat, mode: 'add' | 'remove' | 'set' | 'intersect') {
         this.picker.prepareId(splat, mode);
     }
 

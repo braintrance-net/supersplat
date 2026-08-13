@@ -117,7 +117,7 @@ class AnnotationOverlay {
         const editBtn = document.createElement('button');
         editBtn.className = 'annotation-label-btn annotation-label-edit';
         editBtn.appendChild(createSvg(editSvg));
-        editBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        editBtn.addEventListener('pointerdown', e => e.stopPropagation());
         editBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this.openExpanded(index);
@@ -127,7 +127,7 @@ class AnnotationOverlay {
         const deleteBtn = document.createElement('button');
         deleteBtn.className = 'annotation-label-btn annotation-label-delete';
         deleteBtn.appendChild(createSvg(deleteSvg));
-        deleteBtn.addEventListener('pointerdown', (e) => e.stopPropagation());
+        deleteBtn.addEventListener('pointerdown', e => e.stopPropagation());
         deleteBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             this.closeExpanded();
@@ -244,14 +244,14 @@ class AnnotationOverlay {
         titleInput.className = 'annotation-expanded-title';
         titleInput.value = annotation.name;
         titleInput.placeholder = 'Title';
-        titleInput.addEventListener('keydown', (e) => e.stopPropagation());
+        titleInput.addEventListener('keydown', e => e.stopPropagation());
 
         const descInput = document.createElement('textarea');
         descInput.className = 'annotation-expanded-desc';
         descInput.value = annotation.description || '';
         descInput.placeholder = 'Enter a description';
         descInput.rows = 3;
-        descInput.addEventListener('keydown', (e) => e.stopPropagation());
+        descInput.addEventListener('keydown', e => e.stopPropagation());
 
         const btnRow = document.createElement('div');
         btnRow.className = 'annotation-expanded-buttons';

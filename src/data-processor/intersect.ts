@@ -13,6 +13,8 @@ import {
     BlendState
 } from 'playcanvas';
 
+import { BufferPool } from './buffer-pool';
+import { packedMaskHeight, packedMaskWidth } from './histogram-config';
 import { vertexShader, fragmentShader } from '../shaders/intersection-shader';
 import { Splat } from '../splat';
 
@@ -25,14 +27,19 @@ type RectOptions = {
 };
 
 type SphereOptions = {
-    sphere: { x: number, y: number, z: number, radius: number };
+    // transform mapping the unit sphere (diameter 1) to world space
+    sphere: { transform: Mat4 };
 };
 
 type BoxOptions = {
-    box: { x: number, y: number, z: number, lenx: number, leny: number, lenz: number };
+    // transform mapping the unit cube (side 1) to world space
+    box: { transform: Mat4 };
 };
 
 type IntersectOptions = MaskOptions | RectOptions | SphereOptions | BoxOptions;
+
+const shapeInvMat = new Mat4();
+const identityMat = new Mat4();
 
 const resolve = (scope: ScopeSpace, values: any) => {
     for (const key in values) {
@@ -47,7 +54,6 @@ class Intersect {
     private shader: Shader = null;
     private texture: Texture = null;
     private renderTarget: RenderTarget = null;
-    private data: Uint8Array = null;
 
     constructor(device: GraphicsDevice) {
         this.device = device;
@@ -72,8 +78,8 @@ class Intersect {
             });
         }
 
-        const resultWidth = Math.max(1, Math.floor(width / 2));
-        const resultHeight = Math.ceil(numSplats / (resultWidth * 4));
+        const resultWidth = packedMaskWidth(width);
+        const resultHeight = packedMaskHeight(resultWidth, numSplats);
 
         if (!this.texture || this.texture.width !== resultWidth || this.texture.height !== resultHeight) {
             if (this.texture) {
@@ -95,19 +101,16 @@ class Intersect {
                 colorBuffer: this.texture,
                 depth: false
             });
-
-            this.data = new Uint8Array(resultWidth * resultHeight * 4);
         }
 
         return {
             shader: this.shader,
             texture: this.texture,
-            renderTarget: this.renderTarget,
-            data: this.data
+            renderTarget: this.renderTarget
         };
     }
 
-    async run(options: IntersectOptions, splat: Splat): Promise<Uint8Array> {
+    async run(options: IntersectOptions, splat: Splat, bufferPool: BufferPool): Promise<Uint8Array> {
         const { device } = this;
         const { scope } = device;
 
@@ -166,52 +169,34 @@ class Intersect {
         }
 
         const sphereOptions = options as SphereOptions;
+        const boxOptions = options as BoxOptions;
         if (sphereOptions.sphere) {
+            shapeInvMat.copy(sphereOptions.sphere.transform).invert();
             resolve(scope, {
                 mode: 2,
-                sphere_params: [
-                    sphereOptions.sphere.x,
-                    sphereOptions.sphere.y,
-                    sphereOptions.sphere.z,
-                    sphereOptions.sphere.radius
-                ]
+                shape_matrix_inv: shapeInvMat.data
             });
-        } else {
-            resolve(scope, {
-                sphere_params: [0, 0, 0, 0]
-            });
-        }
-
-        const boxOptions = options as BoxOptions;
-        if (boxOptions.box) {
+        } else if (boxOptions.box) {
+            shapeInvMat.copy(boxOptions.box.transform).invert();
             resolve(scope, {
                 mode: 3,
-                box_params: [
-                    boxOptions.box.x,
-                    boxOptions.box.y,
-                    boxOptions.box.z,
-                    0
-                ],
-                aabb_params: [
-                    boxOptions.box.lenx * 0.5,
-                    boxOptions.box.leny * 0.5,
-                    boxOptions.box.lenz * 0.5,
-                    0
-                ]
+                shape_matrix_inv: shapeInvMat.data
             });
         } else {
             resolve(scope, {
-                box_params: [0, 0, 0, 0],
-                aabb_params: [0, 0, 0, 0]
+                shape_matrix_inv: identityMat.data
             });
         }
 
         device.setBlendState(BlendState.NOBLEND);
         drawQuadWithShader(device, resources.renderTarget, resources.shader);
 
+        const byteLen = resources.texture.width * resources.texture.height * 4;
+        const buffer = bufferPool.acquire(byteLen);
+
         const data = await resources.texture.read(0, 0, resources.texture.width, resources.texture.height, {
             renderTarget: resources.renderTarget,
-            data: resources.data,
+            data: buffer,
             immediate: false
         });
 

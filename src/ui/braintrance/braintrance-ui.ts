@@ -890,7 +890,7 @@ class BraintranceUI {
         type Track = { name: string; color: string; icon?: string; kfs?: number[]; audioIndex?: number };
         const capPts = this.captures.map(c => c * 100); // snapshots become keyframes
         const audioTracks: Track[] = this.audioSources
-        .map((a, ai) => (a.placed ? { name: a.name, color: 'var(--bt-audio)', icon: ICON.audio, audioIndex: ai } : null))
+        .map((a, ai): Track | null => (a.placed ? { name: a.name, color: 'var(--bt-audio)', icon: ICON.audio, audioIndex: ai } : null))
         .filter((t): t is Track => t !== null);
         const tracks: Track[] = [
             ...this.objects.filter(o => o.audioIndex == null)
@@ -1671,7 +1671,7 @@ class BraintranceUI {
         // A few selectable stand-ins so selection can move between world objects.
         const make = (name: string, type: 'box' | 'sphere',
             pos: [number, number, number], scale: [number, number, number],
-            effects: Effect[], interactions: string[]): SceneObject => {
+            effects: Effect[], interactions: Interaction[]): SceneObject => {
             const mat = new StandardMaterial();
             // Drive colour through emissive so objects read clearly over the splat
             // viewport even though the scene has no lights (a lit material is black).

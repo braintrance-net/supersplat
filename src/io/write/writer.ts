@@ -10,6 +10,13 @@ import type { Writer } from '@playcanvas/splat-transform';
 class GZipWriter implements Writer {
     write: (data: Uint8Array) => Promise<void>;
     close: () => Promise<void>;
+    abort: () => Promise<void>;
+
+    private cursor = 0;
+
+    get bytesWritten(): number {
+        return this.cursor;
+    }
 
     constructor(writer: Writer) {
         const stream = new CompressionStream('gzip');
@@ -26,6 +33,7 @@ class GZipWriter implements Writer {
         })();
 
         this.write = async (data: Uint8Array) => {
+            this.cursor += data.byteLength;
             await streamWriter.ready;
             await streamWriter.write(data as unknown as ArrayBuffer);
         };
@@ -37,6 +45,19 @@ class GZipWriter implements Writer {
             // wait for the reader to finish sending data
             await reader;
         };
+
+        this.abort = async () => {
+            try {
+                await streamWriter.abort();
+            } catch {
+                // already failing — ignore
+            }
+            try {
+                await writer.abort();
+            } catch {
+                // already failing — ignore
+            }
+        };
     }
 }
 
@@ -46,21 +67,34 @@ class GZipWriter implements Writer {
 class ProgressWriter implements Writer {
     write: (data: Uint8Array) => Promise<void>;
     close: () => void;
+    abort: () => Promise<void>;
+
+    private cursor = 0;
+
+    get bytesWritten(): number {
+        return this.cursor;
+    }
 
     constructor(writer: Writer, totalBytes: number, progress?: (progress: number, total: number) => void) {
-        let cursor = 0;
-
         this.write = async (data: Uint8Array) => {
-            cursor += data.byteLength;
+            this.cursor += data.byteLength;
             await writer.write(data);
-            progress?.(cursor, totalBytes);
+            progress?.(this.cursor, totalBytes);
         };
 
         this.close = () => {
-            if (cursor !== totalBytes) {
-                throw new Error(`ProgressWriter: expected ${totalBytes} bytes, but wrote ${cursor} bytes`);
+            if (this.cursor !== totalBytes) {
+                throw new Error(`ProgressWriter: expected ${totalBytes} bytes, but wrote ${this.cursor} bytes`);
             }
-            progress?.(cursor, totalBytes);
+            progress?.(this.cursor, totalBytes);
+        };
+
+        this.abort = async () => {
+            try {
+                await writer.abort();
+            } catch {
+                // already failing — ignore
+            }
         };
     }
 }

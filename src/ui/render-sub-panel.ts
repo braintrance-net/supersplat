@@ -2,7 +2,7 @@ import { Button, Container, Element, Label, SelectInput } from '@playcanvas/pcui
 
 import { Events } from '../events';
 import { AnnotationsPanel } from './annotations-panel';
-import { localize } from './localization';
+import { i18n } from './localization';
 import { SplatList } from './splat-list';
 import sceneImportSvg from './svg/import.svg';
 import sceneNewSvg from './svg/new.svg';
@@ -102,9 +102,9 @@ class RenderSubPanel extends Container {
         });
 
         const sceneLabel = new Label({
-            text: localize('panel.scene-manager'),
             class: 'panel-header-label'
         });
+        i18n.bindText(sceneLabel, 'panel.scene-manager');
 
         const sceneImport = new Container({
             class: 'panel-header-button'
@@ -149,9 +149,9 @@ class RenderSubPanel extends Container {
         });
 
         const transformLabel = new Label({
-            text: localize('panel.scene-manager.transform'),
             class: 'panel-header-label'
         });
+        i18n.bindText(transformLabel, 'panel.scene-manager.transform');
 
         transformHeader.append(transformIcon);
         transformHeader.append(transformLabel);
