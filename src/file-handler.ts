@@ -1,5 +1,6 @@
 import { path, Quat, Vec3 } from 'playcanvas';
 
+import type { Pose } from './camera-poses';
 import { CreateDropHandler } from './drop-handler';
 import { ElementType } from './element';
 import { Events } from './events';
@@ -168,6 +169,7 @@ const loadCameraPoses = async (file: ImportFile, events: Events) => {
             return (avalue && bvalue) ? parseInt(avalue, 10) - parseInt(bvalue, 10) : 0;
         };
 
+        const poses: Pose[] = [];
         json.sort(sorter).forEach((pose: any, i: number) => {
             if (pose.hasOwnProperty('position') && pose.hasOwnProperty('rotation')) {
                 const p = new Vec3(pose.position);
@@ -177,14 +179,14 @@ const loadCameraPoses = async (file: ImportFile, events: Events) => {
                 vec.copy(z).mulScalar(10).add(p);
 
                 // compute max FOV from intrinsics (vertical or horizontal, whichever is larger)
-                let fov = 60;
+                let fov: number | undefined;
                 if (pose.fx && pose.fy && pose.width && pose.height) {
                     const fovX = 2 * Math.atan(pose.width / (2 * pose.fx)) * (180 / Math.PI);
                     const fovY = 2 * Math.atan(pose.height / (2 * pose.fy)) * (180 / Math.PI);
                     fov = Math.max(fovX, fovY);
                 }
 
-                events.fire('camera.addPose', {
+                poses.push({
                     name: pose.img_name ?? `${file.filename}_${i}`,
                     frame: i,
                     position: new Vec3(-p.x, -p.y, p.z),
@@ -193,6 +195,10 @@ const loadCameraPoses = async (file: ImportFile, events: Events) => {
                 });
             }
         });
+
+        if (poses.length > 0) {
+            events.fire('camera.loadPoses', poses);
+        }
     }
 };
 
@@ -235,7 +241,7 @@ const loadImagesTxt = async (file: ImportFile, events: Events) => {
     const q = new Quat();
     const t = new Vec3();
 
-    poses.forEach((pose, i) => {
+    const cameraPoses = poses.map((pose, i) => {
         const { w, x, y, z, tx, ty, tz } = pose;
 
         q.set(x, y, z, w).normalize().invert();
@@ -245,13 +251,17 @@ const loadImagesTxt = async (file: ImportFile, events: Events) => {
         q.transformVector(Vec3.BACK, vec);
         vec.mulScalar(10).add(t);
 
-        events.fire('camera.addPose', {
+        return {
             name: pose.name,
             frame: i,
             position: new Vec3(-t.x, -t.y, t.z),
             target: new Vec3(-vec.x, -vec.y, vec.z)
-        });
+        };
     });
+
+    if (cameraPoses.length > 0) {
+        events.fire('camera.loadPoses', cameraPoses);
+    }
 };
 
 // initialize file handler events
@@ -341,8 +351,11 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 const filename = filenames[i].toLowerCase();
 
                 if (filename.endsWith('.ssproj')) {
-                    // load ssproj document
-                    await events.invoke('doc.load', files[i].contents ?? (await fetch(files[i].url)).arrayBuffer(), files[i].handle);
+                    // load ssproj document. doc.load expects a File (the zip
+                    // reader needs its size), so wrap url fetches in one
+                    const contents = files[i].contents ??
+                        new File([await (await fetch(files[i].url)).blob()], files[i].filename);
+                    await events.invoke('doc.load', contents, files[i].handle);
                 } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz'].some(ext => filename.endsWith(ext))) {
                     // load gaussian splat model
                     const model = await importSplatModel([files[i]], animationFrame);
