@@ -318,6 +318,7 @@ class Camera extends Element {
             scene.worldLayer.id,
             scene.splatLayer.id,
             scene.overlayLayer.id,
+            scene.centersLayer.id,
             scene.gizmoLayer.id
         ];
 
@@ -566,11 +567,15 @@ class Camera extends Element {
             this.splatPass.addLayer(this.camera, scene.splatLayer, false, false);
             this.splatPass.addLayer(this.camera, scene.splatLayer, true, false);
 
-            // configure gizmo pass. the gizmo layer clears depth and stencil
-            // before its opaque step, after the depth-independent tool overlay
+            // configure gizmo pass. the centers and gizmo layers each clear depth
+            // before their opaque step, after the depth-independent tool overlay,
+            // so centers depth-test against each other alone and the gizmos then
+            // start from a clean buffer again
             this.gizmoPass.init(this.mainTarget);
             this.gizmoPass.addLayer(this.camera, scene.overlayLayer, false, false);
             this.gizmoPass.addLayer(this.camera, scene.overlayLayer, true, false);
+            this.gizmoPass.addLayer(this.camera, scene.centersLayer, false, true);
+            this.gizmoPass.addLayer(this.camera, scene.centersLayer, true, false);
             this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, false, true);
             this.gizmoPass.addLayer(this.camera, scene.gizmoLayer, true, false);
 
@@ -650,11 +655,21 @@ class Camera extends Element {
         vec.sub2(bound.center, cameraPosition);
         const dist = vec.dot(forwardVec);
 
-        const far = Math.max(dist + boundRadius, 1e-2);
-        const near = Math.max(dist - boundRadius, far / (1024 * 16));
+        if (this.ortho) {
+            // orthographic has no perspective divide, so the near plane can sit
+            // behind the camera. Span the whole scene bound (near goes negative
+            // when the camera is inside it) so scene content is never clipped in
+            // front of or behind the camera.
+            const radius = Math.max(boundRadius, 1e-2);
+            this.far = dist + radius;
+            this.near = dist - radius;
+        } else {
+            const far = Math.max(dist + boundRadius, 1e-2);
+            const near = Math.max(dist - boundRadius, far / (1024 * 16));
 
-        this.far = far;
-        this.near = Math.min(1.0, near);
+            this.far = far;
+            this.near = Math.min(1.0, near);
+        }
     }
 
     onPreRender() {
@@ -718,6 +733,11 @@ class Camera extends Element {
         let closestDepth = Infinity;
         let closestSplat: Splat | null = null;
 
+        // the depth pass reuses the projected cache but composites front to back,
+        // so it needs a sorted order under it - which the last rendered frame only
+        // provides if the scene had settled
+        scene.projectedSplatRenderer.renderSortedForPick();
+
         // Find the splat with the smallest depth at this screen position
         for (let i = 0; i < splats.length; ++i) {
             const splat = splats[i] as Splat;
@@ -742,16 +762,33 @@ class Camera extends Element {
         const screenX = x * scene.canvas.clientWidth;
         const screenY = y * scene.canvas.clientHeight;
 
-        // Calculate world position from ray and depth
+        // Calculate world position from ray and depth. linearDepth is the view
+        // depth from the camera, but getRay seeds the ray origin differently per
+        // projection: at the camera for perspective, on (just behind) the near
+        // plane for ortho. Measure the origin's own view depth and offset by it,
+        // rather than assuming near, so the point lands exactly on the surface.
         this.getRay(screenX, screenY, ray);
-        const t = linearDepth / ray.direction.dot(this.mainCamera.forward);
+        const cameraPos = this.mainCamera.getPosition();
+        const forward = this.mainCamera.forward;
+        const cosAngle = ray.direction.dot(forward);
+        const originDepth = vecb.sub2(ray.origin, cameraPos).dot(forward);
+        const t = (linearDepth - originDepth) / cosAngle;
         const position = new Vec3();
         position.copy(ray.origin).add(vec.copy(ray.direction).mulScalar(t));
+
+        // dolly distance for the caller: the along-view distance to the surface,
+        // |linearDepth| / cosAngle. abs keeps behind-camera ortho depths positive
+        // (a negative distance would clamp to minZoom and collapse the view), and
+        // dividing by cosAngle reproduces perspective's ray distance unchanged.
+        // Deliberately the along-view distance, not position.distance(cameraPos):
+        // the latter includes the lateral offset for an off-axis ortho pick, which
+        // would couple orthoHeight to where in the viewport the click landed.
+        const distance = Math.abs(linearDepth) / cosAngle;
 
         return {
             splat: closestSplat,
             position: position,
-            distance: t
+            distance: distance
         };
     }
 

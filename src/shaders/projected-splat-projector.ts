@@ -110,29 +110,38 @@ struct ProjectorUniforms {
     colorRow0: vec4f,
     colorRow1: vec4f,
     colorRow2: vec4f,
-    selectedColor: vec4f,
     lockedColor: vec4f,
     visible: u32,
     selectionEnabled: u32,
     pickOp: i32,
-    minPixelSize: f32
+    minPixelSize: f32,
+    // camera clip planes, used to linearly normalize view depth for the sort key
+    near: f32,
+    far: f32
 }
 
+// compaction output: surviving splats are appended to a dense list, so the sort
+// and the draw cover the visible count instead of the whole capacity. sortKeys
+// and compactEntries are indexed by compact slot, not by entry; the cache stays
+// indexed by entry, and the entry index rides along as the sort payload so
+// gaussian ids keep their meaning downstream (picking, rings, stochastic dither)
 @group(0) @binding(0) var<storage, read_write> sortKeys: array<u32>;
-@group(0) @binding(1) var cacheA: texture_storage_2d<rgba32uint, write>;
-@group(0) @binding(2) var cacheB: texture_storage_2d<r32uint, write>;
-@group(0) @binding(3) var<storage, read> instanceSource: array<u32>;
-@group(0) @binding(4) var<storage, read> instanceFlags: array<u32>;
-@group(0) @binding(5) var<storage, read> instancePalette: array<u32>;
-@group(0) @binding(6) var transformA: texture_2d<u32>;
-@group(0) @binding(7) var transformB: texture_2d<f32>;
-@group(0) @binding(8) var splatColor: texture_2d<f32>;
-@group(0) @binding(9) var transformPalette: texture_2d<f32>;
-@group(0) @binding(10) var colorPalette: texture_2d<f32>;
-${bands > 0 ? '@group(0) @binding(11) var splatSH_1to3: texture_2d<u32>;' : ''}
-${bands > 1 ? '@group(0) @binding(12) var splatSH_4to7: texture_2d<u32>;\n@group(0) @binding(13) var splatSH_8to11: texture_2d<u32>;' : ''}
-${bands > 2 ? '@group(0) @binding(14) var splatSH_12to15: texture_2d<u32>;' : ''}
-@group(0) @binding(${11 + (bands > 0 ? 1 : 0) + (bands > 1 ? 2 : 0) + (bands > 2 ? 1 : 0)}) var<uniform> uniforms: ProjectorUniforms;
+@group(0) @binding(1) var<storage, read_write> compactEntries: array<u32>;
+@group(0) @binding(2) var<storage, read_write> splatCounter: array<atomic<u32>>;
+@group(0) @binding(3) var cacheA: texture_storage_2d<rgba32uint, write>;
+@group(0) @binding(4) var cacheB: texture_storage_2d<r32uint, write>;
+@group(0) @binding(5) var<storage, read> instanceSource: array<u32>;
+@group(0) @binding(6) var<storage, read> instanceFlags: array<u32>;
+@group(0) @binding(7) var<storage, read> instancePalette: array<u32>;
+@group(0) @binding(8) var transformA: texture_2d<u32>;
+@group(0) @binding(9) var transformB: texture_2d<f32>;
+@group(0) @binding(10) var splatColor: texture_2d<f32>;
+@group(0) @binding(11) var transformPalette: texture_2d<f32>;
+@group(0) @binding(12) var colorPalette: texture_2d<f32>;
+${bands > 0 ? '@group(0) @binding(13) var splatSH_1to3: texture_2d<u32>;' : ''}
+${bands > 1 ? '@group(0) @binding(14) var splatSH_4to7: texture_2d<u32>;\n@group(0) @binding(15) var splatSH_8to11: texture_2d<u32>;' : ''}
+${bands > 2 ? '@group(0) @binding(16) var splatSH_12to15: texture_2d<u32>;' : ''}
+@group(0) @binding(${13 + (bands > 0 ? 1 : 0) + (bands > 1 ? 2 : 0) + (bands > 2 ? 1 : 0)}) var<uniform> uniforms: ProjectorUniforms;
 
 ${shCode(bands)}
 ${indexToUvWGSL('sourceCoord', 'uniforms.sourceWidth')}
@@ -154,13 +163,6 @@ fn rotationMatrix(qIn: vec4f) -> mat3x3f {
     );
 }
 
-fn writeInvalid(entry: u32) {
-    sortKeys[entry] = 0x000fffffu;
-    let uv = cacheCoord(entry);
-    textureStore(cacheA, uv, vec4u(0u));
-    textureStore(cacheB, uv, vec4u(0u));
-}
-
 // per-instance editor state, packed 4 bytes to a word
 fn instanceFlagByte(instance: u32) -> u32 {
     return (instanceFlags[instance >> 2u] >> ((instance & 3u) * 8u)) & 0xffu;
@@ -179,7 +181,6 @@ fn main(
     // entries beyond the live instance count are reserved slack
     let entry = uniforms.entryBase + localIndex;
     if (localIndex >= uniforms.numSplats || uniforms.visible == 0u) {
-        writeInvalid(entry);
         return;
     }
 
@@ -192,7 +193,6 @@ fn main(
     if ((uniforms.pickOp == 0 && state != 0u)
         || (uniforms.pickOp == 1 && state != 1u)
         || (uniforms.pickOp == 2 && (state & 2u) != 0u)) {
-        writeInvalid(entry);
         return;
     }
 
@@ -207,13 +207,11 @@ fn main(
     let viewCenter = uniforms.view * worldCenter;
     let depth = -viewCenter.z;
     if (uniforms.isOrtho == 0u && depth <= 0.0) {
-        writeInvalid(entry);
         return;
     }
 
     let clip = uniforms.viewProj * worldCenter;
     if (clip.w == 0.0) {
-        writeInvalid(entry);
         return;
     }
 
@@ -265,7 +263,6 @@ fn main(
     cov11 += 0.3;
     let determinant = cov00 * cov11 - cov01 * cov01;
     if (determinant <= 0.0) {
-        writeInvalid(entry);
         return;
     }
 
@@ -285,11 +282,19 @@ fn main(
 
     // skip splats whose projected size falls below the cull threshold
     if (2.0 * sqrt(2.0 * lambda1) < uniforms.minPixelSize) {
-        writeInvalid(entry);
         return;
     }
 
-    let direction = normalize(vec2f(cov01, lambda1 - cov00));
+    // principal-axis direction. When the projected covariance is (near-)circular
+    // the eigenvector is undefined and vec2f(cov01, lambda1 - cov00) collapses to
+    // zero, so normalize() would yield NaN and poison the whole quad. Isotropic
+    // gaussians project to exact circles under an orthographic camera (the
+    // perspective Jacobian never breaks the symmetry), so this is the common case
+    // for spherical skybox splats, not a corner case - fall back to an arbitrary
+    // axis, which is correct for a circle.
+    let eigenVec = vec2f(cov01, lambda1 - cov00);
+    let eigenLen = length(eigenVec);
+    let direction = select(vec2f(1.0, 0.0), eigenVec / eigenLen, eigenLen > 1e-9);
     let axis1 = 2.0 * min(sqrt(2.0 * lambda1), maxRadius) * direction;
     let len2 = 2.0 * min(sqrt(2.0 * lambda2), maxRadius);
     let axis2 = len2 * vec2f(direction.y, -direction.x);
@@ -299,7 +304,6 @@ fn main(
     let centerPixels = (ndc * 0.5 + 0.5) * viewport;
     if (centerPixels.x + extent.x < 0.0 || centerPixels.x - extent.x > viewport.x
         || centerPixels.y + extent.y < 0.0 || centerPixels.y - extent.y > viewport.y) {
-        writeInvalid(entry);
         return;
     }
 
@@ -325,14 +329,15 @@ fn main(
     let locked = (state & 2u) != 0u;
     if (locked) {
         color *= uniforms.lockedColor;
-    } else if (selected) {
-        color = vec4f(mix(color.rgb, uniforms.selectedColor.rgb, uniforms.selectedColor.a), color.a);
     }
+    // the cache colour stays untinted: the render shader's vertex stage applies
+    // the gaussian selection blends, so the ring path can blend from the
+    // splat's own colour independently of them
+    // zero-alpha gaussians stay in the frame: they are real, editable splats,
+    // so rings mode must still draw and pick them. The render shader's vertex
+    // stage skips their quads unless a ring would show, so keeping them here
+    // costs only cache slots and sort keys
     color = vec4f(max(color.rgb, vec3f(0.0)), color.a);
-    if (color.a <= 0.0) {
-        writeInvalid(entry);
-        return;
-    }
 
     // rgb: 10/10/10 unorm with a 2-bit shared exponent (scale 1/2/4/8, range [0, 8])
     let maxChannel = max(color.r, max(color.g, color.b));
@@ -364,7 +369,18 @@ fn main(
             | select(0u, 0x01000000u, selected)
             | select(0u, 0x02000000u, locked)
     ));
-    sortKeys[entry] = (~bitcast<u32>(depth)) >> 12u;
+    // survivor: claim a slot in the compact list. Only surviving threads contend,
+    // which is 0.1-10% of the dispatch in practice
+    let slot = atomicAdd(&splatCounter[0], 1u);
+    // depth sort key, back-to-front: linearly normalize view depth to [0,1] over
+    // the clip range and invert so the farthest splat gets the smallest key and
+    // composites first. Linear in both projections (ortho's clip.z is this same
+    // ratio; perspective's clip.z would be hyperbolic, so we normalize the raw
+    // view depth instead). near may be negative in ortho (the camera sits inside
+    // the bound); the subtraction handles that with no sign special-case.
+    let normDepth = (depth - uniforms.near) / (uniforms.far - uniforms.near);
+    sortKeys[slot] = u32(saturate(1.0 - normDepth) * f32((1u << 20u) - 1u));
+    compactEntries[slot] = entry;
 }
 `;
 
