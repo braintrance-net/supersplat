@@ -35,7 +35,7 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'select.delete': { keys: ['Delete', 'Backspace'] },
     'selection.toggleUseDepth': { keys: ['n'] },
     'selection.toggleFootprint': { keys: ['m'] },
-    'view.toggleOverlay': { keys: ['Tab'] },
+    'view.toggleEditView': { keys: ['Tab'] },
 
     // Tools
     // 1/2/3 don't fire tool.move/rotate/scale directly: while a shape
@@ -48,6 +48,7 @@ const defaultShortcuts: Record<string, ShortcutBinding> = {
     'tool.lassoSelection': { keys: ['l'] },
     'tool.polygonSelection': { keys: ['p'] },
     'tool.brushSelection': { keys: ['b'] },
+    'tool.sphereBrushSelection': { keys: ['b'], shift: 'required' },
     'tool.floodSelection': { keys: ['o'] },
     'tool.eyedropperSelection': { keys: ['e'], ctrl: 'required', capture: true },
     'tool.brushSelection.smaller': { keys: ['['], repeat: true },
