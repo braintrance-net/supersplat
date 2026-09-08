@@ -131,6 +131,8 @@ const registerDocEvents = (scene: Scene, events: Events) => {
             docSource.close();
             const document = JSON.parse(new TextDecoder().decode(docData));
 
+            const loadedSplats: Splat[] = [];
+
             if ((document.version ?? 0) >= 1) {
                 // v1: the static tier is stored once per resource, and each layer
                 // brings its own instance list and palettes. Layers sharing a
@@ -158,6 +160,7 @@ const registerDocEvents = (scene: Scene, events: Events) => {
 
                     await scene.add(splat);
                     splat.docDeserialize(splatSettings);
+                    loadedSplats.push(splat);
                 }
             } else {
                 // v0: one baked PLY per layer, no instance list
@@ -172,8 +175,19 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     await scene.add(splat);
 
                     splat.docDeserialize(splatSettings);
+                    loadedSplats.push(splat);
                 }
             }
+
+            // wire up skybox links once every layer exists. done after the load
+            // loop so docDeserialize's move() can't push a transform onto a
+            // backdrop that hasn't been restored yet
+            document.splats.forEach((splatSettings: any, i: number) => {
+                const index = splatSettings.skyboxIndex;
+                if (typeof index === 'number' && loadedSplats[index]) {
+                    loadedSplats[i].skybox = loadedSplats[index];
+                }
+            });
 
             // reading the bound forces a recalculation (and its
             // scene.boundChanged event) so the deserialize steps below observe
@@ -291,10 +305,13 @@ const registerDocEvents = (scene: Scene, events: Events) => {
                     filename: `resource_${i}.ply`,
                     numRows: group.rows.length
                 })),
+                // skyboxIndex points at the layer's backdrop copy, by position in
+                // this same array, so the pairing survives a save/load round trip
                 splats: splats.map((splat, i) => ({
                     ...splat.docSerialize(),
                     resource: layerInfo.get(splat).resource,
-                    instances: `instances_${i}.bin`
+                    instances: `instances_${i}.bin`,
+                    skyboxIndex: splat.skybox ? splats.indexOf(splat.skybox) : undefined
                 }))
             };
 

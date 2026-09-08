@@ -3,6 +3,7 @@ import { Entity, GraphicsDevice, TransformGizmo } from 'playcanvas';
 import { Events } from '../events';
 import { Pivot } from '../pivot';
 import { Scene } from '../scene';
+import { Splat } from '../splat';
 
 class TransformTool {
     activate: () => void;
@@ -38,7 +39,8 @@ class TransformTool {
 
         // reattach the gizmo to the pivot
         const reattach = () => {
-            if (!active || !events.invoke('selection')) {
+            const selection = events.invoke('selection') as Splat;
+            if (!active || !selection || selection.locked) {
                 if (gizmo.enabled) {
                     gizmo.detach();
                 }
@@ -80,6 +82,7 @@ class TransformTool {
             events.on('pivot.placed', reattach);
             events.on('pivot.moved', reattach);
             events.on('selection.changed', reattach);
+            events.on('splat.locked', reattach);
         };
 
         this.deactivate = () => {
@@ -89,6 +92,7 @@ class TransformTool {
             events.off('pivot.placed', reattach);
             events.off('pivot.moved', reattach);
             events.off('selection.changed', reattach);
+            events.off('splat.locked', reattach);
         };
 
         // initialize coodinate space

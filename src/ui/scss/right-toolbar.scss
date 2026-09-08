@@ -26,9 +26,15 @@
         border: 0px;
         border-radius: 2px;
 
+        display: flex;
+        align-items: center;
+        justify-content: center;
+
         &::before {
             font-size: 16px !important;
-            line-height: 100%;
+            line-height: 1;
+            width: 100%;
+            text-align: center;
         }
 
         svg {
@@ -77,11 +83,11 @@
     &>.right-toolbar-toggle.active {
         // highlight icon
         &::before {
-            color: $clr-hilight;
+            color: $clr-active;
         }
 
         svg {
-            color: $clr-hilight;
+            color: $clr-active;
         }
     }
 }

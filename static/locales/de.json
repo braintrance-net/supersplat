@@ -73,6 +73,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Sichtfeld (FoV)",
     "panel.settings.fov-dolly": "FOV-Auto-Dolly",
+    "panel.settings.create-skybox": "Skybox-Ebene beim Import",
     "panel.settings.sh-bands": "SH Bänder",
     "panel.settings.fly-speed": "Kamera Geschwindigkeit",
     "panel.settings.stochastic-alpha": "Stochastisches Alpha",
@@ -314,6 +315,12 @@
     "orient.align": "An Raster ausrichten",
     "orient.set-pivot": "Pivot setzen",
     "orient.clear": "Leeren",
+
+    "orbit-point.hint": "In die Szene klicken, um den Orbit-Punkt neu zu zentrieren",
+
+    "splat-list.locked-header": "Ebene gesperrt",
+    "splat-list.locked-remove": "„{{name}}“ ist gesperrt. Entsperren Sie die Ebene im Szenen-Manager, bevor Sie sie entfernen.",
+
     "status-bar.splats": "Splats",
     "status-bar.selected": "Ausgewählt",
     "status-bar.locked": "Gesperrt",
@@ -322,6 +329,7 @@
     "status-bar.splat-data": "Splat-Daten",
     "tooltip.right-toolbar.orbit-camera": "Orbit-Kamera",
     "tooltip.right-toolbar.fly-camera": "Flugkamera",
+    "tooltip.right-toolbar.orbit-point": "Orbit-Punkt festlegen",
     "tooltip.right-toolbar.frame-selection": "Rechteckselektion",
     "tooltip.right-toolbar.reset-camera": "Kamera zurücksetzen",
     "tooltip.bottom-toolbar.undo": "Rückgängig",

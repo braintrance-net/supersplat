@@ -20,6 +20,14 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         return selected?.visible ? [selected] : [];
     };
 
+    // the selected splats the user is allowed to modify. a locked layer stays
+    // selectable so it can be inspected and framed, but every mutating path
+    // goes through here and so refuses it. read-only consumers (camera framing)
+    // use selectedSplats directly.
+    const editableSplats = () => {
+        return selectedSplats().filter(splat => !splat.locked);
+    };
+
     let lastExportCursor = 0;
 
     // add unsaved changes warning message.
@@ -51,6 +59,33 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     events.on('scene.elementDestroyed', (element: Element) => {
         if (element.type === ElementType.splat) {
             editHistory.removeForSplat(element as Splat);
+        }
+    });
+
+    // drop skybox links in either direction so a removed layer isn't kept
+    // alive by its partner
+    events.on('scene.elementRemoved', (element: Element) => {
+        if (element.type === ElementType.splat) {
+            const splat = element as Splat;
+            splat.skybox = null;
+            (scene.getElementsByType(ElementType.splat) as Splat[]).forEach((other) => {
+                if (other.skybox === splat) {
+                    other.skybox = null;
+                }
+            });
+        }
+    });
+
+    // a skybox backdrop only fills holes while it sits exactly where the layer
+    // it was copied from sits, and it's locked so the user can't realign it by
+    // hand. mirror the source layer's entity transform onto it. gaussian-level
+    // edits are deliberately not mirrored — leaving the original geometry
+    // behind is the entire point of the backdrop
+    events.on('splat.moved', (splat: Splat) => {
+        const { skybox } = splat;
+        if (skybox) {
+            const { entity } = splat;
+            skybox.move(entity.getLocalPosition(), entity.getLocalRotation(), entity.getLocalScale());
         }
     });
 
@@ -144,6 +179,27 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     events.on('camera.setFovDolly', (value: boolean) => {
         setFovDolly(value);
+    });
+
+    // import.createSkybox
+
+    // when set, importing a splat file also loads a locked 'Skybox' copy of it
+    // behind the scene layer, so deleting parts of the scene doesn't leave holes
+    let createSkybox = true;
+
+    const setCreateSkybox = (value: boolean) => {
+        if (value !== createSkybox) {
+            createSkybox = value;
+            events.fire('import.createSkybox', createSkybox);
+        }
+    };
+
+    events.function('import.createSkybox', () => {
+        return createSkybox;
+    });
+
+    events.on('import.setCreateSkybox', (value: boolean) => {
+        setCreateSkybox(value);
     });
 
     // camera.fov
@@ -323,7 +379,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // with toCenter, to the bound center (the selection bound while gaussians
     // are selected). resets orientation in both cases
     events.on('pivot.reset', (toCenter: boolean) => {
-        const splat = selectedSplats()[0];
+        const splat = editableSplats()[0];
         if (!splat) {
             return;
         }
@@ -370,32 +426,38 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         scene.camera.ortho = true;
     });
 
-    // returns true if the selected splat has selected gaussians
+    // returns true if the selected splat has selected gaussians the user may edit
     events.function('selection.splats', () => {
         const splat = events.invoke('selection') as Splat;
-        return splat?.numSelected > 0;
+        return !splat?.locked && splat?.numSelected > 0;
+    });
+
+    // returns true if there is a selected splat the user may edit. drives the
+    // enabled state of the menu actions that operate on the whole layer
+    events.function('selection.editable', () => {
+        return editableSplats().length > 0;
     });
 
     events.on('select.all', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectAllOp(splat));
         });
     });
 
     events.on('select.none', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectNoneOp(splat));
         });
     });
 
     events.on('select.invert', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectInvertOp(splat));
         });
     });
 
     events.on('select.mask', (op: 'add'|'remove'|'set'|'intersect', mask: Uint8Array | Uint32Array) => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new SelectOp(splat, op, mask));
         });
     });
@@ -555,7 +617,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // transform maps the unit sphere (diameter 1) to world space
     events.on('select.bySphere', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             await runSelectIntersect(splat, op, {
                 sphere: { transform, footprint: events.invoke('selection.footprint') as number }
             });
@@ -564,7 +626,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
 
     // transform maps the unit cube (side 1) to world space
     events.on('select.byBox', async (op: 'add'|'remove'|'set'|'intersect', transform: Mat4) => {
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             await runSelectIntersect(splat, op, {
                 box: { transform, footprint: events.invoke('selection.footprint') as number }
             });
@@ -575,7 +637,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const method = selectionMethod();
         const footprint = events.invoke('selection.footprint') as number;
 
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             if (method === 'centers') {
                 await runSelectIntersect(splat, op, {
                     rect: { x1: rect.start.x, y1: rect.start.y, x2: rect.end.x, y2: rect.end.y }
@@ -631,7 +693,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const footprint = events.invoke('selection.footprint') as number;
 
         try {
-            for (const splat of selectedSplats()) {
+            for (const splat of editableSplats()) {
                 if (method === 'centers') {
                     await runSelectIntersect(splat, op, {
                         mask: maskTexture
@@ -710,7 +772,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         points: { x: number, y: number, radius: number }[],
         canvas: HTMLCanvasElement
     ) => {
-        const splats = selectedSplats();
+        const splats = editableSplats();
 
         // snapshot everything gesture-dependent now: the shared stroke canvas
         // may be repainted by another tool, the camera moved and the footprint
@@ -773,7 +835,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         const method = selectionMethod();
         const footprint = events.invoke('selection.footprint') as number;
 
-        for (const splat of selectedSplats()) {
+        for (const splat of editableSplats()) {
             if (method === 'centers') {
                 await runSelectIntersect(splat, op, {
                     rect: {
@@ -812,7 +874,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // -  alternative distance metrics such as HSV.
     // -  alternative UI for threshold, two handles for min/max?
     events.function('select.colorMatch', async (op: 'add'|'remove'|'set'|'intersect', point: { x: number, y: number }, threshold = 0) => {
-        const splats = selectedSplats();
+        const splats = editableSplats();
         const targetSize = scene.targetSize;
         if (!splats.length || !targetSize || !point) {
             return;
@@ -852,7 +914,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     });
 
     events.on('select.hide', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             events.fire('edit.add', new HideSelectionOp(splat));
         });
     });
@@ -876,7 +938,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         if (events.invoke('polygonSelection.removeLastPoint')) {
             return;
         }
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             editHistory.add(new RemoveInstancesOp(splat));
         });
     });
@@ -887,7 +949,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // PLY round trip to lose SH precision, drop extra columns or reorder out of
     // Morton. The asset is reference counted, so it outlives either layer.
     const performSelectionFunc = (func: 'duplicate' | 'separate') => {
-        const splat = selectedSplats()[0];
+        const splat = editableSplats()[0];
         if (!splat) {
             return;
         }
@@ -923,7 +985,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // already carry, so applying twice is the same as applying the composition.
     events.on('edit.applyColor', (params: GradeParams) => {
         const splat = events.invoke('selection') as Splat;
-        if (splat) {
+        if (splat && !splat.locked) {
             editHistory.add(new SplatsColorOp({ splat, grade: gradeTerms(params, createGradeTerms()) }));
         }
     });
@@ -931,13 +993,13 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
     // clear the grade on the selected gaussians
     events.on('edit.resetColor', () => {
         const splat = events.invoke('selection') as Splat;
-        if (splat) {
+        if (splat && !splat.locked) {
             editHistory.add(new SplatsColorOp({ splat, grade: null }));
         }
     });
 
     events.on('scene.reset', () => {
-        selectedSplats().forEach((splat) => {
+        editableSplats().forEach((splat) => {
             editHistory.add(new RestoreMissingInstancesOp(splat));
         });
     });
@@ -1304,6 +1366,20 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     });
 
+    // reveal effect
+    let revealEffect = 'spread';
+
+    events.function('revealEffect', () => {
+        return revealEffect;
+    });
+
+    events.on('revealEffect.set', (value: string) => {
+        if (value !== revealEffect) {
+            revealEffect = value;
+            events.fire('revealEffect.changed', revealEffect);
+        }
+    });
+
     events.function('camera.getPose', () => {
         const camera = scene.camera;
         const position = camera.position;
@@ -1358,6 +1434,7 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
             showCameraPoses: events.invoke('camera.showPoses'),
             showCameraInfo: events.invoke('camera.showInfo'),
             flySpeed: events.invoke('camera.flySpeed'),
+            revealEffect: events.invoke('revealEffect'),
             fovDolly: events.invoke('camera.fovDolly')
         };
     });
@@ -1378,6 +1455,9 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         events.fire('camera.setShowPoses', docView.showCameraPoses ?? false);
         events.fire('camera.setShowInfo', docView.showCameraInfo ?? false);
         events.fire('camera.setFlySpeed', docView.flySpeed);
+        if (docView.revealEffect) {
+            events.fire('revealEffect.set', docView.revealEffect);
+        }
         events.fire('camera.setFovDolly', docView.fovDolly ?? false);
     });
 };

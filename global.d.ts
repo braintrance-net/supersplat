@@ -5,6 +5,10 @@ interface FileSystemFileHandle {
     remove(): Promise<void>;
 }
 
+interface FileSystemFileHandle {
+    remove(): Promise<void>;
+}
+
 declare module '*.png' {
     const value: any;
     export default value;

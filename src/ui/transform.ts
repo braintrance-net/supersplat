@@ -4,6 +4,7 @@ import { Quat, Vec3 } from 'playcanvas';
 import { Events } from '../events';
 import { i18n } from './localization';
 import { Pivot } from '../pivot';
+import { Splat } from '../splat';
 
 const v = new Vec3();
 
@@ -153,10 +154,15 @@ class Transform extends Container {
             input.on('slider:mouseup', mouseup);
         });
 
-        // toggle ui availability based on selection
-        events.on('selection.changed', (selection) => {
-            positionVector.enabled = rotationVector.enabled = scaleInput.enabled = !!selection;
-        });
+        // toggle ui availability based on selection. a locked layer greys the
+        // fields out rather than hiding them, so its transform stays readable
+        const updateEnabled = () => {
+            const selection = events.invoke('selection') as Splat;
+            positionVector.enabled = rotationVector.enabled = scaleInput.enabled = !!selection && !selection.locked;
+        };
+
+        events.on('selection.changed', updateEnabled);
+        events.on('splat.locked', updateEnabled);
 
         events.on('pivot.placed', (pivot: Pivot) => {
             updateUI(pivot);

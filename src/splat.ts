@@ -54,6 +54,16 @@ class Splat extends Element {
     worldBoundStorage: BoundingBox;
 
     _visible = true;
+
+    // layer lock: a locked splat stays selectable and visible, but every
+    // mutating path refuses it (see editableSplats in editor.ts). used to pin
+    // a backdrop/skybox layer while editing the rest of the scene.
+    _locked = false;
+
+    // the backdrop copy made from this layer at import. it only fills holes
+    // while the two stay aligned, so its entity transform is slaved to this
+    // one (see editor.ts) rather than being the user's to manage
+    skybox: Splat | null = null;
     transformPalette: TransformPalette;
     colorPalette: ColorPalette;
 
@@ -423,6 +433,17 @@ class Splat extends Element {
         return this._visible;
     }
 
+    set locked(value: boolean) {
+        if (value !== this._locked) {
+            this._locked = value;
+            this.scene?.events.fire('splat.locked', this);
+        }
+    }
+
+    get locked() {
+        return this._locked;
+    }
+
     // get pivot position/rotation/scale (caller should have awaited operation that changed data)
     getPivot(result: Transform) {
         const { entity } = this;
@@ -454,7 +475,8 @@ class Splat extends Element {
             scale: pack3(this.entity.getLocalScale()),
             localFrameOrigin: pack3(this.localFrameOrigin),
             localFrame: pack4(this.localFrame),
-            visible: this.visible
+            visible: this.visible,
+            locked: this.locked
         };
     }
 
@@ -467,6 +489,8 @@ class Splat extends Element {
         this.localFrameOrigin = doc.localFrameOrigin ? new Vec3(doc.localFrameOrigin) : new Vec3();
         this.localFrame = doc.localFrame ? new Quat(doc.localFrame) : new Quat();
         this.visible = visible;
+        // older documents predate the layer lock
+        this.locked = doc.locked ?? false;
         this.migrateLayerGrade(doc);
     }
 

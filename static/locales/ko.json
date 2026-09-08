@@ -73,6 +73,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "시야각",
     "panel.settings.fov-dolly": "FOV 자동 달리",
+    "panel.settings.create-skybox": "가져올 때 스카이박스 레이어",
     "panel.settings.sh-bands": "SH 밴드",
     "panel.settings.fly-speed": "카메라 이동 속도",
     "panel.settings.stochastic-alpha": "확률적 알파",
@@ -314,6 +315,12 @@
     "orient.align": "그리드에 정렬",
     "orient.set-pivot": "피벗 설정",
     "orient.clear": "지우기",
+
+    "orbit-point.hint": "장면을 클릭하여 오빗 중심 이동",
+
+    "splat-list.locked-header": "레이어가 잠김",
+    "splat-list.locked-remove": "'{{name}}'은(는) 잠겨 있습니다. 제거하려면 씬 관리자에서 잠금을 해제하세요.",
+
     "status-bar.splats": "스플랫",
     "status-bar.selected": "선택됨",
     "status-bar.locked": "잠김",
@@ -322,6 +329,7 @@
     "status-bar.splat-data": "스플랫 데이터",
     "tooltip.right-toolbar.orbit-camera": "오빗 카메라",
     "tooltip.right-toolbar.fly-camera": "플라이 카메라",
+    "tooltip.right-toolbar.orbit-point": "오빗 중심 설정",
     "tooltip.right-toolbar.frame-selection": "프레임 선택",
     "tooltip.right-toolbar.reset-camera": "카메라 재설정",
     "tooltip.bottom-toolbar.undo": "실행 취소",

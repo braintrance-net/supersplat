@@ -59,6 +59,38 @@
             }
         }
 
+        // the padlock only earns its place in the row when it says something:
+        // shown on hover and on the selected row, and permanently once locked
+        .splat-item-locked {
+            flex-grow: 0;
+            flex-shrink: 0;
+
+            padding: 4px;
+            width: 16px;
+            height: 16px;
+            line-height: 16px;
+
+            color: $text-secondary;
+            visibility: hidden;
+
+            cursor: pointer;
+
+            &:hover {
+                color: $text-primary;
+            }
+        }
+
+        &:hover .splat-item-locked,
+        &.selected .splat-item-locked,
+        &.locked .splat-item-locked {
+            visibility: visible;
+        }
+
+        // a closed padlock reads as an active state, not a hint
+        &.locked .splat-item-locked {
+            color: $text-primary;
+        }
+
         .splat-item-delete {
             flex-grow: 0;
             flex-shrink: 0;

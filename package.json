@@ -14,9 +14,9 @@
     "license": "MIT",
     "main": "index.js",
     "scripts": {
-        "build": "rollup -c",
+        "build": "rm -rf dist && rollup -c && node scripts/patch-splat-editor-sw.mjs",
         "watch": "rollup -c -w",
-        "serve": "serve dist -C",
+        "serve": "serve dist -C -l 8000",
         "develop": "cross-env BUILD_TYPE=debug concurrently --kill-others \"npm run watch\" \"npm run serve\"",
         "develop:auto-launch": "concurrently --kill-others \"xdg-open 'http://localhost:3000/'\" \"npm run watch\" \"npm run serve\"",
         "lint": "eslint src",
@@ -35,6 +35,7 @@
         "@rollup/plugin-node-resolve": "16.0.3",
         "@rollup/plugin-terser": "1.0.0",
         "@rollup/plugin-typescript": "12.3.0",
+        "@types/sortablejs": "^1.15.9",
         "@types/wicg-file-system-access": "2023.10.7",
         "@typescript-eslint/eslint-plugin": "8.68.0",
         "@typescript-eslint/parser": "8.68.0",
@@ -57,5 +58,8 @@
         "serve": "14.2.6",
         "tslib": "2.8.1",
         "typescript": "6.0.3"
+    },
+    "dependencies": {
+        "sortablejs": "^1.15.7"
     }
 }

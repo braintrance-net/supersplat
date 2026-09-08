@@ -1,6 +1,7 @@
 import { WebPCodec, WorkerQueue } from '@playcanvas/splat-transform';
 import { Color, createGraphicsDevice } from 'playcanvas';
 
+import { AnnotationManager } from './annotation-manager';
 import { registerCameraPosesEvents } from './camera-poses';
 import { CommandQueue } from './command-queue';
 import { registerDocEvents } from './doc';
@@ -9,6 +10,7 @@ import { registerEditorEvents } from './editor';
 import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
+import { initIframeIntegration } from './iframe-integration';
 import { registerPreferences } from './preferences';
 import { registerPublishEvents } from './publish';
 import { registerRenderEvents } from './render';
@@ -25,6 +27,7 @@ import { FloodSelection } from './tools/flood-selection';
 import { LassoSelection } from './tools/lasso-selection';
 import { MeasureTool } from './tools/measure-tool';
 import { MoveTool } from './tools/move-tool';
+import { OrbitPointTool } from './tools/orbit-point-tool';
 import { OrientTool } from './tools/orient-tool';
 import { PolygonSelection } from './tools/polygon-selection';
 import { RectSelection } from './tools/rect-selection';
@@ -35,10 +38,12 @@ import { SphereSelection } from './tools/sphere-selection';
 import { ToolManager } from './tools/tool-manager';
 import { registerTrackManagerEvents } from './track-manager';
 import { registerTransformHandlerEvents } from './transform-handler';
+import { AnnotationOverlay } from './ui/annotation-overlay';
 import { BoundDimensionsOverlay } from './ui/bound-dimensions-overlay';
 import { EditorUI } from './ui/editor';
 import { i18n } from './ui/localization';
 import { registerSelectCursor } from './ui/select-cursor';
+import { ViewManager } from './view-manager';
 
 declare global {
     interface LaunchParams {
@@ -257,6 +262,7 @@ const main = async () => {
     toolManager.register('scale', new ScaleTool(events, scene));
     toolManager.register('measure', new MeasureTool(events, scene, editorUI.canvasContainer, editorUI.annotationContainer.dom));
     toolManager.register('orient', new OrientTool(events, scene, editorUI.toolsContainer.dom, editorUI.canvasContainer, editorUI.annotationContainer.dom));
+    toolManager.register('orbitPoint', new OrbitPointTool(events, scene, editorUI.canvasContainer));
 
     const boundDimensionsOverlay = new BoundDimensionsOverlay(events, scene, editorUI.canvasContainer, editorUI.annotationContainer.dom);
 
@@ -266,6 +272,15 @@ const main = async () => {
     registerSelectCursor(events, editorUI.toolsContainer.dom);
 
     window.scene = scene;
+
+    // view manager for saving/restoring camera views
+    new ViewManager(events);
+
+    // annotation manager for 3D annotations
+    new AnnotationManager(events);
+
+    // annotation overlay for rendering annotation markers on canvas
+    new AnnotationOverlay(events, scene, editorUI.canvasContainer.dom);
 
     // register events that need scene or other dependencies
     registerEditorEvents(events, editHistory, scene);
@@ -282,6 +297,15 @@ const main = async () => {
 
     // load async models
     scene.start();
+
+    // initialize iframe integration if running in iframe
+    initIframeIntegration(events, scene);
+
+    // handle revealEffect query param
+    const revealEffectParam = url.searchParams.get('revealEffect');
+    if (revealEffectParam) {
+        events.fire('revealEffect.set', revealEffectParam);
+    }
 
     // handle load params
     const loadList = url.searchParams.getAll('load');

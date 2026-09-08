@@ -187,6 +187,26 @@ class SettingsPanel extends Container {
         fovDollyRow.append(fovDollyLabel);
         fovDollyRow.append(fovDollyToggle);
 
+        // create skybox layer on import
+
+        const createSkyboxRow = new Container({
+            class: 'settings-panel-row'
+        });
+
+        const createSkyboxLabel = new Label({
+            class: 'settings-panel-row-label'
+        });
+        i18n.bindText(createSkyboxLabel, 'panel.settings.create-skybox');
+
+        const createSkyboxToggle = new BooleanInput({
+            type: 'toggle',
+            class: 'settings-panel-row-toggle',
+            value: true
+        });
+
+        createSkyboxRow.append(createSkyboxLabel);
+        createSkyboxRow.append(createSkyboxToggle);
+
         // sh bands
         const shBandsRow = new Container({
             class: 'settings-panel-row'
@@ -256,6 +276,7 @@ class SettingsPanel extends Container {
         stochasticRow.append(stochasticSelection);
 
         rowToggles(fovDollyRow, fovDollyToggle);
+        rowToggles(createSkyboxRow, createSkyboxToggle);
 
         this.append(header);
         this.append(languageRow);
@@ -267,6 +288,7 @@ class SettingsPanel extends Container {
         this.append(cameraFlySpeedRow);
         this.append(fovRow);
         this.append(fovDollyRow);
+        this.append(createSkyboxRow);
 
         // handle panel visibility
 
@@ -329,6 +351,16 @@ class SettingsPanel extends Container {
 
         fovDollyToggle.on('change', (value: boolean) => {
             events.fire('camera.setFovDolly', value);
+        });
+
+        // create skybox layer on import
+
+        events.on('import.createSkybox', (value: boolean) => {
+            createSkyboxToggle.value = value;
+        });
+
+        createSkyboxToggle.on('change', (value: boolean) => {
+            events.fire('import.setCreateSkybox', value);
         });
 
         // stochastic alpha

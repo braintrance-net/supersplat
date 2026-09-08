@@ -316,9 +316,23 @@ class ColorPanel extends Container {
             transparencySlider.value === NEUTRAL.transparency
         );
 
+        // colour grading is an edit like any other, so a locked layer greys the
+        // controls out and gets no preview
+        const editable = () => !!selected && !selected.locked;
+
+        const updateEnabled = () => {
+            const enabled = editable();
+            [
+                tintPicker, temperatureSlider, saturationSlider, brightnessSlider,
+                blackPointSlider, whitePointSlider, transparencySlider, apply, reset
+            ].forEach((control) => {
+                control.enabled = enabled;
+            });
+        };
+
         // the renderer asks for this every frame; null means nothing to preview
         events.function('colorPanel.pending', () => {
-            return (selected && !isNeutral()) ? pendingParams() : null;
+            return (editable() && !isNeutral()) ? pendingParams() : null;
         });
 
         const setControls = (values: typeof NEUTRAL) => {
@@ -360,14 +374,14 @@ class ColorPanel extends Container {
         });
 
         apply.on('click', () => {
-            if (selected && !isNeutral()) {
+            if (editable() && !isNeutral()) {
                 events.fire('edit.applyColor', pendingParams());
                 setControls(NEUTRAL);
             }
         });
 
         reset.on('click', () => {
-            if (selected) {
+            if (editable()) {
                 events.fire('edit.resetColor');
                 // otherwise a pending grade would immediately re-tint what was cleared
                 setControls(NEUTRAL);
@@ -379,8 +393,12 @@ class ColorPanel extends Container {
             // the pending grade belongs to the panel, not to a layer, but carrying it
             // across a selection change would silently retarget it
             setControls(NEUTRAL);
+            updateEnabled();
         });
 
+        events.on('splat.locked', updateEnabled);
+
+        updateEnabled();
     }
 }
 

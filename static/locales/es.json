@@ -73,6 +73,7 @@
     "panel.settings.tone-mapping.hejl": "Hejl",
     "panel.settings.fov": "Campo de visión",
     "panel.settings.fov-dolly": "Auto dolly de FOV",
+    "panel.settings.create-skybox": "Capa de skybox al importar",
     "panel.settings.sh-bands": "Bandas SH",
     "panel.settings.fly-speed": "Velocidad de vuelo",
     "panel.settings.stochastic-alpha": "Alfa estocástico",
@@ -314,6 +315,12 @@
     "orient.align": "Alinear con la cuadrícula",
     "orient.set-pivot": "Fijar pivote",
     "orient.clear": "Borrar",
+
+    "orbit-point.hint": "Haz clic en la escena para recentrar el punto de órbita",
+
+    "splat-list.locked-header": "Capa bloqueada",
+    "splat-list.locked-remove": "'{{name}}' está bloqueada. Desbloquéala en el gestor de escena antes de eliminarla.",
+
     "status-bar.splats": "Splats",
     "status-bar.selected": "Seleccionados",
     "status-bar.locked": "Bloqueados",
@@ -322,6 +329,7 @@
     "status-bar.splat-data": "Datos de Splat",
     "tooltip.right-toolbar.orbit-camera": "Cámara orbital",
     "tooltip.right-toolbar.fly-camera": "Cámara de vuelo",
+    "tooltip.right-toolbar.orbit-point": "Definir punto de órbita",
     "tooltip.right-toolbar.frame-selection": "Enmarcar selección",
     "tooltip.right-toolbar.reset-camera": "Restablecer cámara",
     "tooltip.bottom-toolbar.undo": "Deshacer",

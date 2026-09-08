@@ -14,7 +14,6 @@ import sceneExport from './svg/export.svg';
 import sceneImport from './svg/import.svg';
 import sceneNew from './svg/new.svg';
 import sceneOpen from './svg/open.svg';
-import scenePublish from './svg/publish.svg';
 import sceneSave from './svg/save.svg';
 import selectAll from './svg/select-all.svg';
 import selectDuplicate from './svg/select-duplicate.svg';
@@ -210,11 +209,6 @@ class Menu extends Container {
             text: () => i18n.t('menu.file.export'),
             icon: createSvg(sceneExport),
             subMenu: exportMenuPanel
-        }, {
-            text: () => i18n.t('menu.file.publish', { ellipsis: true }),
-            icon: createSvg(scenePublish),
-            isEnabled: () => !events.invoke('scene.empty'),
-            onSelect: async () => await events.invoke('show.publishSettingsDialog')
         }]);
 
         // track undo/redo availability for menu item enablement
@@ -257,16 +251,19 @@ class Menu extends Container {
             text: () => i18n.t('menu.select.all'),
             icon: createSvg(selectAll),
             extra: shortcutManager.formatShortcut('select.all'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.all')
         }, {
             text: () => i18n.t('menu.select.none'),
             icon: createSvg(selectNone),
             extra: shortcutManager.formatShortcut('select.none'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.none')
         }, {
             text: () => i18n.t('menu.select.invert'),
             icon: createSvg(selectInverse),
             extra: shortcutManager.formatShortcut('select.invert'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.invert')
         }, {
             // separator
@@ -280,6 +277,7 @@ class Menu extends Container {
             text: () => i18n.t('menu.select.unlock'),
             icon: createSvg(selectUnlock),
             extra: shortcutManager.formatShortcut('select.unhide'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('select.unhide')
         }, {
             text: () => i18n.t('menu.select.delete'),
@@ -289,6 +287,7 @@ class Menu extends Container {
             onSelect: () => events.fire('select.delete')
         }, {
             text: () => i18n.t('menu.select.reset'),
+            isEnabled: () => events.invoke('selection.editable'),
             onSelect: () => events.fire('scene.reset')
         }]);
 
@@ -337,21 +336,13 @@ class Menu extends Container {
         }, {
             text: () => i18n.t('menu.help.discord'),
             icon: 'E233',
-            onSelect: () => window.open('https://discord.gg/T3pnhRTTAY', '_blank')?.focus()
-        }, {
-            text: () => i18n.t('menu.help.forum'),
-            icon: 'E432',
-            onSelect: () => window.open('https://forum.playcanvas.com', '_blank')?.focus()
+            onSelect: () => window.open('https://discord.com/tMER99295V', '_blank')?.focus()
         }, {
             // separator
         }, {
-            text: () => i18n.t('menu.help.github-repo'),
-            icon: 'E259',
-            onSelect: () => window.open('https://github.com/playcanvas/supersplat', '_blank')?.focus()
-        }, {
             text: () => i18n.t('menu.help.log-issue'),
             icon: 'E336',
-            onSelect: () => window.open('https://github.com/playcanvas/supersplat/issues', '_blank')?.focus()
+            onSelect: () => window.open('mailto:will@braintrance.net')
         }, {
             // separator
         }, {
@@ -387,17 +378,20 @@ class Menu extends Container {
             menuPanel: helpMenuPanel
         }];
 
+        // Standard dropdown behavior for all menu buttons
         options.forEach((option) => {
             const activate = () => {
                 option.menuPanel.position(option.dom, 'bottom', 2);
                 options.forEach((opt) => {
                     opt.menuPanel.hidden = opt !== option;
+                    opt.dom.classList.toggle('active', opt === option);
                 });
             };
 
             option.dom.addEventListener('pointerdown', (event: PointerEvent) => {
                 if (!option.menuPanel.hidden) {
                     option.menuPanel.hidden = true;
+                    option.dom.classList.remove('active');
                 } else {
                     activate();
                 }
@@ -414,6 +408,7 @@ class Menu extends Container {
             if (!this.dom.contains(event.target as Node)) {
                 options.forEach((opt) => {
                     opt.menuPanel.hidden = true;
+                    opt.dom.classList.remove('active');
                 });
             }
         };
