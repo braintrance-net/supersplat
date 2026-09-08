@@ -3,15 +3,13 @@ import { Button, Container, Element, Label } from '@playcanvas/pcui';
 import { Events } from '../events';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
+import appearanceSvg from './svg/appearance.svg';
 import cameraFrameSelectionSvg from './svg/camera-frame-selection.svg';
 import cameraOrbitPointSvg from './svg/camera-orbit-point.svg';
 import cameraResetSvg from './svg/camera-reset.svg';
-import centersSvg from './svg/centers.svg';
-import colorPanelSvg from './svg/color-panel.svg';
 import flyCameraSvg from './svg/fly-camera.svg';
 import orbitCameraSvg from './svg/orbit-camera.svg';
-import ringsSvg from './svg/rings.svg';
-import showHideSplatsSvg from './svg/show-hide-splats.svg';
+import overlaysSvg from './svg/overlays.svg';
 import { Tooltips } from './tooltips';
 
 const createSvg = (svgString: string) => {
@@ -32,14 +30,9 @@ class RightToolbar extends Container {
             event.stopPropagation();
         });
 
-        const ringsModeToggle = new Button({
-            id: 'right-toolbar-mode-toggle',
+        const appearance = new Button({
+            id: 'right-toolbar-appearance',
             class: 'right-toolbar-toggle'
-        });
-
-        const showHideSplats = new Button({
-            id: 'right-toolbar-show-hide',
-            class: ['right-toolbar-toggle', 'active']
         });
 
         const orbitMode = new Button({
@@ -67,33 +60,41 @@ class RightToolbar extends Container {
             class: 'right-toolbar-button'
         });
 
-        const colorPanel = new Button({
-            id: 'right-toolbar-color-panel',
+        const overlays = new Button({
+            id: 'right-toolbar-overlays',
             class: 'right-toolbar-toggle'
         });
 
-        const options = new Button({
-            id: 'right-toolbar-options',
+        const settings = new Button({
+            id: 'right-toolbar-settings',
             class: 'right-toolbar-toggle',
             icon: 'E283'
         });
 
-        const centersDom = createSvg(centersSvg);
-        const ringsDom = createSvg(ringsSvg);
-        ringsDom.style.display = 'none';
-
-        ringsModeToggle.dom.appendChild(centersDom);
-        ringsModeToggle.dom.appendChild(ringsDom);
-        showHideSplats.dom.appendChild(createSvg(showHideSplatsSvg));
+        appearance.dom.appendChild(createSvg(appearanceSvg));
         orbitMode.dom.appendChild(createSvg(orbitCameraSvg));
         flyMode.dom.appendChild(createSvg(flyCameraSvg));
         cameraOrbitPoint.dom.appendChild(createSvg(cameraOrbitPointSvg));
         cameraFrameSelection.dom.appendChild(createSvg(cameraFrameSelectionSvg));
         cameraReset.dom.appendChild(createSvg(cameraResetSvg));
-        colorPanel.dom.appendChild(createSvg(colorPanelSvg));
+        overlays.dom.appendChild(createSvg(overlaysSvg));
 
-        this.append(ringsModeToggle);
-        this.append(showHideSplats);
+        // icon-only buttons: keep accessible names in sync with the language
+        const buttonLabels: [Button, string][] = [
+            [appearance, 'panel.appearance'],
+            [overlays, 'panel.overlays'],
+            [orbitMode, 'tooltip.right-toolbar.orbit-camera'],
+            [flyMode, 'tooltip.right-toolbar.fly-camera'],
+            [cameraFrameSelection, 'tooltip.right-toolbar.frame-selection'],
+            [cameraReset, 'tooltip.right-toolbar.reset-camera'],
+            [settings, 'panel.settings']
+        ];
+        buttonLabels.forEach(([button, key]) => {
+            i18n.onChange(() => button.dom.setAttribute('aria-label', i18n.t(key)), button);
+        });
+
+        this.append(appearance);
+        this.append(overlays);
         this.append(new Element({ class: 'right-toolbar-separator' }));
         this.append(orbitMode);
         this.append(flyMode);
@@ -102,8 +103,7 @@ class RightToolbar extends Container {
         this.append(cameraFrameSelection);
         this.append(cameraReset);
         this.append(new Element({ class: 'right-toolbar-separator' }));
-        this.append(colorPanel);
-        this.append(options);
+        this.append(settings);
 
         // Helper to compose localized tooltip text with shortcut
         const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
@@ -118,39 +118,28 @@ class RightToolbar extends Container {
             return text;
         };
 
-        tooltips.register(ringsModeToggle, tooltip('tooltip.right-toolbar.splat-mode', 'camera.toggleMode'), 'left');
-        tooltips.register(showHideSplats, tooltip('tooltip.right-toolbar.show-hide', 'camera.toggleOverlay'), 'left');
+        tooltips.register(appearance, tooltip('panel.appearance'), 'left');
         tooltips.register(orbitMode, tooltip('tooltip.right-toolbar.orbit-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(flyMode, tooltip('tooltip.right-toolbar.fly-camera', 'camera.toggleControlMode'), 'left');
         tooltips.register(cameraOrbitPoint, tooltip('tooltip.right-toolbar.orbit-point'), 'left');
         tooltips.register(cameraFrameSelection, tooltip('tooltip.right-toolbar.frame-selection', 'camera.focus'), 'left');
         tooltips.register(cameraReset, tooltip('tooltip.right-toolbar.reset-camera', 'camera.reset'), 'left');
-        tooltips.register(colorPanel, tooltip('tooltip.right-toolbar.colors'), 'left');
-        tooltips.register(options, tooltip('tooltip.right-toolbar.settings'), 'left');
+        tooltips.register(overlays, tooltip('panel.overlays'), 'left');
+        tooltips.register(settings, tooltip('panel.settings'), 'left');
 
         // add event handlers
 
-        ringsModeToggle.on('click', () => {
-            events.fire('camera.toggleMode');
-            events.fire('camera.setOverlay', true);
-        });
-        showHideSplats.on('click', () => events.fire('camera.toggleOverlay'));
+        appearance.on('click', () => events.fire('appearancePanel.toggleVisible'));
         orbitMode.on('click', () => events.fire('camera.setControlMode', 'orbit'));
         flyMode.on('click', () => events.fire('camera.setControlMode', 'fly'));
         cameraOrbitPoint.on('click', () => events.fire('tool.orbitPoint'));
         cameraFrameSelection.on('click', () => events.fire('camera.focus'));
         cameraReset.on('click', () => events.fire('camera.reset'));
-        colorPanel.on('click', () => events.fire('colorPanel.toggleVisible'));
-        options.on('click', () => events.fire('settingsPanel.toggleVisible'));
+        overlays.on('click', () => events.fire('overlaysPanel.toggleVisible'));
+        settings.on('click', () => events.fire('settingsPanel.toggleVisible'));
 
-        events.on('camera.mode', (mode: string) => {
-            ringsModeToggle.class[mode === 'rings' ? 'add' : 'remove']('active');
-            centersDom.style.display = mode === 'rings' ? 'none' : 'block';
-            ringsDom.style.display = mode === 'rings' ? 'block' : 'none';
-        });
-
-        events.on('camera.overlay', (value: boolean) => {
-            showHideSplats.class[value ? 'add' : 'remove']('active');
+        events.on('appearancePanel.visible', (visible: boolean) => {
+            appearance.class[visible ? 'add' : 'remove']('active');
         });
 
         events.on('tool.activated', (toolName: string) => {
@@ -162,12 +151,12 @@ class RightToolbar extends Container {
             flyMode.class[mode === 'fly' ? 'add' : 'remove']('active');
         });
 
-        events.on('colorPanel.visible', (visible: boolean) => {
-            colorPanel.class[visible ? 'add' : 'remove']('active');
+        events.on('overlaysPanel.visible', (visible: boolean) => {
+            overlays.class[visible ? 'add' : 'remove']('active');
         });
 
         events.on('settingsPanel.visible', (visible: boolean) => {
-            options.class[visible ? 'add' : 'remove']('active');
+            settings.class[visible ? 'add' : 'remove']('active');
         });
     }
 }

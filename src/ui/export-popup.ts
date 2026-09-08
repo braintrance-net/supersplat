@@ -404,7 +404,7 @@ class ExportPopup extends Container {
 
             animationToggle.value = hasPoses;
             animationToggle.enabled = hasPoses;
-            loopSelect.value = 'repeat';
+            loopSelect.value = events.invoke('timeline.loop') ? 'repeat' : 'none';
             loopSelect.enabled = hasPoses;
 
             colorPicker.value = [bgClr.r, bgClr.g, bgClr.b];
@@ -523,7 +523,7 @@ class ExportPopup extends Container {
                     tonemapping: 'none',
                     highPrecisionRendering: false,
                     background: { color: bgColor },
-                    postEffectSettings: defaultPostEffectSettings,
+                    postEffectSettings: defaultPostEffectSettings(),
                     animTracks,
                     cameras,
                     annotations: [],

@@ -1,21 +1,22 @@
 import { Container, Label } from '@playcanvas/pcui';
 import { Mat4 } from 'playcanvas';
 
+import { AppearancePanel } from './appearance-panel';
 import { Events } from '../events';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
-import { ColorPanel } from './color-panel';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
+import { OverlaysPanel } from './overlays-panel';
+import { PerfOverlay } from './perf-overlay';
 import logo from './playcanvas-logo.png';
 import { Popup, ShowOptions } from './popup';
 import { Progress } from './progress';
 import { RenderSubPanel } from './render-sub-panel';
 import { RightToolbar } from './right-toolbar';
-import { ScenePanel } from './scene-panel';
 import { SettingsPanel } from './settings-panel';
 import { ShortcutsPopup } from './shortcuts-popup';
 import { Spinner } from './spinner';
@@ -32,6 +33,7 @@ class EditorUI {
     appContainer: Container;
     topContainer: Container;
     canvasContainer: Container;
+    annotationContainer: Container;
     toolsContainer: Container;
     canvas: HTMLCanvasElement;
     popup: Popup;
@@ -71,12 +73,21 @@ class EditorUI {
         // app label
         const appLabel = new Label({
             id: 'app-label',
-            text: `SUPERSPLAT v${version}`
+            text: 'SUPERSPLAT '
         });
+        const versionSpan = document.createElement('span');
+        versionSpan.textContent = `v${version}`;
+        appLabel.dom.appendChild(versionSpan);
 
         // canvas container
         const canvasContainer = new Container({
             id: 'canvas-container'
+        });
+
+        // world-space annotations paint above the canvas but below all editor
+        // chrome, so panels and toolbars naturally occlude them
+        const annotationContainer = new Container({
+            id: 'annotation-container'
         });
 
         // tools container
@@ -89,29 +100,34 @@ class EditorUI {
         tooltipsContainer.append(tooltips);
 
         // bottom toolbar
-        const scenePanel = new ScenePanel(events, tooltips);
+        // the render sub panel replaces upstream's scene panel outright: building
+        // both would register the colour panel's event functions twice
         const renderSubPanel = new RenderSubPanel(events, tooltips);
         const settingsPanel = new SettingsPanel(events, tooltips);
-        const colorPanel = new ColorPanel(events, tooltips);
+        const appearancePanel = new AppearancePanel(events, tooltips);
+        const overlaysPanel = new OverlaysPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
         const menu = new Menu(events);
         const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
+        const perfOverlay = new PerfOverlay(events);
 
         canvasContainer.dom.appendChild(canvas);
+        canvasContainer.append(annotationContainer);
         canvasContainer.append(appLabel);
         canvasContainer.append(cameraInfoOverlay);
+        canvasContainer.append(perfOverlay);
         canvasContainer.append(toolsContainer);
-        canvasContainer.append(scenePanel);
         canvasContainer.append(renderSubPanel);
-        canvasContainer.append(settingsPanel);
-        canvasContainer.append(colorPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
         canvasContainer.append(menu);
 
-        // Render sub panel is always visible, so hide the scene panel permanently
-        scenePanel.hidden = true;
+        // the option popups come after the toolbars so their select dropdowns,
+        // which can extend past the panel bounds, paint above them
+        canvasContainer.append(settingsPanel);
+        canvasContainer.append(appearancePanel);
+        canvasContainer.append(overlaysPanel);
 
         // view axes container
         const viewCube = new ViewCube(events);
@@ -164,6 +180,7 @@ class EditorUI {
         this.appContainer = appContainer;
         this.topContainer = topContainer;
         this.canvasContainer = canvasContainer;
+        this.annotationContainer = annotationContainer;
         this.toolsContainer = toolsContainer;
         this.canvas = canvas;
         this.popup = popup;

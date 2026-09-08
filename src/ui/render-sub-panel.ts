@@ -2,6 +2,7 @@ import { Button, Container, Element, Label, SelectInput } from '@playcanvas/pcui
 
 import { Events } from '../events';
 import { AnnotationsPanel } from './annotations-panel';
+import { ColorPanel } from './color-panel';
 import { i18n } from './localization';
 import { SplatList } from './splat-list';
 import sceneImportSvg from './svg/import.svg';
@@ -160,6 +161,7 @@ class RenderSubPanel extends Container {
         editContent.append(splatListContainer);
         editContent.append(transformHeader);
         editContent.append(new Transform(events));
+        editContent.append(new ColorPanel(events));
 
         // Reveal Effect section
         const revealHeader = new Container({

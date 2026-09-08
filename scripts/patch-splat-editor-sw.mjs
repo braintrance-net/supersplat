@@ -1,11 +1,14 @@
-// Post-build step: replace SuperSplat's cache-first service worker with a killswitch.
+// Post-build step: ship a service-worker killswitch with the editor build.
 //
-// The editor build emits a cache-first worker (src/sw.ts -> dist/sw.js) plus its registration in
-// dist/index.html. Downstream the web app vendors this dist/ into apps/web/public/splat-editor/,
-// where that worker serves stale cached editor bundles and breaks the share-page editor/viewer
-// handoff. Shipping the killswitch in dist/ means every consumer of the build gets it without a
-// separate post-vendor patch (original fix: commit 2e859a582, "fix: clear stale splat editor
-// service worker", PR #1271).
+// Editor builds up to v2 registered a cache-first worker (dist/sw.js) that served stale editor
+// bundles and broke the share-page editor/viewer handoff once the web app vendored dist/ into
+// apps/web/public/splat-editor/ (original fix: commit 2e859a582, "fix: clear stale splat editor
+// service worker", PR #1271). v3 dropped the worker, but browsers that still hold the old
+// registration keep polling ./sw.js, so dist/ keeps a self-unregistering sw.js.
+//
+// v3's own index.html snippet unregisters EVERY worker on the origin, which would also tear down
+// the host app's worker (btv-sog-sw.js shares the origin), so it is swapped for the
+// scope-filtered version below just like the v2 registration was.
 //
 // Plain .mjs rather than scripts/*.ts + tsx: this runs with bare Node right after rollup, before
 // (and independently of) any TS toolchain.
@@ -57,7 +60,7 @@ rmSync(new URL("sw.js.map", editorDir), { force: true });
 
 const indexPath = new URL("index.html", editorDir);
 const html = readFileSync(indexPath, "utf8");
-const upstreamRegistrationBlock = /<!-- Service worker -->\s*<script>[\s\S]*?<\/script>/;
+const upstreamRegistrationBlock = /<!-- (?:Service worker -->|v3 removed the service worker[\s\S]*?-->)\s*<script>[\s\S]*?<\/script>/;
 
 if (upstreamRegistrationBlock.test(html)) {
 	writeFileSync(indexPath, html.replace(upstreamRegistrationBlock, KILLSWITCH_REGISTRATION));
