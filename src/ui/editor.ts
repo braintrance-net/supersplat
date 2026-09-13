@@ -3,6 +3,8 @@ import { Mat4 } from 'playcanvas';
 
 import { AppearancePanel } from './appearance-panel';
 import { Events } from '../events';
+import { ExportSettings } from '../export-settings';
+import type { BlobReadSource } from '../io';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
@@ -205,8 +207,12 @@ class EditorUI {
             shortcutsPopup.hidden = false;
         });
 
-        events.function('show.exportPopup', (exportType, splatNames: [string], showFilenameEdit: boolean) => {
-            return exportPopup.show(exportType, splatNames, showFilenameEdit);
+        events.function('show.exportPopup', (exportType, splatNames: string[], settings?: ExportSettings) => {
+            return exportPopup.show(exportType, splatNames, settings);
+        });
+
+        events.function('show.savePopup', (filename: string, directory?: FileSystemDirectoryHandle, source?: BlobReadSource) => {
+            return exportPopup.show('ssproj', [filename], { directory }, source);
         });
 
         events.function('show.imageSettingsDialog', async () => {
