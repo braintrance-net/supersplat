@@ -3,7 +3,7 @@
     "package.json": ["node scripts/patch-splat-editor-sw.mjs", "\"sortablejs\"", "\"@types/sortablejs\""],
     "src/index.html": ["family=Rajdhani"],
     "src/main.ts": ["AnnotationManager", "registerIframeApi", "initIframeIntegration", "ViewManager", "AnnotationOverlay"],
-    "src/editor.ts": ["revealEffect"],
+    "src/editor.ts": ["events.function('revealEffect'", "events.on('revealEffect.set'"],
     "src/ui/editor.ts": ["RenderSubPanel", "SettingsPanel"],
     "src/ui/right-toolbar.ts": ["cameraOrbitPointSvg"],
     "src/ui/scss/style.scss": ["@use 'colors.scss'", "@use 'iframe-controls.scss'", "@use 'render-sub-panel.scss'", "@use 'annotation-overlay.scss'"],
