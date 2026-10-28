@@ -3,7 +3,7 @@ import { AppBase, Asset } from 'playcanvas';
 
 import { EditorSplatResource } from './editor-splat-resource';
 import { Events } from './events';
-import { defaultLodIndex, loadSplatSource } from './io';
+import { defaultLodIndex, hasLoadProgress, loadSplatSource } from './io';
 import { Splat } from './splat';
 import { i18n } from './ui/localization';
 
@@ -29,26 +29,48 @@ class AssetLoader {
         return asset;
     }
 
-    async load(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean, lodIndex?: number) {
-        const loaded = await this.loadAsset(filename, fileSystem, animationFrame, skipReorder, lodIndex);
+    async load(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean, options?: { lod?: number }) {
+        const loaded = await this.loadAsset(filename, fileSystem, animationFrame, skipReorder, options);
         return loaded && new Splat(loaded.asset, loaded.rotation);
     }
 
     // Load the static tier only, without a layer over it. A .ssproj can have
     // several layers sharing one resource, so the document loader creates the
     // asset once here and then builds each layer's own instance list.
-    async loadAsset(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean, lodIndex?: number) {
-        if (!animationFrame) {
-            this.events.fire('startSpinner');
+    async loadAsset(filename: string, fileSystem: ReadFileSystem, animationFrame?: boolean, skipReorder?: boolean, options?: { lod?: number }) {
+        // Animation frames load silently; everything else shows the progress
+        // dialog: bytes read while the file is streamed in (when the file
+        // system can count them), then the synchronous sort and GPU upload
+        // stages by name.
+        const showProgress = !animationFrame;
+        const header = `Loading ${filename.split('/').pop()}`;
+        const tracked = hasLoadProgress(fileSystem) ? fileSystem : null;
+        const progressStart = () => {
+            this.events.fire('progressStart', header);
+            this.events.fire('progressUpdate', { text: 'Reading', progress: 0 });
+        };
+        if (showProgress) {
+            progressStart();
+            if (tracked) {
+                // per file: multi-file formats read one file after another
+                tracked.onProgress = (loaded, total, name) => {
+                    const file = name.split('/').pop();
+                    this.events.fire('progressUpdate', total ?
+                        { text: `Reading ${file}`, progress: Math.min(100, 100 * loaded / total) } :
+                        { text: `Reading ${file} (${(loaded / 1048576).toFixed(0)} MB)`, progress: 0 });
+                };
+            }
         }
+
+        this.lastLodIndex = null;
 
         try {
             // ask the user which LOD to load when the file contains multiple,
-            // pausing the spinner while the popup is up. the editor loads a
-            // single LOD, so also recommend uploading the original file when
-            // publishing to superspl.at.
+            // dismissing the progress dialog while the popup is up. the editor
+            // loads a single LOD, so also recommend uploading the original file
+            // when publishing to superspl.at.
             const pickLod = async (lodCounts: readonly number[]) => {
-                this.events.fire('stopSpinner');
+                this.events.fire('progressEnd');
                 try {
                     const result = await this.events.invoke('showPopup', {
                         type: 'okcancel',
@@ -71,30 +93,36 @@ class AssetLoader {
                     this.lastLodIndex = chosen;
                     return chosen;
                 } finally {
-                    this.events.fire('startSpinner');
+                    progressStart();
                 }
             };
 
-            // an explicit lodIndex answers for the caller (a repeat load of a file
-            // the user has already picked a LOD for), so the popup stays away
-            const chooseLod = lodIndex !== undefined ?
-                () => Promise.resolve(lodIndex) :
-                (animationFrame ? undefined : pickLod);
-
             // Skip reordering for animation frames (speed) or when explicitly requested (already ordered)
-            const result = await loadSplatSource(filename, fileSystem, skipReorder || animationFrame, chooseLod);
+            const chooseLod = options ? (counts: readonly number[]) => {
+                const lod = options.lod ?? defaultLodIndex(counts);
+                if (!Number.isInteger(lod) || lod < 0 || lod >= counts.length) throw new Error('Requested LOD is unavailable');
+                this.lastLodIndex = lod;
+                return Promise.resolve(lod);
+            } : pickLod;
+            const result = await loadSplatSource(filename, fileSystem, skipReorder || animationFrame, animationFrame ? undefined : chooseLod);
             if (!result) {
                 // user cancelled LOD selection
                 return null;
             }
-            const { source, transform } = result;
-            const resource = await EditorSplatResource.create(this.app.graphicsDevice, source);
+            const { source, transform, reorder } = result;
+            const onPhase = showProgress ? (phase: 'sort' | 'upload') => {
+                this.events.fire('progressUpdate', { text: phase === 'sort' ? 'Sorting' : 'Uploading', progress: 100 });
+            } : undefined;
+            const resource = await EditorSplatResource.create(this.app.graphicsDevice, source, reorder, onPhase);
             const asset = this.createGSplatAsset(resource, filename);
 
             return { asset, rotation: transform.rotation };
         } finally {
-            if (!animationFrame) {
-                this.events.fire('stopSpinner');
+            if (tracked) {
+                tracked.onProgress = null;
+            }
+            if (showProgress) {
+                this.events.fire('progressEnd');
             }
         }
     }

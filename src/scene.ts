@@ -10,7 +10,8 @@ import {
     Layer,
     GraphicsDevice,
     MeshInstance,
-    Vec3
+    Vec3,
+    WireRenderer
 } from 'playcanvas';
 
 import { AssetLoader } from './asset-loader';
@@ -27,7 +28,6 @@ import { ProjectedSplatRenderer } from './projected-splat-renderer';
 import { SceneConfig } from './scene-config';
 import { SceneState } from './scene-state';
 import { Splat } from './splat';
-import { SplatCenters } from './splat-centers';
 import { Underlay } from './underlay';
 
 // sort meshInstances by the aabb corner furthest from the camera
@@ -69,8 +69,6 @@ const specialSort = (instances: MeshInstance[], numInstances: number, cameraPos:
     instances.sort((a, b) => distances.get(b) - distances.get(a));
 };
 
-type ResolveMode = 'none' | 'old' | 'new';
-
 // rendered frames of timing history kept for the performance overlay. The
 // overlay plots all of them but summarises only the most recent second's worth,
 // so this is graph history rather than the averaging window.
@@ -81,6 +79,7 @@ class Scene {
     config: SceneConfig;
     canvas: HTMLCanvasElement;
     app: PCApp;
+    wire: WireRenderer;
     worldLayer: Layer;
     splatLayer: Layer;
     overlayLayer: Layer;
@@ -107,7 +106,19 @@ class Scene {
     // the mode for the current frame; pendingResolve marks that a clean settled
     // frame is still owed after motion ends.
     movingRender = false;
+
+    // the overdraw diagnostic view (view.overdraw): the splat pass counts
+    // fragments per pixel and the final blit maps the count through a heat
+    // ramp. Always the sorted path - the count needs blending, not the
+    // stochastic depth test. It is a debug overlay, so it follows the camera's
+    // overlay flag: always in the viewport, in captures only with Show Debug
+    // Overlays, never for flood selection's offscreen read or 360 captures
+    overdrawRender = false;
     pendingResolve = false;
+    // anything but the camera changed this frame: the projected renderer's
+    // occlusion cull skips a frame whose previous depth no longer describes
+    // the scene (see ProjectedSplatRenderer.render)
+    editedRender = false;
 
     // 'auto' stochastic mode follows the timing of the last rendered sorted
     // frame: engaged (stochastic-during-movement) while that frame's GPU span
@@ -134,13 +145,15 @@ class Scene {
     // scene. Set by doc.ts, which forces a render once the load completes.
     suspendRender = false;
 
-    // devtools switch for the stochastic resolve, set from the console as
-    // `scene.resolveMode = 'old'`. 'new' is the masked quad+bilinear filter that
-    // ships; 'old' is the original aligned 2x2 block average, held across the quad
-    // and unmasked so it filters the grid and overlays too; 'none' shows the raw
-    // 1 spp samples unfiltered. Only affects stochastic frames, so pair it with
-    // Stochastic Alpha = Enabled to compare without having to keep dragging.
-    private _resolveMode: ResolveMode = 'new';
+    // > 0 while a pick batch owns the camera's colour and work buffers as its
+    // depth/id targets: a frame rendered between its passes and readbacks
+    // would overwrite them, and since the targets are rebuilt from onPreRender
+    // a held frame also keeps their dimensions fixed for the batch. Counted
+    // and released by Camera, which forces a render when the hold ends.
+    renderHold = 0;
+
+    // Console controls for stochastic rendering; setters request a repaint.
+    readonly stochastic;
 
     canvasResize: {width: number; height: number} | null = null;
     targetSize = {
@@ -173,7 +186,6 @@ class Scene {
     assetLoader: AssetLoader;
     camera: Camera;
     cameraPoseGizmos: CameraPoseGizmos;
-    splatCenters: SplatCenters;
     grid: Grid;
     outline: Outline;
     underlay: Underlay;
@@ -198,9 +210,50 @@ class Scene {
         this.canvas = canvas;
         this.commandQueue = commandQueue;
 
+        let resolve = true;
+        let warp = false;
+        let warpStrength = 1.5;
+        let undistort = true;
+        const repaint = () => {
+            this.forceRender = true;
+        };
+        this.stochastic = {
+            set resolve(value: boolean) {
+                resolve = value;
+                repaint();
+            },
+            get resolve() {
+                return resolve;
+            },
+            set warp(value: boolean) {
+                warp = value;
+                repaint();
+            },
+            get warp() {
+                return warp;
+            },
+            // Centre magnification: 1 = identity, 2 = 2x per axis.
+            set warpStrength(value: number) {
+                warpStrength = Math.max(1, Math.min(2, value));
+                repaint();
+            },
+            get warpStrength() {
+                return warpStrength;
+            },
+            // Disable to inspect the warped sampling layout before undistortion.
+            set undistort(value: boolean) {
+                undistort = value;
+                repaint();
+            },
+            get undistort() {
+                return undistort;
+            }
+        };
+
         // configure the playcanvas application. we render to an offscreen buffer so require
         // only the simplest of backbuffers.
         this.app = new PCApp(canvas, { graphicsDevice });
+        this.wire = new WireRenderer(this.app);
 
         // only render the scene when instructed
         this.app.autoRender = false;
@@ -297,6 +350,7 @@ class Scene {
 
         // get the world layer
         this.worldLayer = this.app.scene.layers.getLayerByName('World');
+        this.wire.layer = this.worldLayer;
 
         // splat layer - dedicated layer for splat rendering with MRT
         this.splatLayer = new Layer({
@@ -351,9 +405,6 @@ class Scene {
 
         this.cameraPoseGizmos = new CameraPoseGizmos();
         this.add(this.cameraPoseGizmos);
-
-        this.splatCenters = new SplatCenters();
-        this.add(this.splatCenters);
 
         this.grid = new Grid();
         this.add(this.grid);
@@ -469,14 +520,8 @@ class Scene {
         return this.app.graphicsDevice;
     }
 
-    set resolveMode(value: ResolveMode) {
-        this._resolveMode = value;
-        // repaint so setting this from the console takes effect immediately
-        this.forceRender = true;
-    }
-
-    get resolveMode() {
-        return this._resolveMode;
+    get warpedRender() {
+        return this.movingRender && this.stochastic.warp && this.stochastic.warpStrength > 1;
     }
 
     private forEachElement(action: (e: Element) => void) {
@@ -520,6 +565,9 @@ class Scene {
         // compare with previously serialized
         const changed = this.forceRender || profiling || all.size > 0;
         const interacting = this.forceInteracting || all.size > 0;
+        // per-gaussian edits reach here only through forceRender; layer moves,
+        // visibility and grade changes through the state diff
+        this.editedRender = this.forceRender || [...all].some(type => type !== ElementType.camera);
         const stochastic = this.events.invoke('view.stochastic');
 
         // 'movement' takes the fast no-sort stochastic path only while actively
@@ -534,7 +582,8 @@ class Scene {
         this.autoSampling = auto && this.frameTimings.gpuSupported;
         const adaptive = stochastic === 'movement' ||
             (auto && (this.autoEngaged || !this.frameTimings.gpuSupported));
-        this.movingRender = !this.lockedRenderMode &&
+        this.overdrawRender = this.camera.renderOverlays && !!this.events.invoke('view.overdraw');
+        this.movingRender = !this.lockedRenderMode && !this.overdrawRender &&
             (stochastic === 'enabled' || (adaptive && interacting));
 
         // timestamp queries cost a per-frame staging-buffer map and a resolve,
@@ -544,10 +593,12 @@ class Scene {
         // high-resolution capture span could otherwise land in _frameTime
         // after unlock and be mistaken for an editor frame (disabling also
         // zeroes the report, so nothing stale survives the capture).
+        // Stochastic frames are timed too: the renderer's contribution cull
+        // adapts to their span (see onGpuReport).
         this.app.graphicsDevice.gpuProfiler.enabled =
-            (profiling || this.autoSampling) && !this.lockedRenderMode;
+            (profiling || this.autoSampling || this.movingRender) && !this.lockedRenderMode;
 
-        if (this.suspendRender) {
+        if (this.suspendRender || this.renderHold > 0) {
             this.app.renderNextFrame = false;
         } else if (this.lockedRenderMode) {
             this.app.renderNextFrame = this.lockedRender;
@@ -599,24 +650,20 @@ class Scene {
                     const splat = e as Splat;
 
                     const local = splat.localBound;
-                    this.app.drawWireAlignedBox(
-                        local.getMin(),
-                        local.getMax(),
-                        Color.RED,
-                        true,
-                        undefined,
-                        splat.entity.getWorldTransform());
+                    this.wire.color = Color.RED;
+                    this.wire.transform = splat.entity.getWorldTransform();
+                    this.wire.boxMinMax(local.getMin(), local.getMax());
 
                     const world = splat.worldBound;
-                    this.app.drawWireAlignedBox(
-                        world.getMin(),
-                        world.getMax(),
-                        Color.GREEN);
+                    this.wire.color = Color.GREEN;
+                    this.wire.transform = null;
+                    this.wire.boxMinMax(world.getMin(), world.getMax());
                 }
             });
 
             // draw scene bound
-            this.app.drawWireAlignedBox(this.bound.getMin(), this.bound.getMax(), Color.BLUE);
+            this.wire.color = Color.BLUE;
+            this.wire.boxMinMax(this.bound.getMin(), this.bound.getMax());
         }
     }
 
@@ -651,8 +698,9 @@ class Scene {
 
     // handle an asynchronously resolved gpu timing report. Only sorted frames
     // measure the cost 'auto' mode trades away, so only their spans update the
-    // engage decision; stochastic-frame reports are ignored. timings is null
-    // when the backend discards a frame (e.g. a disjoint timer event).
+    // engage decision; stochastic-frame spans drive the renderer's motion cull
+    // instead. timings is null when the backend discards a frame (e.g. a
+    // disjoint timer event).
     private onGpuReport(renderVersion: number, timings: number[] | null, frameTime?: number) {
         const moving = this.frameModes.get(renderVersion);
 
@@ -664,8 +712,13 @@ class Scene {
             }
         });
 
-        if (moving === false && timings && timings.length > 0) {
-            const gpuTime = frameTime ?? timings.reduce((sum, t) => sum + t, 0);
+        if (moving === undefined || !timings || timings.length === 0) {
+            return;
+        }
+        const gpuTime = frameTime ?? timings.reduce((sum, t) => sum + t, 0);
+        if (moving) {
+            this.projectedSplatRenderer.reportStochasticFrame(gpuTime);
+        } else {
             this.autoEngaged = gpuTime > this.autoEngageMs;
         }
     }

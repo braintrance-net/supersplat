@@ -2,6 +2,7 @@ import { Button, Container, Element, Label, SelectInput } from '@playcanvas/pcui
 
 import { Events } from '../events';
 import { AnnotationsPanel } from './annotations-panel';
+import { ClipboardMenu } from './clipboard-menu';
 import { ColorPanel } from './color-panel';
 import { i18n } from './localization';
 import { SplatList } from './splat-list';
@@ -17,7 +18,7 @@ const createSvg = (svgString: string) => {
 };
 
 class RenderSubPanel extends Container {
-    constructor(events: Events, tooltips: Tooltips, args = {}) {
+    constructor(events: Events, tooltips: Tooltips, clipboardMenu: ClipboardMenu, args = {}) {
         args = {
             ...args,
             id: 'render-sub-panel',
@@ -140,28 +141,10 @@ class RenderSubPanel extends Container {
         });
         splatListContainer.append(splatList);
 
-        const transformHeader = new Container({
-            class: 'panel-header'
-        });
-
-        const transformIcon = new Label({
-            text: '\uE111',
-            class: 'panel-header-icon'
-        });
-
-        const transformLabel = new Label({
-            class: 'panel-header-label'
-        });
-        i18n.bindText(transformLabel, 'panel.scene.transform');
-
-        transformHeader.append(transformIcon);
-        transformHeader.append(transformLabel);
-
         editContent.append(sceneHeader);
         editContent.append(splatListContainer);
-        editContent.append(transformHeader);
-        editContent.append(new Transform(events));
-        editContent.append(new ColorPanel(events));
+        editContent.append(new Transform(events, clipboardMenu));
+        editContent.append(new ColorPanel(events, clipboardMenu));
 
         // Reveal Effect section
         const revealHeader = new Container({

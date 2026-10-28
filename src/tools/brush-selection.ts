@@ -84,6 +84,14 @@ class BrushSelection {
                 prev.x = e.offsetX;
                 prev.y = e.offsetY;
 
+                // a click has no pointermove, and the zero-length stroke that
+                // update() draws for it leaves no mark in safari, so paint the
+                // starting dot explicitly
+                context.beginPath();
+                context.fillStyle = '#f60';
+                context.arc(prev.x, prev.y, radius, 0, Math.PI * 2);
+                context.fill();
+
                 update(e);
             }
         };
@@ -98,7 +106,11 @@ class BrushSelection {
         };
 
         const dragEnd = () => {
-            parent.releasePointerCapture(dragId);
+            // a touch that has lifted, or was cancelled, no longer holds the
+            // capture and releasing it throws
+            if (parent.hasPointerCapture(dragId)) {
+                parent.releasePointerCapture(dragId);
+            }
             dragId = undefined;
             canvas.style.display = 'none';
         };
@@ -110,8 +122,10 @@ class BrushSelection {
 
                 dragEnd();
 
-                // block new strokes until the async selection has consumed the
-                // shared mask canvas
+                // the selection snapshots the canvas synchronously when
+                // invoked, so busy is UX policy rather than correctness: it
+                // keeps strokes from piling up invisibly behind a slow
+                // selection (pointerdown swallows them)
                 mask.busy = true;
                 try {
                     await events.invoke(
@@ -123,6 +137,14 @@ class BrushSelection {
                 } finally {
                     mask.busy = false;
                 }
+            }
+        };
+
+        // a cancelled touch gets no pointerup, and a drag left open blocks
+        // every later one
+        const pointercancel = (e: PointerEvent) => {
+            if (e.pointerId === dragId) {
+                dragEnd();
             }
         };
 
@@ -144,6 +166,7 @@ class BrushSelection {
             parent.addEventListener('pointerdown', pointerdown);
             parent.addEventListener('pointermove', pointermove);
             parent.addEventListener('pointerup', pointerup);
+            parent.addEventListener('pointercancel', pointercancel);
             parent.addEventListener('wheel', wheel);
         };
 
@@ -157,6 +180,7 @@ class BrushSelection {
             parent.removeEventListener('pointerdown', pointerdown);
             parent.removeEventListener('pointermove', pointermove);
             parent.removeEventListener('pointerup', pointerup);
+            parent.removeEventListener('pointercancel', pointercancel);
             parent.removeEventListener('wheel', wheel);
         };
 

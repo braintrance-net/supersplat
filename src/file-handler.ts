@@ -1,39 +1,25 @@
 import { path, Quat, Vec3 } from 'playcanvas';
 
 import type { Pose } from './camera-poses';
-import { CreateDropHandler } from './drop-handler';
+import { CreateDropHandler, resolveHandleFiles } from './drop-handler';
+import { checkCancelled, CommandOptions } from './editor-command';
 import { ElementType } from './element';
 import { Events } from './events';
-import { BrowserFileSystem, MappedReadFileSystem } from './io';
+import { buildExportOptions, ExportChoices, ExportDialogResult, ExportType, SceneExportOptions } from './export-options';
+import { ExportSettings, loadExportSettings, saveExportSettings } from './export-settings';
+import { BlobReadSource, BrowserFileSystem, MappedReadFileSystem, pickWriteTarget, sourcesOf, WriteTarget } from './io';
+import { recentImports, RecentImport } from './recent-files';
 import { Scene } from './scene';
 import { Splat } from './splat';
-import { SerializeSettings, serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, ViewerExportSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
+import { serializeSog, serializeSpz, serializeViewer, SogSettings, SpzSettings, WebGPUUnavailableError, writeSplatFile } from './splat-serialize';
 import { i18n } from './ui/localization';
 
 // ts compiler and vscode find this type, but eslint does not
 type FilePickerAcceptType = unknown;
 
-type ExportType = 'ply' | 'splat' | 'sog' | 'spz' | 'viewer';
+type FileOperationOptions = CommandOptions & { throwOnError?: boolean, attach?: boolean, splats?: Splat[], lod?: number };
 
 type FileType = 'ply' | 'compressedPly' | 'splat' | 'sog' | 'spz' | 'htmlViewer' | 'packageViewer';
-
-interface SceneExportOptions {
-    filename: string;
-    splatIdx: 'all' | number;
-    serializeSettings: SerializeSettings;
-
-    // ply
-    compressedPly?: boolean;
-
-    // sog
-    sogIterations?: number;
-
-    // spz
-    spzVersion?: 3 | 4;
-
-    // viewer
-    viewerExportSettings?: ViewerExportSettings;
-}
 
 const filePickerTypes: { [key: string]: FilePickerAcceptType } = {
     'ply': {
@@ -147,11 +133,42 @@ const isLcc = (filenames: string[]) => {
     return count('.lcc') === 1 || count('.lcc2') === 1;
 };
 
+// The file that names a model: SOG meta, LCC meta, else the first (single file case).
+const findMainIndex = (filenames: string[]) => {
+    const isMeta = (f: string) => f === 'meta.json' || f === 'lod-meta.json';
+    const isLccMeta = (f: string) => f.endsWith('.lcc') || f.endsWith('.lcc2');
+    if (filenames.some(isMeta)) return filenames.findIndex(isMeta);
+    if (filenames.some(isLccMeta)) return filenames.findIndex(isLccMeta);
+    return 0;
+};
+
 type ImportFile = {
     filename: string;
     url?: string;
     contents?: File;
     handle?: FileSystemFileHandle;
+    // the picked or dropped item this file came from, when it is an enclosing folder
+    root?: FileSystemHandle;
+};
+
+// Remember what the user picked, dropped or launched for Import Recent. Files
+// from one dropped folder share a root and count once; several files picked
+// together that make up one model (unbundled SOG, LCC, PLY sequence) count once.
+// Documents are tracked by Open Recent instead.
+const recordImports = (files: ImportFile[]) => {
+    const roots = Array.from(new Set(files.map(f => f.root ?? f.handle)));
+    if (roots.length === 0 || roots.some(root => !root)) {
+        // url loads and document layers have no handles
+        return;
+    }
+
+    const filenames = files.map(f => f.filename.toLowerCase());
+    if (roots.length > 1 && (isPlySequence(filenames) || isSog(filenames) || isLcc(filenames))) {
+        recentImports.add({ name: files[findMainIndex(filenames)].filename, handles: roots });
+    } else {
+        roots.filter(root => !root.name.toLowerCase().endsWith('.ssproj'))
+        .forEach(root => recentImports.add({ name: root.name, handles: [root] }));
+    }
 };
 
 const vec = new Vec3();
@@ -288,13 +305,14 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 fileSystem,
                 false,
                 false,
-                scene.assetLoader.lastLodIndex ?? undefined
+                scene.assetLoader.lastLodIndex === null ? undefined : { lod: scene.assetLoader.lastLodIndex }
             );
             if (!skybox) {
                 return null;
             }
             // name and lock only after the element joins the scene: both setters
             // notify through scene.events, which isn't wired up until then
+            skybox.resource.fileSources = fileSystem.sources;
             await scene.add(skybox);
             skybox.name = 'Skybox';
             skybox.locked = true;
@@ -308,27 +326,18 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
     };
 
     // import splat model(s) - handles single files, SOG, and LCC formats
-    const importSplatModel = async (files: ImportFile[], animationFrame: boolean) => {
+    const importSplatModel = async (files: ImportFile[], animationFrame: boolean, operation?: FileOperationOptions) => {
         try {
             const filenames = files.map(f => f.filename.toLowerCase());
 
-            // Determine the main file based on format
-            let mainIndex: number;
-            if (filenames.some(f => f === 'meta.json' || f === 'lod-meta.json')) {
-                mainIndex = filenames.findIndex(f => f === 'meta.json' || f === 'lod-meta.json');
-            } else if (filenames.some(f => f.endsWith('.lcc') || f.endsWith('.lcc2'))) {
-                mainIndex = filenames.findIndex(f => f.endsWith('.lcc') || f.endsWith('.lcc2'));
-            } else {
-                mainIndex = 0;  // Single file case
-            }
-
-            const mainFile = files[mainIndex];
+            const mainFile = files[findMainIndex(filenames)];
             const baseUrl = mainFile.url ? new URL('.', new URL(mainFile.url, window.location.href)).href : undefined;
 
             // Create file system with all local files, falling back to URL loading
             const fileSystem = new MappedReadFileSystem(baseUrl);
             files.forEach((f) => {
-                if (f.contents) fileSystem.addFile(f.filename, f.contents);
+                if (f.contents) fileSystem.addFile(f.filename, f.contents, f.handle ?? null);
+                else if (operation && f.url) fileSystem.addUrl(f.filename, f.url);
             });
 
             // Multi-file container formats must load by their relative name so the
@@ -338,20 +347,25 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             const isContainer = lowerMainFilename === 'meta.json' || lowerMainFilename === 'lod-meta.json' || lowerMainFilename.endsWith('.lcc') || lowerMainFilename.endsWith('.lcc2');
 
             // For URL-only single file, use full URL as filename
-            const filename = (files.length === 1 && !mainFile.contents && mainFile.url && !isContainer) ?
+            const filename = (!operation && files.length === 1 && !mainFile.contents && mainFile.url && !isContainer) ?
                 mainFile.url :
                 mainFile.filename;
 
-            const model = await scene.assetLoader.load(filename, fileSystem, animationFrame);
+            const model = await scene.assetLoader.load(filename, fileSystem, animationFrame, false, operation ? { lod: operation.lod } : undefined);
             if (!model) {
                 // user cancelled the load
                 return null;
             }
-            await scene.add(model);
+            model.resource.fileSources = fileSystem.sources;
+            if (operation?.signal?.aborted) {
+                model.destroy();
+                checkCancelled(operation);
+            }
+            if (operation?.attach !== false) await scene.add(model);
 
             // animation frames stream through this path per frame, and a document
             // load restores whatever layers were saved, so neither gets a backdrop
-            if (!animationFrame && events.invoke('import.createSkybox')) {
+            if (operation?.attach !== false && !animationFrame && events.invoke('import.createSkybox')) {
                 const skybox = await addSkyboxLayer(filename, fileSystem, scene);
                 if (skybox) {
                     // slave the backdrop's transform to the layer it backs
@@ -369,13 +383,14 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
             return model;
         } catch (error) {
+            if (operation?.throwOnError) throw error;
             const displayName = files[0]?.filename ?? 'unknown';
             await showLoadError(error.message ?? error, displayName);
         }
     };
 
     // figure out what the set of files are (ply sequence, document, sog set, ply) and then import them
-    const importFiles = async (files: ImportFile[], animationFrame = false) => {
+    const importFiles = async (files: ImportFile[], animationFrame = false, operation?: FileOperationOptions) => {
         const filenames = files.map(f => f.filename.toLowerCase());
 
         const result: Splat[] = [];
@@ -385,13 +400,14 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             events.fire('sequence.setPlyFrames', files.map(f => f.contents));
             events.fire('timeline.frame', 0);
         } else if (isSog(filenames) || isLcc(filenames)) {
-            const model = await importSplatModel(files, animationFrame);
+            const model = await importSplatModel(files, animationFrame, operation);
             if (model) result.push(model);
         } else {
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
                 if (['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz'].every(ext => !filename.endsWith(ext))) {
+                    if (operation?.throwOnError) throw new Error(`Unrecognized file type '${filename}'`);
                     await showLoadError('Unrecognized file type', filename);
                     return;
                 }
@@ -409,7 +425,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     await events.invoke('doc.load', contents, files[i].handle);
                 } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz'].some(ext => filename.endsWith(ext))) {
                     // load gaussian splat model
-                    const model = await importSplatModel([files[i]], animationFrame);
+                    const model = await importSplatModel([files[i]], animationFrame, operation);
                     if (model) result.push(model);
                 } else if (filename.endsWith('images.txt')) {
                     // load colmap frames
@@ -421,11 +437,15 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             }
         }
 
+        if (!animationFrame && operation?.attach !== false) {
+            recordImports(files);
+        }
+
         return result;
     };
 
-    events.function('import', (files: ImportFile[], animationFrame = false) => {
-        return importFiles(files, animationFrame);
+    events.function('import', (files: ImportFile[], animationFrame = false, operation?: FileOperationOptions) => {
+        return importFiles(files, animationFrame, operation);
     });
 
     // create a file selector element as fallback when showOpenFilePicker isn't available
@@ -458,7 +478,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             return {
                 filename: e.filename,
                 contents: e.file,
-                handle: e.handle
+                handle: e.handle,
+                root: e.root
             };
         }));
     });
@@ -480,6 +501,37 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
 
     events.function('scene.empty', () => {
         return getSplats().length === 0;
+    });
+
+    // Include the document archive as well as imported files, including hidden layers.
+    events.function('scene.sourcesOf', (handle: FileSystemFileHandle) => {
+        const splats = scene.getElementsByType(ElementType.splat) as Splat[];
+        return sourcesOf(splats.flatMap(splat => splat.resource.fileSources).concat(events.invoke('doc.fileSources')), handle);
+    });
+
+    // Shared by document and splat writes. The document may exclude
+    // its own archive source because an in-place save rebinds it afterwards.
+    events.function('scene.pickWriteTarget', async (
+        location: FileSystemDirectoryHandle,
+        filename: string,
+        confirm: (handle: FileSystemFileHandle) => Promise<boolean>,
+        exclude?: BlobReadSource
+    ) => {
+        const target = await pickWriteTarget(location, filename);
+        if (target.exists) {
+            const sources = (await events.invoke('scene.sourcesOf', target.handle) as BlobReadSource[])
+            .filter(source => source !== exclude);
+            if (sources.length > 0) {
+                await events.invoke('showPopup', {
+                    type: 'error',
+                    header: i18n.t('popup.error'),
+                    message: i18n.t('popup.overwrite-source')
+                });
+                return null;
+            }
+            if (!await confirm(target.handle)) return null;
+        }
+        return target;
     });
 
     events.function('scene.import', async () => {
@@ -508,7 +560,8 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 for (let i = 0; i < handles.length; i++) {
                     files.push({
                         filename: handles[i].name,
-                        contents: await handles[i].getFile()
+                        contents: await handles[i].getFile(),
+                        handle: handles[i]
                     });
                 }
 
@@ -518,6 +571,32 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 if (error.name !== 'AbortError') {
                     console.error(error);
                 }
+            }
+        }
+    });
+
+    // import a recent entry again, restoring read access to its items first
+    events.function('scene.importRecent', async (entry: RecentImport) => {
+        try {
+            for (const handle of entry.handles) {
+                if (await handle.queryPermission({ mode: 'read' }) !== 'granted' &&
+                    await handle.requestPermission({ mode: 'read' }) !== 'granted') {
+                    return;
+                }
+            }
+
+            const files = (await resolveHandleFiles(entry.handles)).map((f) => {
+                return {
+                    filename: f.filename,
+                    contents: f.file,
+                    handle: f.handle,
+                    root: f.root
+                };
+            });
+            await importFiles(files);
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                await showLoadError(error.message ?? error, entry.name);
             }
         }
     });
@@ -550,18 +629,84 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         }
     });
 
-    events.function('scene.export', async (exportType: ExportType) => {
-        const splats = getSplats();
+    let exportSettings: ExportSettings = {};
+    const exportSettingsReady = loadExportSettings().then((settings) => {
+        exportSettings = settings;
+    }).catch((error) => {
+        console.warn('Export settings could not be restored', error);
+    });
 
-        const hasFilePicker = !!window.showSaveFilePicker;
+    const persistExportSettings = () => saveExportSettings(exportSettings).catch((error) => {
+        console.warn('Export settings could not be saved', error);
+    });
 
-        // show viewer export options
-        const options = await events.invoke('show.exportPopup', exportType, splats.map(s => s.name), !hasFilePicker) as SceneExportOptions;
+    events.function('scene.pickExportDirectory', async (reuse = false) => {
+        await exportSettingsReady;
+        try {
+            if (reuse && exportSettings.directory) {
+                await exportSettings.directory.requestPermission({ mode: 'readwrite' });
+                return await events.invoke('scene.getExportDirectory');
+            }
 
-        // return if user cancelled
-        if (!options) {
-            return;
+            exportSettings.directory = await window.showDirectoryPicker({
+                id: 'SuperSplatFileExport',
+                mode: 'readwrite',
+                startIn: exportSettings.directory
+            });
+            await persistExportSettings();
+            return exportSettings.directory;
+        } catch (error) {
+            if (error.name !== 'AbortError') {
+                await events.invoke('showPopup', {
+                    type: 'error',
+                    header: i18n.t('popup.error'),
+                    message: `${error.message ?? error}`
+                });
+            }
+            return null;
         }
+    });
+
+    events.function('scene.getExportDirectory', async () => {
+        await exportSettingsReady;
+        let directory = exportSettings.directory;
+        if (directory) {
+            try {
+                const permission = await directory.queryPermission({ mode: 'readwrite' });
+                // Keep the handle so the folder button can restore access.
+                if (permission === 'prompt') return undefined;
+                if (permission !== 'granted') {
+                    directory = undefined;
+                } else {
+                    // A saved handle can outlive the folder it refers to.
+                    await directory.values().next();
+                }
+            } catch {
+                directory = undefined;
+            }
+            if (!directory) {
+                exportSettings.directory = undefined;
+                await persistExportSettings();
+            }
+        }
+        return directory;
+    });
+
+    const showExportError = async (error: any) => {
+        if (error.name !== 'AbortError') {
+            console.error(error);
+            await events.invoke('showPopup', {
+                type: 'error',
+                header: i18n.t('popup.error'),
+                message: `${error.message ?? error}`
+            });
+        }
+    };
+
+    // Write the scene with the export dialog's choices: to the picked file or,
+    // without the File System Access API, as a download. Returns true when written.
+    const exportScene = async (exportType: ExportType, choices: ExportChoices, fileTarget?: WriteTarget) => {
+        const options = buildExportOptions(events, exportType, choices);
 
         const fileType: FileType =
             (exportType === 'viewer') ? (options.viewerExportSettings!.type === 'zip' ? 'packageViewer' : 'htmlViewer') :
@@ -569,25 +714,86 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     (exportType === 'sog') ? 'sog' :
                         (exportType === 'spz') ? 'spz' : 'splat';
 
-        if (hasFilePicker) {
+        if (!fileTarget) {
+            return await events.invoke('scene.write', fileType, options) as boolean;
+        }
+
+        let written = false;
+        try {
             try {
-                const fileHandle = await window.showSaveFilePicker({
-                    id: 'SuperSplatFileExport',
-                    types: [filePickerTypes[fileType]],
-                    suggestedName: options.filename
-                });
-                await events.invoke('scene.write', fileType, options, await fileHandle.createWritable());
-            } catch (error) {
-                if (error.name !== 'AbortError') {
-                    console.error(error);
-                }
+                written = await events.invoke('scene.write', fileType, options, await fileTarget.handle.createWritable());
+            } finally {
+                if (!written) await fileTarget.discard?.();
             }
-        } else {
-            await events.invoke('scene.write', fileType, options);
+        } catch (error) {
+            await showExportError(error);
+        }
+        return written;
+    };
+
+    // the last successful export, so it can be repeated with the same choices
+    let lastExport: { exportType: ExportType, choices: ExportChoices, directory?: FileSystemDirectoryHandle } = null;
+
+    const setLastExport = (value: typeof lastExport) => {
+        lastExport = value;
+        events.fire('scene.lastExport', lastExport);
+    };
+
+    events.on('scene.clear', () => {
+        setLastExport(null);
+    });
+
+    // One export at a time: the progress overlays don't take focus, so the
+    // re-export shortcut could otherwise start a second write mid-export.
+    let exporting = false;
+
+    events.function('scene.export', async (exportType: ExportType) => {
+        if (exporting) return;
+        exporting = true;
+        try {
+            const splats = getSplats();
+            const hasFilePicker = !!window.showDirectoryPicker;
+
+            await exportSettingsReady;
+            const directory = hasFilePicker ? await events.invoke('scene.getExportDirectory') : undefined;
+
+            const result = await events.invoke('show.exportPopup', exportType, splats.map(s => s.name), { directory }) as ExportDialogResult;
+
+            // return if user cancelled
+            if (!result) {
+                return;
+            }
+
+            const { directory: exportDirectory, fileTarget, ...choices } = result;
+            if (await exportScene(exportType, choices, fileTarget)) {
+                setLastExport({ exportType, choices, directory: exportDirectory });
+            }
+        } finally {
+            exporting = false;
         }
     });
 
-    events.function('scene.write', async (fileType: FileType, options: SceneExportOptions, stream?: FileSystemWritableFileStream) => {
+    // Repeat the last export against the current scene, overwriting its file.
+    // A file the scene still reads from is refused as usual.
+    events.on('scene.reexport', async () => {
+        if (exporting || !lastExport || getSplats().length === 0) return;
+        exporting = true;
+        try {
+            const { exportType, choices, directory } = lastExport;
+            let fileTarget: WriteTarget;
+            if (directory) {
+                fileTarget = await events.invoke('scene.pickWriteTarget', directory, choices.filename, () => Promise.resolve(true));
+                if (!fileTarget) return;
+            }
+            await exportScene(exportType, choices, fileTarget);
+        } catch (error) {
+            await showExportError(error);
+        } finally {
+            exporting = false;
+        }
+    });
+
+    events.function('scene.write', async (fileType: FileType, options: SceneExportOptions, stream?: FileSystemWritableFileStream, operation?: FileOperationOptions) => {
         // SOG, SPZ and viewer exports have their own progress UI, other formats use spinner
         const useSpinner = fileType !== 'sog' && fileType !== 'spz' && fileType !== 'htmlViewer' && fileType !== 'packageViewer';
 
@@ -604,9 +810,10 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             const { filename, splatIdx, serializeSettings, viewerExportSettings } = options;
 
             // Create FileSystem for output
-            const fs = new BrowserFileSystem(filename, stream);
+            const fs = new BrowserFileSystem(filename, stream, operation?.signal);
 
-            const splats = splatIdx === 'all' ? getSplats() : [getSplats()[splatIdx]];
+            checkCancelled(operation);
+            const splats = operation?.splats ?? (splatIdx === 'all' ? getSplats() : [getSplats()[splatIdx]]);
 
             switch (fileType) {
                 case 'ply':
@@ -647,8 +854,11 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     await serializeViewer(splats, serializeSettings, { ...viewerExportSettings!, events }, fs);
                     break;
             }
-
+            return true;
         } catch (error) {
+            // Release the writable stream before a newly created target is removed.
+            await stream?.abort().catch(() => { /* the writer may already have aborted */ });
+            if (operation?.throwOnError) throw error;
             if (error instanceof WebGPUUnavailableError) {
                 await events.invoke('showPopup', {
                     type: 'error',
@@ -663,6 +873,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     message: `${message} while saving file`
                 });
             }
+            return false;
         } finally {
             if (useSpinner) {
                 events.fire('stopSpinner');
@@ -671,4 +882,5 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
     });
 };
 
-export { initFileHandler, ExportType, SceneExportOptions };
+export { initFileHandler };
+export type { FileType, FileOperationOptions };

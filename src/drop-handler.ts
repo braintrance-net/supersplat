@@ -4,11 +4,14 @@ class DroppedFile {
     filename: string;
     file: File;
     handle?: FileSystemFileHandle;
+    // the dropped item this file came from: the file itself or an enclosing folder
+    root?: FileSystemHandle;
 
-    constructor(filename: string, file: File, handle?: FileSystemFileHandle) {
+    constructor(filename: string, file: File, handle?: FileSystemFileHandle, root?: FileSystemHandle) {
         this.filename = filename;
         this.file = file;
         this.handle = handle;
+        this.root = root;
     }
 }
 
@@ -55,6 +58,23 @@ const resolveDirectories = (entries: Array<FileSystemEntry>): Promise<Array<File
     });
 };
 
+// collect the files under a dropped handle, named by their path relative to the
+// drop (so a dropped folder 'foo' yields 'foo/a.ply', matching resolveDirectories)
+const resolveHandles = async (handle: FileSystemHandle, prefix: string, result: Array<DroppedFile>, root: FileSystemHandle) => {
+    if (handle.name === '.DS_Store') {
+        return;
+    }
+
+    if (handle.kind === 'file') {
+        const fileHandle = handle as FileSystemFileHandle;
+        result.push(new DroppedFile(prefix + handle.name, await fileHandle.getFile(), fileHandle, root));
+    } else {
+        for await (const child of (handle as FileSystemDirectoryHandle).values()) {
+            await resolveHandles(child, `${prefix}${handle.name}${path.delimiter}`, result, root);
+        }
+    }
+};
+
 const removeCommonPrefix = (urls: Array<DroppedFile>) => {
     const split = (pathname: string) => {
         const parts = pathname.split(path.delimiter);
@@ -79,6 +99,20 @@ const removeCommonPrefix = (urls: Array<DroppedFile>) => {
     }
 };
 
+// expand picked or dropped handles into files, descending into folders
+const resolveHandleFiles = async (handles: FileSystemHandle[]) => {
+    const files: Array<DroppedFile> = [];
+    for (const handle of handles) {
+        await resolveHandles(handle, '', files, handle);
+    }
+
+    if (files.length > 1) {
+        removeCommonPrefix(files);
+    }
+
+    return files;
+};
+
 // configure drag and drop
 const CreateDropHandler = (target: HTMLElement, dropHandler: DropHandlerFunc) => {
 
@@ -99,19 +133,15 @@ const CreateDropHandler = (target: HTMLElement, dropHandler: DropHandlerFunc) =>
 
         const items = Array.from(ev.dataTransfer.items);
 
-        // handle single file drops so documents can propagate the filesystemfilehandle
-        if (items.length === 1) {
-            const item = items[0];
-            if (item.getAsFileSystemHandle && item.webkitGetAsEntry()?.isFile) {
-                const handle = await item.getAsFileSystemHandle();
-                if (handle?.kind === 'file') {
-                    const fileHandle = handle as FileSystemFileHandle;
-                    const file = await fileHandle.getFile();
-                    const droppedFile = new DroppedFile(file.name, file, fileHandle);
-                    dropHandler([droppedFile], ev.shiftKey);
-                    return;
-                }
-            }
+        // Prefer file system handles where the browser provides them (Chromium):
+        // a document keeps its handle for later saves, and every imported file
+        // keeps one so a save can recognise a file the scene still reads from.
+        // The handles must be requested before the handler first yields, after
+        // which the items are no longer readable.
+        if (items.every(item => item.getAsFileSystemHandle)) {
+            const handles = await Promise.all(items.map(item => item.getAsFileSystemHandle()));
+            dropHandler(await resolveHandleFiles(handles.filter(handle => handle)), ev.shiftKey);
+            return;
         }
 
         // Map to entries first
@@ -146,4 +176,4 @@ const CreateDropHandler = (target: HTMLElement, dropHandler: DropHandlerFunc) =>
     target.addEventListener('drop', drop, true);
 };
 
-export { CreateDropHandler };
+export { CreateDropHandler, resolveHandleFiles };
