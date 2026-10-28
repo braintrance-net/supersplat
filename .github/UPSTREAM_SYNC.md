@@ -43,7 +43,7 @@ Each step is its own job, so that nothing the merged tree runs can reach a key o
 
 | Job | Holds | Runs the tree's code |
 | --- | --- | --- |
-| `resolve`, `fix`, `review` | `OPENAI_API_KEY` | no (`npm ci --ignore-scripts` only) |
+| `resolve`, `fix`, `review` | `CODEX_AUTH_JSON` | no (`npm ci --ignore-scripts` only) |
 | `check`, `recheck` (`sync-check.yml`) | nothing; read-only token | yes: install, build, lint, smoke |
 | `land` | write token | no; recomputes the scope check and fork guard itself |
 
@@ -57,9 +57,29 @@ Known limits, accepted:
   and are unaffected.
 - If upstream moves a file that `fork-markers.json` names, the guard fails and the sync is held for a
   human, who should move the marker entry.
+- The agent signs in with a ChatGPT login, not an API key, so the token sits in a file its own
+  commands can read; a prompt injection in upstream's code could have it copy the token out.
+  `leak-check.sh` fails the job, before anything is committed or uploaded, if the token appears
+  verbatim in the work tree or the agent's output; an encoded copy would get past it.
+
 The checks and prompts are read from the workflow's own commit on `main`, never from the tree being
-merged. The agent needs the `OPENAI_API_KEY` repository secret; without it a conflicted sync is held
+merged. The agent needs the `CODEX_AUTH_JSON` repository secret; without it a conflicted sync is held
 for a human.
+
+### The ChatGPT login secret
+
+Use a login of its own, so CI refreshing its token never signs out your own Codex:
+
+```bash
+dir="$(mktemp -d)"
+# `command` skips any shell wrapper that pins CODEX_HOME; the file store keeps it out of the keychain.
+CODEX_HOME="$dir" command codex -c 'cli_auth_credentials_store="file"' login
+GH_TOKEN=$(gh auth token -u mechbt) gh secret set CODEX_AUTH_JSON --repo braintrance-net/supersplat < "$dir/auth.json"
+rm -rf "$dir"
+```
+
+CI does not save the token Codex refreshes, so the stored copy can stop working. When the agent steps
+fail with a login error, run the block again.
 
 When the fork gains a feature, add its anchor strings to `.github/sync/fork-markers.json` and, if it
 renders something, a selector to `smoke.mjs`.

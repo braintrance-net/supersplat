@@ -1,10 +1,9 @@
 # See .github/UPSTREAM_SYNC.md for the full sync process, branch model, and verification steps.
 # NOTE: scheduled runs only fire from the workflow file on the DEFAULT branch (main).
 #
-# Trust layout: jobs that hold the OpenAI key (resolve, fix, review) never run the merged tree's
+# Trust layout: jobs that hold the ChatGPT login (resolve, fix, review) never run the merged tree's
 # install scripts or build, the job that does (sync-check.yml) has no secrets, and the only job with
-# a write token (land) runs nothing from the tree and decides from job outputs, not files. Each
-# Codex call has its own job because codex-action's drop-sudo cannot run twice in one.
+# a write token (land) runs nothing from the tree and decides from job outputs, not files.
 name: Sync with Upstream
 permissions:
   contents: read
@@ -142,14 +141,15 @@ jobs:
         id: agent
         if: steps.merge.outputs.conflicts != ''
         continue-on-error: true
-        uses: openai/codex-action@83eeca45b831921e73d1f6a7955efccc568fe4e8 # v1.13
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: ${{ github.workspace }}/out/resolve-prompt.md
-          output-file: ${{ github.workspace }}/out/resolve.md
-          working-directory: work
-          sandbox: workspace-write
-          effort: high
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bash "$SYNC/codex.sh" work "$OUT/resolve-prompt.md" "$OUT/resolve.md" workspace-write
+
+      - name: Check the login did not leak
+        if: steps.merge.outputs.conflicts != ''
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bash "$SYNC/leak-check.sh" work "$OUT"
 
       - name: Commit the merge
         id: commit
@@ -246,14 +246,14 @@ jobs:
           envsubst '$BASE $FORK $UPSTREAM $LOG' < "$SYNC/fix-prompt.md" > "$OUT/fix-prompt.md"
 
       - name: Fix what the checks found
-        uses: openai/codex-action@83eeca45b831921e73d1f6a7955efccc568fe4e8 # v1.13
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: ${{ github.workspace }}/out/fix-prompt.md
-          output-file: ${{ github.workspace }}/out/fix.md
-          working-directory: work
-          sandbox: workspace-write
-          effort: high
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bash "$SYNC/codex.sh" work "$OUT/fix-prompt.md" "$OUT/fix.md" workspace-write
+
+      - name: Check the login did not leak
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bash "$SYNC/leak-check.sh" work "$OUT"
 
       - name: Commit the fix
         id: commit
@@ -355,15 +355,15 @@ jobs:
         id: agent
         if: steps.guard.outcome == 'success'
         continue-on-error: true
-        uses: openai/codex-action@83eeca45b831921e73d1f6a7955efccc568fe4e8 # v1.13
-        with:
-          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
-          prompt-file: ${{ github.workspace }}/out/review-prompt.md
-          output-file: ${{ github.workspace }}/out/review.json
-          output-schema-file: ${{ github.workspace }}/tools/.github/sync/review-schema.json
-          working-directory: work
-          sandbox: read-only
-          effort: high
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bash "$SYNC/codex.sh" work "$OUT/review-prompt.md" "$OUT/review.json" read-only "$SYNC/review-schema.json"
+
+      - name: Check the login did not leak
+        if: steps.guard.outcome == 'success'
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: bash "$SYNC/leak-check.sh" work "$OUT"
 
       - name: Read the verdict
         id: verdict
@@ -377,7 +377,6 @@ jobs:
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
       - uses: actions/upload-artifact@v7
-        if: always()
         with:
           name: review
           path: |
