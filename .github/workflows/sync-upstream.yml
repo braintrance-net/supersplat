@@ -507,7 +507,8 @@ jobs:
           # A PR body caps at 65536 characters.
           head -c 60000 "$body" > "$body.cut"
 
-          branch="sync/upstream-$(date -u +%Y%m%d-%H%M)"
+          # Not sync/...: the existing sync branch makes git refuse any ref beneath it.
+          branch="sync-upstream-$(date -u +%Y%m%d-%H%M)"
           remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push "$remote" "HEAD:refs/heads/$branch"
           pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base braintrance --head "$branch" \
@@ -532,7 +533,7 @@ jobs:
           # Each sync contains every earlier one.
           number=${pr##*/}
           gh pr list --repo "$GITHUB_REPOSITORY" --base braintrance --state open --json number,headRefName \
-            --jq ".[] | select(.number != $number) | select(.headRefName | startswith(\"sync-main-to-braintrance-\") or startswith(\"sync/upstream-\")) | .number" |
+            --jq ".[] | select(.number != $number) | select(.headRefName | startswith(\"sync-main-to-braintrance-\") or startswith(\"sync-upstream-\")) | .number" |
             while read -r old; do
               gh pr close "$old" --repo "$GITHUB_REPOSITORY" --delete-branch --comment "Superseded by #$number."
             done

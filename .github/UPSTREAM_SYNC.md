@@ -35,7 +35,7 @@ The workflow has two jobs:
       verbatim is listed;
    6. a second, read-only agent reviews that list and the resolving agent's edits and answers `merge`
       or `hold` (`review-prompt.md`);
-   7. opens a `sync/upstream-<date>` PR into `braintrance` with all of the above, and on `merge`
+   7. opens a `sync-upstream-<date>` PR into `braintrance` with all of the above, and on `merge`
       fast-forwards `braintrance` to it, which marks the PR merged. Anything else leaves the PR open
       with the `sync-needs-human` label. Older open sync PRs are closed as superseded.
 

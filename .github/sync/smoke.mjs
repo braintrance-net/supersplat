@@ -48,8 +48,9 @@ const origin = `http://127.0.0.1:${server.address().port}`;
 
 const failures = [];
 // SuperSplat 3 needs WebGPU; a runner has no GPU, so Chromium is pointed at its software adapter.
+// Without --use-vulkan=swiftshader, Linux Chromium fails every mappedAtCreation buffer as "too large".
 const browser = await chromium.launch({
-    args: ['--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--enable-features=Vulkan', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+    args: ['--enable-unsafe-webgpu', '--use-webgpu-adapter=swiftshader', '--enable-features=Vulkan', '--use-vulkan=swiftshader', '--use-angle=swiftshader', '--enable-unsafe-swiftshader']
 });
 try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
