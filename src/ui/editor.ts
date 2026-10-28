@@ -3,13 +3,17 @@ import { Mat4 } from 'playcanvas';
 
 import { AppearancePanel } from './appearance-panel';
 import { Events } from '../events';
+import { ExportSettings } from '../export-settings';
+import type { BlobReadSource } from '../io';
 import { AboutPopup } from './about-popup';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
+import { ClipboardMenu } from './clipboard-menu';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
+import { OverdrawLegend } from './overdraw-legend';
 import { OverlaysPanel } from './overlays-panel';
 import { PerfOverlay } from './perf-overlay';
 import logo from './playcanvas-logo.png';
@@ -70,7 +74,7 @@ class EditorUI {
         const canvas = document.createElement('canvas');
         canvas.id = 'canvas';
 
-        // app label
+        // app label, a link to the about box
         const appLabel = new Label({
             id: 'app-label',
             text: 'SUPERSPLAT '
@@ -78,6 +82,15 @@ class EditorUI {
         const versionSpan = document.createElement('span');
         versionSpan.textContent = `v${version}`;
         appLabel.dom.appendChild(versionSpan);
+
+        // keep its pointer events from reaching the camera controls on the
+        // canvas container, whose pointer capture would swallow the click
+        ['pointerdown', 'pointerup', 'pointermove', 'wheel', 'dblclick'].forEach((eventName) => {
+            appLabel.dom.addEventListener(eventName, (event: Event) => event.stopPropagation());
+        });
+        appLabel.dom.addEventListener('click', () => {
+            events.fire('show.about');
+        });
 
         // canvas container
         const canvasContainer = new Container({
@@ -100,9 +113,9 @@ class EditorUI {
         tooltipsContainer.append(tooltips);
 
         // bottom toolbar
-        // the render sub panel replaces upstream's scene panel outright: building
-        // both would register the colour panel's event functions twice
-        const renderSubPanel = new RenderSubPanel(events, tooltips);
+        // shared right-click copy/paste menu for panel sections
+        const clipboardMenu = new ClipboardMenu();
+        const renderSubPanel = new RenderSubPanel(events, tooltips, clipboardMenu);
         const settingsPanel = new SettingsPanel(events, tooltips);
         const appearancePanel = new AppearancePanel(events, tooltips);
         const overlaysPanel = new OverlaysPanel(events, tooltips);
@@ -111,13 +124,16 @@ class EditorUI {
         const menu = new Menu(events);
         const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
         const perfOverlay = new PerfOverlay(events);
+        const overdrawLegend = new OverdrawLegend(events);
 
         canvasContainer.dom.appendChild(canvas);
         canvasContainer.append(annotationContainer);
-        canvasContainer.append(appLabel);
         canvasContainer.append(cameraInfoOverlay);
         canvasContainer.append(perfOverlay);
+        canvasContainer.append(overdrawLegend);
         canvasContainer.append(toolsContainer);
+        // above the tools container, so it stays clickable while a selection tool is active
+        canvasContainer.append(appLabel);
         canvasContainer.append(renderSubPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
@@ -164,7 +180,7 @@ class EditorUI {
         const videoSettingsDialog = new VideoSettingsDialog(events);
 
         // about popup
-        const aboutPopup = new AboutPopup();
+        const aboutPopup = new AboutPopup(events);
 
         topContainer.append(popup);
         topContainer.append(exportPopup);
@@ -172,6 +188,7 @@ class EditorUI {
         topContainer.append(videoSettingsDialog);
         topContainer.append(shortcutsPopup);
         topContainer.append(aboutPopup);
+        topContainer.append(clipboardMenu);
 
         appContainer.append(editorContainer);
         appContainer.append(topContainer);
@@ -205,8 +222,12 @@ class EditorUI {
             shortcutsPopup.hidden = false;
         });
 
-        events.function('show.exportPopup', (exportType, splatNames: [string], showFilenameEdit: boolean) => {
-            return exportPopup.show(exportType, splatNames, showFilenameEdit);
+        events.function('show.exportPopup', (exportType, splatNames: string[], settings?: ExportSettings) => {
+            return exportPopup.show(exportType, splatNames, settings);
+        });
+
+        events.function('show.savePopup', (filename: string, directory?: FileSystemDirectoryHandle, source?: BlobReadSource) => {
+            return exportPopup.show('ssproj', [filename], { directory }, source);
         });
 
         events.function('show.imageSettingsDialog', async () => {

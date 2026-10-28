@@ -1,7 +1,9 @@
 import { Container, Element, Label } from '@playcanvas/pcui';
 
 import { Events } from '../events';
-import { recentFiles } from '../recent-files';
+import { ExportChoices } from '../export-options';
+import { requestNavigateHome } from '../iframe-api';
+import { recentFiles, recentImports, RecentStore } from '../recent-files';
 import { ShortcutManager } from '../shortcut-manager';
 import { i18n } from './localization';
 import { MenuPanel, MenuItem } from './menu-panel';
@@ -12,6 +14,7 @@ import editRedo from './svg/edit-redo.svg';
 import editUndo from './svg/edit-undo.svg';
 import sceneExport from './svg/export.svg';
 import sceneImport from './svg/import.svg';
+import logoSvg from './svg/logo.svg';
 import sceneNew from './svg/new.svg';
 import sceneOpen from './svg/open.svg';
 import sceneSave from './svg/save.svg';
@@ -30,25 +33,33 @@ const createSvg = (svgString: string) => {
     });
 };
 
-const getOpenRecentItems = async (events: Events) => {
-    const files = await recentFiles.get();
-    const items: MenuItem[] = files.map((file) => {
-        return {
-            text: file.name,
-            onSelect: () => events.invoke('doc.openRecent', file.handle)
-        };
-    });
-
-    if (items.length > 0) {
-        items.push({}); // separator
-        items.push({
-            text: () => i18n.t('menu.file.open-recent.clear'),
-            icon: createSvg(selectDelete),
-            onSelect: () => recentFiles.clear()
+// Rebuild a recent-entries submenu (one row per entry, then a clear action)
+// when its parent menu opens. Returns whether there are any entries.
+const refreshRecentMenu = async <T extends { name: string }>(panel: MenuPanel, store: RecentStore<T & { date: number }>, onSelect: (entry: T) => void, clearKey: string) => {
+    try {
+        const entries = await store.get();
+        const items: MenuItem[] = entries.map((entry) => {
+            return {
+                text: entry.name,
+                onSelect: () => onSelect(entry)
+            };
         });
-    }
 
-    return items;
+        if (items.length > 0) {
+            items.push({}); // separator
+            items.push({
+                text: () => i18n.t(clearKey),
+                icon: createSvg(selectDelete),
+                onSelect: () => store.clear()
+            });
+        }
+
+        panel.setItems(items);
+        return items.length > 0;
+    } catch (error) {
+        console.error('Failed to load recent files:', error);
+        return false;
+    }
 };
 
 class Menu extends Container {
@@ -112,9 +123,40 @@ class Menu extends Container {
         arrow.dom.setAttribute('id', 'menu-arrow');
         arrow.dom.addEventListener('click', toggleCollapsed);
 
+        // SuperSplat home: leftmost, before File. Mark + wordmark; the
+        // wordmark hides when the menubar is collapsed.
+        const logo = createSvg(logoSvg);
+        logo.dom.setAttribute('id', 'menu-logo');
+
+        const wordmark = new Label({
+            id: 'menu-wordmark',
+            text: 'SuperSplat'
+        });
+
+        const home = new Container({
+            id: 'menu-home'
+        });
+        home.dom.setAttribute('role', 'link');
+        home.dom.setAttribute('tabindex', '0');
+        home.dom.setAttribute('aria-label', 'SuperSplat');
+        home.dom.setAttribute('title', 'SuperSplat');
+        home.dom.addEventListener('click', requestNavigateHome);
+        home.dom.addEventListener('keydown', (event: KeyboardEvent) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                requestNavigateHome();
+            }
+        });
+        home.append(logo);
+        home.append(wordmark);
+
+        const separator = new Element({ id: 'menu-separator' });
+
         const buttonsContainer = new Container({
             id: 'menu-bar-options'
         });
+        buttonsContainer.append(home);
+        buttonsContainer.append(separator);
         buttonsContainer.append(scene);
         buttonsContainer.append(edit);
         buttonsContainer.append(selection);
@@ -128,23 +170,29 @@ class Menu extends Container {
         // Get the shortcut manager for displaying keyboard shortcuts
         const shortcutManager: ShortcutManager = events.invoke('shortcutManager');
 
+        // the last successful export, named by the re-export item
+        let lastExport: { choices: ExportChoices } = null;
+        events.on('scene.lastExport', (value: typeof lastExport) => {
+            lastExport = value;
+        });
+
         const exportMenuPanel = new MenuPanel([{
-            text: 'PLY (.ply)',
+            text: 'PLY (.ply)...',
             icon: createSvg(sceneExport),
             isEnabled: () => !events.invoke('scene.empty'),
             onSelect: () => events.invoke('scene.export', 'ply')
         }, {
-            text: 'SOG (.sog)',
+            text: 'SOG (.sog)...',
             icon: createSvg(sceneExport),
             isEnabled: () => !events.invoke('scene.empty'),
             onSelect: () => events.invoke('scene.export', 'sog')
         }, {
-            text: 'SPZ (.spz)',
+            text: 'SPZ (.spz)...',
             icon: createSvg(sceneExport),
             isEnabled: () => !events.invoke('scene.empty'),
             onSelect: () => events.invoke('scene.export', 'spz')
         }, {
-            text: 'Splat (.splat)',
+            text: 'Splat (.splat)...',
             icon: createSvg(sceneExport),
             isEnabled: () => !events.invoke('scene.empty'),
             onSelect: () => events.invoke('scene.export', 'splat')
@@ -158,6 +206,7 @@ class Menu extends Container {
         }]);
 
         const openRecentMenuPanel = new MenuPanel([]);
+        const importRecentMenuPanel = new MenuPanel([]);
 
         const fileMenuPanel = new MenuPanel([{
             text: () => i18n.t('menu.file.new'),
@@ -165,7 +214,7 @@ class Menu extends Container {
             isEnabled: () => !events.invoke('scene.empty'),
             onSelect: () => events.invoke('doc.new')
         }, {
-            text: () => i18n.t('menu.file.open'),
+            text: () => i18n.t('menu.file.open', { ellipsis: true }),
             icon: createSvg(sceneOpen),
             onSelect: async () => {
                 await events.invoke('doc.open');
@@ -174,17 +223,7 @@ class Menu extends Container {
             text: () => i18n.t('menu.file.open-recent'),
             icon: createSvg(sceneOpen),
             subMenu: openRecentMenuPanel,
-            isEnabled: async () => {
-                // refresh open recent menu items when the parent menu is opened
-                try {
-                    const items = await getOpenRecentItems(events);
-                    openRecentMenuPanel.setItems(items);
-                    return items.length > 0;
-                } catch (error) {
-                    console.error('Failed to load recent files:', error);
-                    return false;
-                }
-            }
+            isEnabled: () => refreshRecentMenu(openRecentMenuPanel, recentFiles, file => events.invoke('doc.openRecent', file.handle), 'menu.file.open-recent.clear')
         }, {
             // separator
         }, {
@@ -206,9 +245,26 @@ class Menu extends Container {
                 await events.invoke('scene.import');
             }
         }, {
+            text: () => i18n.t('menu.file.import-recent'),
+            icon: createSvg(sceneImport),
+            subMenu: importRecentMenuPanel,
+            isEnabled: () => refreshRecentMenu(importRecentMenuPanel, recentImports, entry => events.invoke('scene.importRecent', entry), 'menu.file.import-recent.clear')
+        }, {
+            // separator
+        }, {
             text: () => i18n.t('menu.file.export'),
             icon: createSvg(sceneExport),
             subMenu: exportMenuPanel
+        }, {
+            text: () => {
+                return lastExport ?
+                    i18n.t('menu.file.reexport-to', { filename: lastExport.choices.filename }) :
+                    i18n.t('menu.file.reexport');
+            },
+            icon: createSvg(sceneExport),
+            extra: shortcutManager.formatShortcut('scene.reexport'),
+            isEnabled: () => !!lastExport && !events.invoke('scene.empty'),
+            onSelect: () => events.fire('scene.reexport')
         }]);
 
         // track undo/redo availability for menu item enablement
@@ -354,6 +410,7 @@ class Menu extends Container {
         this.append(menubar);
         this.append(fileMenuPanel);
         this.append(openRecentMenuPanel);
+        this.append(importRecentMenuPanel);
         this.append(exportMenuPanel);
         this.append(editMenuPanel);
         this.append(selectionMenuPanel);

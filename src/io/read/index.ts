@@ -5,7 +5,10 @@
 // File system implementations
 export {
     BlobReadSource,
-    MappedReadFileSystem
+    MappedReadFileSystem,
+    hasLoadProgress,
+    sourcesOf,
+    type LoadProgressFileSystem
 } from './file-systems';
 
 // Loading functions

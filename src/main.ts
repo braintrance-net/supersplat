@@ -7,6 +7,7 @@ import { CommandQueue } from './command-queue';
 import { registerDocEvents } from './doc';
 import { EditHistory } from './edit-history';
 import { registerEditorEvents } from './editor';
+import { createEditorAPI, type EditorAPI } from './editor-api';
 import { Events } from './events';
 import { initFileHandler } from './file-handler';
 import { registerIframeApi } from './iframe-api';
@@ -44,6 +45,7 @@ import { EditorUI } from './ui/editor';
 import { i18n } from './ui/localization';
 import { registerSelectCursor } from './ui/select-cursor';
 import { ViewManager } from './view-manager';
+import { registerWebMCP } from './webmcp';
 
 declare global {
     interface LaunchParams {
@@ -55,6 +57,7 @@ declare global {
             setConsumer: (callback: (launchParams: LaunchParams) => void) => void;
         };
         scene: Scene;
+        editor: EditorAPI;
     }
 }
 
@@ -137,6 +140,15 @@ const main = async () => {
         stencil: false,
         xrCompatible: false,
         powerPreference: 'high-performance'
+    });
+
+    events.function('scene.gpu', () => {
+        // Use the renderer's adapter, rather than requesting another GPU.
+        const device = graphicsDevice as unknown as {
+            gpuAdapter?: { info?: { description: string, vendor: string, architecture: string, device: string } }
+        };
+        const info = device.gpuAdapter?.info;
+        return info?.description || [info?.vendor, info?.architecture, info?.device].filter(Boolean).join(' / ');
     });
 
     const urlArgs = getURLArgs();
@@ -281,9 +293,12 @@ const main = async () => {
 
     // annotation overlay for rendering annotation markers on canvas
     new AnnotationOverlay(events, scene, editorUI.canvasContainer.dom);
+    // the typed command/query surface the UI adapters and scripts share
+    const editor = createEditorAPI(events, scene, editHistory, commandQueue);
+    window.editor = editor;
 
     // register events that need scene or other dependencies
-    registerEditorEvents(events, editHistory, scene);
+    registerEditorEvents(events, editHistory, scene, editor);
     registerSelectionEvents(events, scene);
     registerSequenceEvents(events, scene);
     registerDocEvents(scene, events);
@@ -294,6 +309,9 @@ const main = async () => {
     // registered after the boot-time initialization events above so they are
     // never captured as user changes.
     registerPreferences(events, sceneConfig, urlArgs);
+
+    // Register after the editor services and preferences are available.
+    registerWebMCP(editor);
 
     // load async models
     scene.start();
@@ -329,7 +347,8 @@ const main = async () => {
             for (const file of launchParams.files) {
                 await events.invoke('import', [{
                     filename: file.name,
-                    contents: await file.getFile()
+                    contents: await file.getFile(),
+                    handle: file
                 }]);
             }
         });
