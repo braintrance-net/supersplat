@@ -1280,6 +1280,20 @@ const registerEditorEvents = (events: Events, editHistory: EditHistory, scene: S
         }
     });
 
+    // reveal effect
+    let revealEffect = 'spread';
+
+    events.function('revealEffect', () => {
+        return revealEffect;
+    });
+
+    events.on('revealEffect.set', (value: string) => {
+        if (value !== revealEffect) {
+            revealEffect = value;
+            events.fire('revealEffect.changed', revealEffect);
+        }
+    });
+
     events.function('camera.getPose', () => {
         const camera = scene.camera;
         const position = camera.position;
