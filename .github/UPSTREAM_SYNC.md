@@ -38,6 +38,7 @@ The workflow has two jobs:
    7. opens a `sync-upstream-<date>` PR into `braintrance` with all of the above, and on `merge`
       fast-forwards `braintrance` to it, which marks the PR merged. Anything else leaves the PR open
       with the `sync-needs-human` label. Older open sync PRs are closed as superseded.
+   8. posts to the Slack alert channel when the PR was not landed or the run failed.
 
 Each step is its own job, so that nothing the merged tree runs can reach a key or the verdict:
 
@@ -46,6 +47,7 @@ Each step is its own job, so that nothing the merged tree runs can reach a key o
 | `resolve`, `fix`, `review` | `CODEX_AUTH_JSON` | no (`npm ci --ignore-scripts` only) |
 | `check`, `recheck` (`sync-check.yml`) | nothing; read-only token | yes: install, build, lint, smoke |
 | `land` | write token | no; recomputes the scope check and fork guard itself |
+| `notify` | `SLACK_ALERT_WEBHOOK_URL` | no |
 
 The merge travels between jobs as a git bundle and is matched against the commit id each job reports.
 

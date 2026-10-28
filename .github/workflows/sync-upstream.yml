@@ -393,6 +393,10 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
+    outputs:
+      pr: ${{ steps.land.outputs.pr }}
+      landed: ${{ steps.land.outputs.landed }}
+      checks: ${{ steps.land.outputs.checks }}
     env:
       SYNC: ${{ github.workspace }}/tools/.github/sync
       OUT: ${{ github.workspace }}/out
@@ -459,6 +463,7 @@ jobs:
           path: out/review
 
       - name: Open the PR and land it if everything passed
+        id: land
         working-directory: work
         env:
           GH_TOKEN: ${{ github.token }}
@@ -514,10 +519,15 @@ jobs:
           pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base braintrance --head "$branch" \
             --title "Sync upstream into braintrance ($(date -u +%Y-%m-%d))" --body-file "$body.cut")
           echo "Opened $pr"
+          {
+            echo "pr=$pr"
+            echo "checks=checks ${GATES:-not run}, scope $scope, fork guard $guard, review ${VERDICT:-not run}"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "$land" = yes ]; then
             # A fast-forward only: if braintrance moved during the run, the push is refused and nothing lands.
             if git push "$remote" "HEAD:refs/heads/braintrance"; then
+              echo "landed=yes" >> "$GITHUB_OUTPUT"
               gh pr comment "$pr" --body "Every check passed and the review found nothing lost, so this landed on \`braintrance\` automatically."
             else
               land=no
@@ -539,3 +549,28 @@ jobs:
             done
 
           [ "$land" = yes ] || { echo "::warning::Not landed; see $pr"; exit 1; }
+
+  notify:
+    needs: [sync, resolve, check, fix, recheck, review, land]
+    if: >-
+      always() && (contains(needs.*.result, 'failure') ||
+      (needs.land.outputs.pr != '' && needs.land.outputs.landed != 'yes'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post to Slack
+        env:
+          WEBHOOK: ${{ secrets.SLACK_ALERT_WEBHOOK_URL }}
+          PR: ${{ needs.land.outputs.pr }}
+          LANDED: ${{ needs.land.outputs.landed }}
+          CHECKS: ${{ needs.land.outputs.checks }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$WEBHOOK" ] || { echo "::error::The SLACK_ALERT_WEBHOOK_URL secret is not set"; exit 1; }
+          if [ "$LANDED" = yes ]; then
+            text=":x: The SuperSplat upstream sync landed <$PR|supersplat#${PR##*/}> but a step failed: <$RUN|run $GITHUB_RUN_ID>"
+          elif [ -n "$PR" ]; then
+            text=":warning: The SuperSplat upstream sync was not landed and needs a person: <$PR|supersplat#${PR##*/}> ($CHECKS)"
+          else
+            text=":x: The SuperSplat upstream sync failed before opening a PR: <$RUN|run $GITHUB_RUN_ID>"
+          fi
+          jq -n --arg text "$text" '{text: $text}' | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK"
