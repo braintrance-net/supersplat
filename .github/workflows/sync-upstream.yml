@@ -552,9 +552,7 @@ jobs:
 
   notify:
     needs: [sync, resolve, check, fix, recheck, review, land]
-    if: >-
-      always() && (contains(needs.*.result, 'failure') ||
-      (needs.land.outputs.pr != '' && needs.land.outputs.landed != 'yes'))
+    if: always() && (contains(needs.*.result, 'failure') || needs.land.outputs.pr != '')
     runs-on: ubuntu-latest
     steps:
       - name: Post to Slack
@@ -563,11 +561,14 @@ jobs:
           PR: ${{ needs.land.outputs.pr }}
           LANDED: ${{ needs.land.outputs.landed }}
           CHECKS: ${{ needs.land.outputs.checks }}
+          FAILED: ${{ contains(needs.*.result, 'failure') }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$WEBHOOK" ] || { echo "::error::The SLACK_ALERT_WEBHOOK_URL secret is not set"; exit 1; }
-          if [ "$LANDED" = yes ]; then
+          if [ "$LANDED" = yes ] && [ "$FAILED" = true ]; then
             text=":x: The SuperSplat upstream sync landed <$PR|supersplat#${PR##*/}> but a step failed: <$RUN|run $GITHUB_RUN_ID>"
+          elif [ "$LANDED" = yes ]; then
+            text=":white_check_mark: The SuperSplat upstream sync landed on \`braintrance\`: <$PR|supersplat#${PR##*/}>. The editor update PR into braintrance follows at the next 10:00 UTC run."
           elif [ -n "$PR" ]; then
             text=":warning: The SuperSplat upstream sync was not landed and needs a person: <$PR|supersplat#${PR##*/}> ($CHECKS)"
           else
