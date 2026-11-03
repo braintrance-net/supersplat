@@ -1,8 +1,9 @@
-import { Button, Container, Label, TextInput } from '@playcanvas/pcui';
+import { Button, Container, Label } from '@playcanvas/pcui';
 import Sortable from 'sortablejs';
 
-import { Annotation } from '../annotation-manager';
-import { Events } from '../events';
+import type { Annotation } from '../annotation-manager';
+import type { Events } from '../events';
+
 import deleteSvg from './svg/delete.svg';
 
 const createSvg = (svgString: string) => {

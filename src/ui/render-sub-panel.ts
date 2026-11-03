@@ -1,14 +1,15 @@
-import { Button, Container, Element, Label, SelectInput } from '@playcanvas/pcui';
+import { Button, Container, Label, SelectInput } from '@playcanvas/pcui';
 
-import { Events } from '../events';
+import type { Events } from '../events';
+
 import { AnnotationsPanel } from './annotations-panel';
-import { ClipboardMenu } from './clipboard-menu';
+import type { ClipboardMenu } from './clipboard-menu';
 import { ColorPanel } from './color-panel';
 import { i18n } from './localization';
 import { SplatList } from './splat-list';
 import sceneImportSvg from './svg/import.svg';
 import sceneNewSvg from './svg/new.svg';
-import { Tooltips } from './tooltips';
+import type { Tooltips } from './tooltips';
 import { Transform } from './transform';
 import { ViewsPanel } from './views-panel';
 

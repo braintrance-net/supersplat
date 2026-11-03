@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { Events } from './events';
+import type { Events } from './events';
 
 interface Annotation {
     name: string;
@@ -13,11 +13,8 @@ interface Annotation {
 
 class AnnotationManager {
     private annotations: Annotation[] = [];
-    private events: Events;
 
     constructor(events: Events) {
-        this.events = events;
-
         events.function('annotations.list', () => {
             return this.annotations.map(a => ({ ...a }));
         });
@@ -112,4 +109,5 @@ class AnnotationManager {
     }
 }
 
-export { AnnotationManager, Annotation };
+export { AnnotationManager };
+export type { Annotation };

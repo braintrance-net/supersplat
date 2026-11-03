@@ -19,7 +19,7 @@ upstream/main  ──►  main (mirror)  ──►  sync (merge + verify)  ─�
 
 ## Automated part: `.github/workflows/sync-upstream.yml`
 
-The workflow has two jobs:
+The workflow starts with a mirror update, then integrates and verifies the fork:
 
 1. **sync** merges `upstream/main` into `main` and pushes it (keeping the mirror current).
 2. **land**, whenever `braintrance` is missing anything on `main`:
@@ -46,7 +46,8 @@ Each step is its own job, so that nothing the merged tree runs can reach a key o
 | --- | --- | --- |
 | `resolve`, `fix`, `review` | `CODEX_AUTH_JSON` | no (`npm ci --ignore-scripts` only) |
 | `check`, `recheck` (`sync-check.yml`) | nothing; read-only token | yes: install, build, lint, smoke |
-| `land` | write token | no; recomputes the scope check and fork guard itself |
+| `sync` | `BT_GITHUB_TOKEN` for git pushes | no; git merge and push only |
+| `land` | `BT_GITHUB_TOKEN` for git pushes; job token for PR operations | no; recomputes the scope check and fork guard itself |
 | `notify` | `SLACK_ALERT_WEBHOOK_URL` | no |
 
 The merge travels between jobs as a git bundle and is matched against the commit id each job reports.
@@ -67,6 +68,29 @@ Known limits, accepted:
 The checks and prompts are read from the workflow's own commit on `main`, never from the tree being
 merged. The agent needs the `CODEX_AUTH_JSON` repository secret; without it a conflicted sync is held
 for a human.
+
+### The upstream sync push credential
+
+The `sync` checkout and the `land` step's git pushes use the existing repository secret
+`BT_GITHUB_TOKEN`. The default `GITHUB_TOKEN` cannot push upstream commits that change
+`.github/workflows/*`, even when its job has `contents: write`. Both the mirror update and the
+integration branch push must carry those upstream files unchanged.
+
+The credential must have repository contents write access and workflow-file write access. For a
+classic PAT this requires `repo` and `workflow`; for a fine-grained PAT it requires access to this
+repository with **Contents: read and write** and **Workflows: read and write**. Confirm the existing
+credential is approved for this use before enabling the change. If its permissions are insufficient,
+obtain approval before changing scopes or replacing the secret; do not discard upstream workflow
+changes or fall back to `GITHUB_TOKEN` for these pushes.
+
+Only `sync` and `land` receive this push credential. The agent and build jobs do not receive it;
+PR creation, comments, and labels continue using the job's `GITHUB_TOKEN`. The workflow fails with an
+explicit error if the push secret is missing. A PAT push can trigger the repository's normal push CI.
+
+After approval and merge, verify a new sync run reaches both the mirror push and the integration
+branch push. A draft repair PR passing CI does not prove the secret has workflow-file access or that
+sync has recovered. Running the full sync can automatically fast-forward `braintrance` after its
+existing checks and review, so a manual run also requires approval for that landing behavior.
 
 ### The ChatGPT login secret
 

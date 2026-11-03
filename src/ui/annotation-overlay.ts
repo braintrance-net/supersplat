@@ -1,8 +1,9 @@
 import { Vec3 } from 'playcanvas';
 
-import { Annotation } from '../annotation-manager';
-import { Events } from '../events';
-import { Scene } from '../scene';
+import type { Annotation } from '../annotation-manager';
+import type { Events } from '../events';
+import type { Scene } from '../scene';
+
 import deleteSvg from './svg/delete.svg';
 import editSvg from './svg/EditIcon.svg';
 
@@ -17,16 +18,16 @@ class AnnotationOverlay {
     private scene: Scene;
     private annotations: Annotation[] = [];
     private markerGroups: { wrapper: HTMLDivElement, label: HTMLDivElement }[] = [];
-    private expandedIndex: number = -1;
+    private expandedIndex = -1;
     private expandedPopup: HTMLDivElement | null = null;
 
     // Drag state
-    private dragIndex: number = -1;
-    private dragDepth: number = 0;
-    private dragStartX: number = 0;
-    private dragStartY: number = 0;
-    private dragActive: boolean = false;
-    private dragPointerId: number = -1;
+    private dragIndex = -1;
+    private dragDepth = 0;
+    private dragStartX = 0;
+    private dragStartY = 0;
+    private dragActive = false;
+    private dragPointerId = -1;
 
     constructor(events: Events, scene: Scene, parentElement: HTMLElement) {
         this.events = events;

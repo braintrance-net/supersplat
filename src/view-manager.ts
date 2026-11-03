@@ -1,6 +1,6 @@
 import { Vec3 } from 'playcanvas';
 
-import { Events } from './events';
+import type { Events } from './events';
 
 interface View {
     name: string;
@@ -11,11 +11,8 @@ interface View {
 
 class ViewManager {
     private views: View[] = [];
-    private events: Events;
 
     constructor(events: Events) {
-        this.events = events;
-
         events.function('views.list', () => {
             return this.views.map(v => ({ ...v }));
         });
@@ -92,4 +89,5 @@ class ViewManager {
     }
 }
 
-export { ViewManager, View };
+export { ViewManager };
+export type { View };

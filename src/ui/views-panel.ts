@@ -1,8 +1,9 @@
 import { Button, Container, Label, TextInput } from '@playcanvas/pcui';
 import Sortable from 'sortablejs';
 
-import { Events } from '../events';
-import { View } from '../view-manager';
+import type { Events } from '../events';
+import type { View } from '../view-manager';
+
 import deleteSvg from './svg/delete.svg';
 
 const createSvg = (svgString: string) => {

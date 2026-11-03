@@ -1,9 +1,10 @@
-import { Entity, GraphicsDevice, TransformGizmo } from 'playcanvas';
+import type { TransformGizmo } from 'playcanvas';
+import { Entity } from 'playcanvas';
 
-import { Events } from '../events';
-import { Pivot } from '../pivot';
-import { Scene } from '../scene';
-import { Splat } from '../splat';
+import type { Events } from '../events';
+import type { Pivot } from '../pivot';
+import type { Scene } from '../scene';
+import type { Splat } from '../splat';
 
 class TransformTool {
     activate: () => void;

@@ -1,7 +1,7 @@
 import { MemoryFileSystem } from '@playcanvas/splat-transform';
 
-import { Events } from './events';
-import { Scene } from './scene';
+import type { Events } from './events';
+import type { Scene } from './scene';
 import { writeSplatFile } from './splat-serialize';
 
 /**
@@ -10,7 +10,7 @@ import { writeSplatFile } from './splat-serialize';
 const isInIframe = (): boolean => {
     try {
         return window.self !== window.top;
-    } catch (e) {
+    } catch {
         return true;
     }
 };
@@ -18,7 +18,7 @@ const isInIframe = (): boolean => {
 /**
  * Creates the Submit/Cancel buttons for iframe mode
  */
-const createIframeControls = (events: Events, scene: Scene): { submit: HTMLButtonElement, cancel: HTMLButtonElement } => {
+const createIframeControls = (): { submit: HTMLButtonElement, cancel: HTMLButtonElement } => {
     const submitButton = document.createElement('button');
     submitButton.id = 'submit-splat-button';
     submitButton.textContent = 'Upload';
@@ -157,7 +157,7 @@ export const initIframeIntegration = (events: Events, scene: Scene) => {
 
     console.log('[IframeIntegration] Detected iframe mode, initializing controls');
 
-    const { submit, cancel } = createIframeControls(events, scene);
+    const { submit, cancel } = createIframeControls();
 
     // Track whether the user explicitly changed the background color
     let bgColorUserChanged = false;

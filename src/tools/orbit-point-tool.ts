@@ -1,7 +1,7 @@
 import { Container, Label } from '@playcanvas/pcui';
 
-import { Events } from '../events';
-import { Scene } from '../scene';
+import type { Events } from '../events';
+import type { Scene } from '../scene';
 import { i18n } from '../ui/localization';
 
 // pointer movement below this many pixels still counts as a click
