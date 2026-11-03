@@ -3,7 +3,8 @@
 #
 # Trust layout: jobs that hold the ChatGPT login (resolve, fix, review) never run the merged tree's
 # install scripts or build, the job that does (sync-check.yml) has no secrets, and the only job with
-# a write token (land) runs nothing from the tree and decides from job outputs, not files.
+# workflow-capable push token (sync and land) runs nothing from the tree; land decides from job
+# outputs, not files.
 name: Sync with Upstream
 permissions:
   contents: read
@@ -27,12 +28,22 @@ jobs:
       behind: ${{ steps.behind.outputs.behind }}
 
     steps:
+      - name: Require the upstream sync push credential
+        env:
+          PUSH_TOKEN: ${{ secrets.BT_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "::error::BT_GITHUB_TOKEN is required to push upstream workflow changes; see .github/UPSTREAM_SYNC.md"
+            exit 1
+          fi
+
       - name: Checkout main branch
         uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN cannot push changes to .github/workflows, even with contents: write.
+          token: ${{ secrets.BT_GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |
@@ -467,7 +478,12 @@ jobs:
         working-directory: work
         env:
           GH_TOKEN: ${{ github.token }}
+          PUSH_TOKEN: ${{ secrets.BT_GITHUB_TOKEN }}
         run: |
+          if [ -z "$PUSH_TOKEN" ]; then
+            echo "::error::BT_GITHUB_TOKEN is required to publish upstream workflow changes; see .github/UPSTREAM_SYNC.md"
+            exit 1
+          fi
           git fetch origin main
           git fetch "$OUT/$BUNDLE/merge.bundle" "+refs/heads/merge:refs/heads/candidate"
           git checkout --detach candidate
@@ -514,7 +530,7 @@ jobs:
 
           # Not sync/...: the existing sync branch makes git refuse any ref beneath it.
           branch="sync-upstream-$(date -u +%Y%m%d-%H%M)"
-          remote="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          remote="https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push "$remote" "HEAD:refs/heads/$branch"
           pr=$(gh pr create --repo "$GITHUB_REPOSITORY" --base braintrance --head "$branch" \
             --title "Sync upstream into braintrance ($(date -u +%Y-%m-%d))" --body-file "$body.cut")
