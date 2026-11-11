@@ -2,6 +2,7 @@ import {
     createChunkDataPool,
     logger as splatTransformLogger,
     MemoryFileSystem,
+    resolveSplatModel,
     Transform,
     writeSource,
     ZipFileSystem
@@ -27,7 +28,8 @@ import type { AnimTrack, Camera, ExperienceSettings } from '@playcanvas/splat-tr
 import { Mat3, Mat4, PIXELFORMAT_BGRA8, Quat, Texture, Vec3, WebgpuGraphicsDevice } from 'playcanvas';
 
 import { ColorGrade, createGradeTerms, dcDecode, dcEncode, sigmoid } from './color-grade';
-import type { EditorSplatResource } from './editor-splat-resource';
+import { effectiveModel } from './editor-splat-resource';
+import type { AntiAliasMode, EditorSplatResource } from './editor-splat-resource';
 import type { Events } from './events';
 import { groupInstancesByChunk } from './gaussian-instances';
 import { PermutedChunkSource } from './io';
@@ -40,6 +42,7 @@ type SerializeSettings = {
     selected?: boolean; // only export selected gaussians. used for copy/paste
     minOpacity?: number; // filter out gaussians with alpha less than or equal to minAlpha
     removeInvalid?: boolean; // filter out gaussians with invalid data (NaN/Infinity)
+    antiAlias?: AntiAliasMode; // the view.antiAlias setting, applied to the exported model tag. defaults to 'auto'
 
     // the following options are used when serializing for document save.
     // keepWorldTransform flows through the streaming source; keepStateData
@@ -359,9 +362,15 @@ class SuperSplatChunkSource implements ChunkSource {
             chunkSize: EXPORT_CHUNK_SIZE,
             numChunks: [numChunks],
             shBands: outputBands as SHBands,
-            // supersplat's edit pipeline doesn't carry the trained-model tag
-            // (antialiased / 2dgs) through load, so exports are untagged
-            model: 'default',
+            // the trained-model tag of the exported layers, as the view renders
+            // them. No format can hold two, so layers that disagree are written
+            // untagged, as splat-transform's own concat does; empty layers
+            // don't count
+            model: resolveSplatModel(
+                entries
+                    .filter((e) => e.end > e.start)
+                    .map((e) => effectiveModel(e.splat.resource.model, settings.antiAlias ?? 'auto'))
+            ),
             extraColumns: [],
             transform: Transform.PLY,
             availableLayers: new Set<ChunkLayer>(['position', 'geometric', 'color']),
@@ -589,9 +598,22 @@ class WebGPUUnavailableError extends Error {
     }
 }
 
+// Thrown when the compression device is lost mid-export, typically because the
+// OS GPU watchdog killed a long-running compute job.
+class GpuDeviceLostError extends Error {
+    constructor() {
+        super('The GPU device was lost');
+        this.name = 'GpuDeviceLostError';
+    }
+}
+
 // Cached WebGPU device for SOG compression
 let cachedGpuDevice: WebgpuGraphicsDevice | null = null;
 let cachedBackbuffer: Texture | null = null;
+
+// Number of compression devices lost so far, so a failed export can tell
+// whether a device loss caused the failure
+let gpuDeviceLostCount = 0;
 
 const createGpuDevice = async (): Promise<WebgpuGraphicsDevice> => {
     if (cachedGpuDevice) {
@@ -640,6 +662,19 @@ const createGpuDevice = async (): Promise<WebgpuGraphicsDevice> => {
 
     graphicsDevice.externalBackbuffer = cachedBackbuffer;
 
+    // Left alone, the engine restores a lost device in place, re-creating every
+    // Compute ever made on it - splat-transform never destroys its k-means
+    // kernels, so each restore rebuilds stale pipelines. Discard the device
+    // instead; the next export creates a fresh one.
+    graphicsDevice.once('devicelost', () => {
+        gpuDeviceLostCount++;
+        if (cachedGpuDevice === graphicsDevice) {
+            cachedGpuDevice = null;
+            cachedBackbuffer = null;
+        }
+        graphicsDevice.destroy();
+    });
+
     cachedGpuDevice = graphicsDevice;
     return graphicsDevice;
 };
@@ -662,8 +697,16 @@ const writeSplatFile = async (
         return;
     }
     const { source, pool } = built;
+    const lostCount = gpuDeviceLostCount;
     try {
         await writeSource({ filename, outputFormat, source, pool, options, createDevice: createGpuDevice }, fs);
+    } catch (err) {
+        // the device's lost promise can settle just after the rejection that
+        // brought us here, so give it a task to land before checking
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve);
+        });
+        throw gpuDeviceLostCount !== lostCount ? new GpuDeviceLostError() : err;
     } finally {
         await source.close();
         pool.destroy();
@@ -892,6 +935,7 @@ export {
     Camera,
     defaultPostEffectSettings,
     ExperienceSettings,
+    GpuDeviceLostError,
     SerializeSettings,
     SogSettings,
     SpzSettings,
