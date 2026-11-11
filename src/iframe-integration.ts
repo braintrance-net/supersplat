@@ -117,7 +117,8 @@ const exportPly = async (events: Events): Promise<{ filename: string, data: Arra
         const serializeSettings = {
             maxSHBands: 3,
             minOpacity: 1 / 255,
-            removeInvalid: true
+            removeInvalid: true,
+            antiAlias: events.invoke('view.antiAlias')
         };
         await writeSplatFile(splats, serializeSettings, 'compressed-ply', 'output.compressed.ply', {}, memFs);
 
