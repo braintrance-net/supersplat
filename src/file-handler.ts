@@ -11,8 +11,22 @@ import { buildExportOptions } from './export-options';
 import type { ExportSettings } from './export-settings';
 import { loadExportSettings, saveExportSettings } from './export-settings';
 import { FileReadBlockedError, readHandle, repickBlocked } from './file-read';
+import type { ImportGroup } from './import-analysis';
+import { analyzeImport, needsReview } from './import-analysis';
+import {
+    animationExtension,
+    basename,
+    documentExtension,
+    frameRegex,
+    importExtensions,
+    isFlatBundleMain,
+    isModelFile,
+    isPosesFile,
+    isTreeBundleMain,
+    modelExtensions
+} from './import-formats';
 import type { BlobReadSource, WriteTarget } from './io';
-import { BrowserFileSystem, MappedReadFileSystem, pickWriteTarget, sourcesOf } from './io';
+import { BrowserFileSystem, GsafReader, MappedReadFileSystem, pickWriteTarget, sourcesOf } from './io';
 import type { RecentImport } from './recent-files';
 import { recentImports } from './recent-files';
 import type { Scene } from './scene';
@@ -26,6 +40,7 @@ import {
     WebGPUUnavailableError,
     writeSplatFile
 } from './splat-serialize';
+import type { ImportChoice } from './ui/import-review-dialog';
 import { i18n } from './ui/localization';
 
 // ts compiler and vscode find this type, but eslint does not
@@ -84,6 +99,12 @@ const filePickerTypes: Record<string, FilePickerAcceptType> = {
             'application/x-gaussian-splat': ['.spz']
         }
     },
+    gsaf: {
+        description: 'GSAF Animated Splat',
+        accept: {
+            'application/x-gaussian-splat': ['.gsaf']
+        }
+    },
     indexTxt: {
         description: 'Colmap Poses (Images.txt)',
         accept: {
@@ -108,7 +129,11 @@ const allImportTypes = {
     description: 'Supported Files',
     accept: {
         'application/ply': ['.ply'],
-        'application/x-gaussian-splat': ['.json', '.sog', '.splat', '.ksplat', '.spz'],
+        'application/x-gaussian-splat': [
+            '.json',
+            ...modelExtensions.filter((ext) => ext !== '.ply'),
+            animationExtension
+        ],
         'image/webp': ['.webp'],
         'application/x-lcc': ['.lcc', '.lcc2', '.bin'],
         'text/plain': ['.txt']
@@ -116,7 +141,7 @@ const allImportTypes = {
 };
 
 // the same types for a plain file input
-const importAccept = '.ply,.splat,meta.json,.json,.webp,.ssproj,.sog,.lcc,.lcc2,.bin,.txt,.ksplat,.spz';
+const importAccept = importExtensions.join(',');
 
 // determine if all files share a common filename prefix followed by
 // a frame number, e.g. "frame0001.ply", "frame0002.ply", etc.
@@ -125,14 +150,13 @@ const isPlySequence = (filenames: string[]) => {
         return false;
     }
 
-    const regex = /(.*?)(\d+)(?:\.compressed)?\.ply$/;
-    const baseMatch = filenames[0].match(regex);
+    const baseMatch = filenames[0].match(frameRegex);
     if (!baseMatch) {
         return false;
     }
 
     for (let i = 1; i < filenames.length; i++) {
-        const thisMatch = filenames[i].match(regex);
+        const thisMatch = filenames[i].match(frameRegex);
         if (!thisMatch || thisMatch[1] !== baseMatch[1]) {
             return false;
         }
@@ -141,26 +165,22 @@ const isPlySequence = (filenames: string[]) => {
     return true;
 };
 
-// SOG has a meta.json file; streamed SOG has a lod-meta.json file.
-const isSog = (filenames: string[]) => {
-    const count = (extension: string) => filenames.reduce((sum, f) => sum + (f.endsWith(extension) ? 1 : 0), 0);
-    return count('lod-meta.json') === 1 || count('meta.json') === 1;
+// A multi-file model (SOG, streamed SOG, LCC) has one main file naming it; see
+// import-formats for which files those are.
+const isBundle = (filenames: string[]) => {
+    const bases = filenames.map(basename);
+    return bases.filter(isTreeBundleMain).length === 1 || bases.filter(isFlatBundleMain).length === 1;
 };
 
-// The LCC file contains meta.lcc, index.bin, data.bin and shcoef.bin (optional).
-// LCC2 comprises a meta.lcc2 file and .sog/.spz chunk files.
-const isLcc = (filenames: string[]) => {
-    const count = (extension: string) => filenames.reduce((sum, f) => sum + (f.endsWith(extension) ? 1 : 0), 0);
-    return count('.lcc') === 1 || count('.lcc2') === 1;
-};
-
-// The file that names a model: SOG meta, LCC meta, else the first (single file case).
+// The file that names a model: the shallowest bundle main file, those that take
+// their whole folder first, else the first (single file case).
 const findMainIndex = (filenames: string[]) => {
-    const isMeta = (f: string) => f === 'meta.json' || f === 'lod-meta.json';
-    const isLccMeta = (f: string) => f.endsWith('.lcc') || f.endsWith('.lcc2');
-    if (filenames.some(isMeta)) return filenames.findIndex(isMeta);
-    if (filenames.some(isLccMeta)) return filenames.findIndex(isLccMeta);
-    return 0;
+    const shallowest = (test: (base: string) => boolean) =>
+        filenames
+            .map((f, i) => ({ i, depth: f.split('/').length }))
+            .filter(({ i }) => test(basename(filenames[i])))
+            .sort((a, b) => a.depth - b.depth)[0]?.i;
+    return shallowest(isTreeBundleMain) ?? shallowest(isFlatBundleMain) ?? 0;
 };
 
 type ImportFile = {
@@ -193,11 +213,11 @@ const recordImports = (files: ImportFile[]) => {
     }
 
     const filenames = files.map((f) => f.filename.toLowerCase());
-    if (roots.length > 1 && (isPlySequence(filenames) || isSog(filenames) || isLcc(filenames))) {
+    if (roots.length > 1 && (isPlySequence(filenames) || isBundle(filenames))) {
         addRecentImport({ name: files[findMainIndex(filenames)].filename, handles: roots });
     } else {
         roots
-            .filter((root) => !root.name.toLowerCase().endsWith('.ssproj'))
+            .filter((root) => !root.name.toLowerCase().endsWith(documentExtension))
             .forEach((root) => addRecentImport({ name: root.name, handles: [root] }));
     }
 };
@@ -381,6 +401,44 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         }
     };
 
+    // read and open a GSAF animated splat file
+    const openGsaf = async (file: ImportFile) => {
+        const bytes = file.contents
+            ? await file.contents.arrayBuffer()
+            : await (await fetch(new URL(file.url, window.location.href).href)).arrayBuffer();
+        return GsafReader.open(new Uint8Array(bytes));
+    };
+
+    // import a GSAF animated splat file as a timeline sequence
+    const importGsaf = async (file: ImportFile, operation?: FileOperationOptions) => {
+        try {
+            events.fire('sequence.setGsaf', await openGsaf(file), file.filename);
+        } catch (error) {
+            if (operation?.throwOnError) throw error;
+            await showLoadError(error.message ?? error, file.filename);
+        }
+    };
+
+    // Import every frame of an open GSAF as its own splat model, each decoded to a PLY
+    // named like a PLY sequence frame: anim.gsaf gives anim_000.ply, anim_001.ply, ...
+    // Stops at the first frame that fails or is cancelled.
+    const importGsafFrames = async (reader: GsafReader, filename: string) => {
+        const stem = filename.replace(/\.gsaf$/i, '');
+        const digits = String(reader.frameCount - 1).length;
+        for (let i = 0; i < reader.frameCount; i++) {
+            const name = `${stem}_${String(i).padStart(digits, '0')}.ply`;
+            let ply: ArrayBuffer;
+            try {
+                ply = reader.decodeFramePly(i);
+            } catch (error) {
+                await showLoadError(error.message ?? error, filename);
+                return;
+            }
+            const model = await importSplatModel([{ filename: name, contents: new File([ply], name) }], false);
+            if (!model) return;
+        }
+    };
+
     // figure out what the set of files are (ply sequence, document, sog set, ply) and then import them
     const importFiles = async (files: ImportFile[], animationFrame = false, operation?: FileOperationOptions) => {
         const filenames = files.map((f) => f.filename.toLowerCase());
@@ -393,19 +451,21 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 'sequence.setPlyFrames',
                 files.map((f) => f.contents)
             );
-            events.fire('timeline.frame', 0);
-        } else if (isSog(filenames) || isLcc(filenames)) {
+        } else if (isBundle(filenames)) {
             const model = await importSplatModel(files, animationFrame, operation);
             if (model) result.push(model);
         } else {
             // check for unrecognized file types
             for (let i = 0; i < filenames.length; i++) {
                 const filename = filenames[i].toLowerCase();
-                if (
-                    ['.ssproj', '.ply', '.splat', '.sog', '.webp', 'images.txt', '.json', '.ksplat', '.spz'].every(
-                        (ext) => !filename.endsWith(ext)
-                    )
-                ) {
+                // a loose SOG texture (.webp) is accepted but has nothing to load
+                const recognised =
+                    isModelFile(filename) ||
+                    filename.endsWith(animationExtension) ||
+                    filename.endsWith(documentExtension) ||
+                    isPosesFile(basename(filename)) ||
+                    filename.endsWith('.webp');
+                if (!recognised) {
                     if (operation?.throwOnError) throw new Error(`Unrecognized file type '${filename}'`);
                     await showLoadError('Unrecognized file type', filename);
                     return;
@@ -416,13 +476,16 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
             for (let i = 0; i < files.length; i++) {
                 const filename = filenames[i].toLowerCase();
 
-                if (filename.endsWith('.ssproj')) {
+                if (filename.endsWith(documentExtension)) {
                     // load ssproj document. doc.load expects a File (the zip
                     // reader needs its size), so wrap url fetches in one
                     const contents =
                         files[i].contents ?? new File([await (await fetch(files[i].url)).blob()], files[i].filename);
                     await events.invoke('doc.load', contents, files[i].handle);
-                } else if (['.ply', '.splat', '.sog', '.ksplat', '.spz'].some((ext) => filename.endsWith(ext))) {
+                } else if (filename.endsWith(animationExtension)) {
+                    // load gsaf animated sequence
+                    await importGsaf(files[i], operation);
+                } else if (isModelFile(filename)) {
                     // load gaussian splat model
                     const model = await importSplatModel([files[i]], animationFrame, operation);
                     if (model) result.push(model);
@@ -441,6 +504,69 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
         }
 
         return result;
+    };
+
+    // Import files the user picked or dropped. A single file or one multi-file
+    // model loads directly; anything else is listed for the user to choose what to
+    // import and whether each sequence or GSAF loads as a sequence or as separate
+    // models. Each chosen group is imported, and so remembered for Import Recent, on
+    // its own.
+    const importWithReview = async (files: ImportFile[]) => {
+        const groups = analyzeImport(files.map((f) => f.filename));
+        if (!needsReview(files.length, groups)) {
+            await importFiles(files);
+            return;
+        }
+
+        // open each GSAF now, so its row can offer its frames as separate models and the
+        // import reuses the reader; one that fails to open is reported and left out
+        const readers = new Map<ImportGroup, GsafReader>();
+        for (const group of groups.filter((g) => g.kind === 'animation')) {
+            const file = files[group.files[0]];
+            try {
+                const reader = await openGsaf(file);
+                readers.set(group, reader);
+                group.frames = reader.frameCount;
+            } catch (error) {
+                await showLoadError(error.message ?? error, file.filename);
+            }
+        }
+        const reviewed = groups.filter((g) => g.kind !== 'animation' || readers.has(g));
+
+        try {
+            if (!reviewed.length) return;
+            const choices: ImportChoice[] | null = await events.invoke('show.importReview', reviewed);
+            if (!choices?.length) return;
+
+            for (const { group, separate } of choices) {
+                const groupFiles = group.files.map((i) => files[i]);
+                if (group.kind === 'bundle') {
+                    // name the bundle's files relative to its folder, as a dropped folder is
+                    await importFiles(
+                        groupFiles.map((f) => ({ ...f, filename: f.filename.substring(group.dir.length) }))
+                    );
+                } else if (group.kind === 'animation') {
+                    const [file] = groupFiles;
+                    if (separate) {
+                        await importGsafFrames(readers.get(group), file.filename);
+                    } else {
+                        // the sequence takes the reader over
+                        events.fire('sequence.setGsaf', readers.get(group), file.filename);
+                        readers.delete(group);
+                    }
+                    recordImports([file]);
+                } else if (group.kind === 'sequence' && !separate) {
+                    await importFiles(groupFiles);
+                } else {
+                    for (const file of groupFiles) {
+                        await importFiles([file]);
+                    }
+                }
+            }
+        } finally {
+            // release the readers no sequence took over
+            readers.forEach((reader) => reader.destroy());
+        }
     };
 
     events.function('import', (files: ImportFile[], animationFrame = false, operation?: FileOperationOptions) => {
@@ -500,15 +626,15 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     contents: file
                 });
             }
-            importFiles(files);
+            importWithReview(files);
             fileSelector.value = '';
         };
         document.body.append(fileSelector);
     }
 
     // create the file drag & drop handler
-    CreateDropHandler(dropTarget, (entries) => {
-        importFiles(
+    CreateDropHandler(dropTarget, events, (entries) => {
+        importWithReview(
             entries.map((e) => {
                 return {
                     filename: e.filename,
@@ -595,6 +721,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                         filePickerTypes.lcc,
                         filePickerTypes.ksplat,
                         filePickerTypes.spz,
+                        filePickerTypes.gsaf,
                         filePickerTypes.indexTxt
                     ]
                 });
@@ -611,7 +738,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 }
 
                 const readable = await recoverBlocked(files);
-                if (readable.length) await importFiles(readable);
+                if (readable.length) await importWithReview(readable);
             } catch (error) {
                 if (error.name !== 'AbortError') {
                     await showImportError(error);
@@ -641,7 +768,7 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                 };
             });
             const readable = await recoverBlocked(files);
-            if (readable.length) await importFiles(readable);
+            if (readable.length) await importWithReview(readable);
         } catch (error) {
             if (error.name !== 'AbortError') {
                 await showLoadError(error.message ?? error, entry.name);
@@ -668,7 +795,6 @@ const initFileHandler = (scene: Scene, events: Events, dropTarget: HTMLElement) 
                     }
                 }
                 events.fire('sequence.setPlyFrames', files);
-                events.fire('timeline.frame', 0);
             }
         } catch (error) {
             if (error.name !== 'AbortError') {
