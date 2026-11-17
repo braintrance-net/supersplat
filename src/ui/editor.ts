@@ -4,17 +4,19 @@ import type { Mat4 } from 'playcanvas';
 import { version } from '../../package.json';
 import type { Events } from '../events';
 import type { ExportSettings } from '../export-settings';
+import type { ImportGroup } from '../import-analysis';
 import type { BlobReadSource } from '../io';
 
 import { AboutPopup } from './about-popup';
-import { AppearancePanel } from './appearance-panel';
 import { BottomToolbar } from './bottom-toolbar';
 import { CameraInfoOverlay } from './camera-info-overlay';
 import { ClipboardMenu } from './clipboard-menu';
 import { ExportPopup } from './export-popup';
 import { ImageSettingsDialog } from './image-settings-dialog';
+import { ImportReviewDialog } from './import-review-dialog';
 import { i18n } from './localization';
 import { Menu } from './menu';
+import { ModeToolbar } from './mode-toolbar';
 import { OverdrawLegend } from './overdraw-legend';
 import { OverlaysPanel } from './overlays-panel';
 import { PerfOverlay } from './perf-overlay';
@@ -119,10 +121,10 @@ class EditorUI {
         const clipboardMenu = new ClipboardMenu();
         const renderSubPanel = new RenderSubPanel(events, tooltips, clipboardMenu);
         const settingsPanel = new SettingsPanel(events, tooltips);
-        const appearancePanel = new AppearancePanel(events, tooltips);
         const overlaysPanel = new OverlaysPanel(events, tooltips);
         const bottomToolbar = new BottomToolbar(events, tooltips);
         const rightToolbar = new RightToolbar(events, tooltips);
+        const modeToolbar = new ModeToolbar(events, tooltips);
         const menu = new Menu(events);
         const cameraInfoOverlay = new CameraInfoOverlay(events, tooltips);
         const perfOverlay = new PerfOverlay(events);
@@ -139,12 +141,12 @@ class EditorUI {
         canvasContainer.append(renderSubPanel);
         canvasContainer.append(bottomToolbar);
         canvasContainer.append(rightToolbar);
+        canvasContainer.append(modeToolbar);
         canvasContainer.append(menu);
 
         // the option popups come after the toolbars so their select dropdowns,
         // which can extend past the panel bounds, paint above them
         canvasContainer.append(settingsPanel);
-        canvasContainer.append(appearancePanel);
         canvasContainer.append(overlaysPanel);
 
         // view axes container
@@ -181,6 +183,9 @@ class EditorUI {
         // video settings
         const videoSettingsDialog = new VideoSettingsDialog(events);
 
+        // review of a mixed set of picked or dropped files
+        const importReviewDialog = new ImportReviewDialog();
+
         // about popup
         const aboutPopup = new AboutPopup(events);
 
@@ -188,6 +193,7 @@ class EditorUI {
         topContainer.append(exportPopup);
         topContainer.append(imageSettingsDialog);
         topContainer.append(videoSettingsDialog);
+        topContainer.append(importReviewDialog);
         topContainer.append(shortcutsPopup);
         topContainer.append(aboutPopup);
         topContainer.append(clipboardMenu);
@@ -234,6 +240,10 @@ class EditorUI {
                 return exportPopup.show('ssproj', [filename], { directory }, source);
             }
         );
+
+        events.function('show.importReview', (groups: ImportGroup[]) => {
+            return importReviewDialog.show(groups);
+        });
 
         events.function('show.imageSettingsDialog', async () => {
             const imageSettings = await imageSettingsDialog.show();

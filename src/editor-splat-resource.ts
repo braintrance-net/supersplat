@@ -254,7 +254,8 @@ class EditorSplatResource extends GSplatContainer {
             packed[dst] = FloatPacking.float2Half(color[col] * SH_C0 + 0.5);
             packed[dst + 1] = FloatPacking.float2Half(color[col + 1] * SH_C0 + 0.5);
             packed[dst + 2] = FloatPacking.float2Half(color[col + 2] * SH_C0 + 0.5);
-            packed[dst + 3] = FloatPacking.float2Half(1 / (1 + Math.exp(-geometric[i * 8 + 7])));
+            // true (linear) opacity, as splat-transform holds it: above 1 for merged gaussians
+            packed[dst + 3] = FloatPacking.float2Half(geometric[i * 8 + 7]);
         }
     }
 
@@ -364,10 +365,10 @@ class EditorSplatResource extends GSplatContainer {
 
         const textureNames = ['transformA', 'transformB', 'splatColor', ...shDefs.map((sh) => sh.name)];
         const textures = textureNames.map((name) => this.getTexture(name));
-        const targets = textures.map((texture) => {
-            texture.releaseSourceAfterUpload = true;
-            return texture.lock() as Uint16Array | Uint32Array;
-        });
+        // no releaseSourceAfterUpload: the fill below is async, and a frame
+        // rendering meanwhile uploads the locked levels - with the flag set the
+        // engine would release them there, discarding the rows filled after it
+        const targets = textures.map((texture) => texture.lock() as Uint16Array | Uint32Array);
         const shTargets: SHTarget[] = shDefs.map((sh, i) => ({ ...sh, packed: targets[3 + i] as Uint32Array }));
 
         const stateField = source.meta.availableLayers.has('other')
@@ -447,11 +448,10 @@ class EditorSplatResource extends GSplatContainer {
         }
 
         textures.forEach((texture) => {
+            // unlocking a write lock uploads the level
             texture.unlock();
-            texture.upload();
-            // Texture.releaseSourceAfterUpload currently only releases ImageBitmap
-            // sources. These immutable typed-array levels can be discarded after
-            // the synchronous WebGPU upload; the retained ChunkSource is the
+            // These immutable typed-array levels can be discarded after the
+            // synchronous WebGPU upload; the retained ChunkSource is the
             // authoritative CPU-side copy.
             const levels = texture['_levels'];
             if (levels) levels[0] = null;

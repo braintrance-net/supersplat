@@ -1,6 +1,6 @@
 import { applyColorGradeWGSL, paletteGradeWGSL } from './color-grade-chunk';
 import { indexToUvWGSL, paletteMatrixWGSL } from './palette-chunk';
-import { compactTailWGSL, overlayEligibleWGSL } from './projected-splat-chunk';
+import { compactTailWGSL, overlayEligibleWGSL, splatAlphaWGSL } from './projected-splat-chunk';
 import { stochasticWarpWGSL } from './stochastic-warp-chunk';
 
 const shCode = (bands: number) => {
@@ -143,8 +143,8 @@ struct ProjectorUniforms {
     // minimum alpha mass of a projected gaussian, in pixels; 0 = off
     minContribution: f32,
     // splats exempt from the contribution and occlusion culls because their
-    // ring would draw: 0 none, 1 the selected ones, 2 the whole layer
-    // (overlayEligible decides)
+    // ring would draw: a group mask, bit 0 the unselected splats, bit 1 the
+    // selected ones (overlayEligible decides)
     keepRings: u32,
     // the previous stochastic frame, for the occlusion cull: its view and
     // view-projection, its clip-z mapping (a, b, isOrtho - the render shader's
@@ -218,6 +218,7 @@ ${applyColorGradeWGSL}
 ${paletteGradeWGSL}
 ${overlayEligibleWGSL}
 ${compactTailWGSL}
+${splatAlphaWGSL}
 ${stochasticWarpWGSL}
 
 fn rotationMatrix(qIn: vec4f) -> mat3x3f {
@@ -411,7 +412,7 @@ fn main(
 
     // splats whose ring would draw are exempt from the motion culls below:
     // rings draw from the survivor list
-    let ringKept = uniforms.keepRings != 0u && overlayEligible(state, uniforms.keepRings == 1u);
+    let ringKept = uniforms.keepRings != 0u && overlayEligible(state, uniforms.keepRings);
 
     // occlusion cull on stochastic frames. The previous stochastic frame's
     // depth buffer samples the visibility function: each pixel kept the
@@ -487,7 +488,8 @@ fn main(
     if (previewed) {
         gradedAlpha *= uniforms.colorAlpha;
     }
-    gradedAlpha = clamp(gradedAlpha, 0.0, 1.0);
+    // true opacity: above 1 for merged gaussians, up to what the cache byte holds
+    gradedAlpha = clamp(gradedAlpha, 0.0, 1.5625);
     // stochastic frames also cull by contribution - the gaussian's alpha mass in
     // pixels, alpha * 2 pi * sqrt(det) of the dilated covariance, the engine's
     // minContribution rule - on top of the size cull. It runs ahead of the SH
@@ -607,7 +609,7 @@ fn main(
     ));
     textureStore(cacheB, cacheUv, vec4u(
         pack2x16float(vec2f(len2, 0.0))
-            | (u32(clamp(color.a, 0.0, 1.0) * 255.0 + 0.5) << 16u)
+            | (encodeSplatAlpha(color.a) << 16u)
             | select(0u, 0x01000000u, selected)
             | select(0u, 0x02000000u, locked)
     ));

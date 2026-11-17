@@ -6,6 +6,7 @@ import { checkCancelled, EditorError } from './editor-command';
 import type { CameraSettings } from './editor-session';
 import type { TimelineSettings } from './editor-timeline';
 import { GENERATOR_MAX_COUNT, GENERATOR_TIMEOUT_MS } from './generator-sandbox';
+import { modelFormatNames } from './import-formats';
 import { isFinalColorMode, propModeFor } from './splat-properties';
 import { i18n } from './ui/localization';
 
@@ -680,12 +681,17 @@ const createWebMCPTools = (editor: EditorAPI): Tool[] => {
             showGrid: boolean('Show grid.'),
             shBands: integer('Rendered SH bands.', 0, 3),
             tonemapping: enumeration(['linear', 'neutral', 'aces', 'aces2', 'filmic', 'hejl'], 'Tone mapping.'),
-            showGaussians: boolean('Show splats.'),
-            showCenters: boolean('Show centres.'),
-            showRings: boolean('Show footprints.'),
-            selectionColor: boolean('Tint selection.'),
-            selectionCenters: boolean('Show selection centres.'),
-            selectionRings: boolean('Show selection rings.')
+            mode: enumeration(
+                ['centers', 'rings'],
+                'Editing mode: centers marks and selects by centre point, rings by footprint.'
+            ),
+            showMarkers: boolean('Show the markers of unselected splats (the Tab switch).'),
+            markersOnly: boolean('Hide the splat fill while the markers are shown.'),
+            xray: boolean(
+                'Select through all depths. Off, picks take the visible surface and the markers show only selectable splats.'
+            ),
+            selectionColor: boolean('Tint the selected splats with the selection colour.'),
+            outlineSelection: boolean('Outline the selection.')
         },
         [],
         (
@@ -694,12 +700,12 @@ const createWebMCPTools = (editor: EditorAPI): Tool[] => {
                 showGrid?: boolean;
                 shBands?: number;
                 tonemapping?: string;
-                showGaussians?: boolean;
-                showCenters?: boolean;
-                showRings?: boolean;
+                mode?: 'centers' | 'rings';
+                showMarkers?: boolean;
+                markersOnly?: boolean;
+                xray?: boolean;
                 selectionColor?: boolean;
-                selectionCenters?: boolean;
-                selectionRings?: boolean;
+                outlineSelection?: boolean;
             },
             o
         ) => {
@@ -795,7 +801,7 @@ const createWebMCPTools = (editor: EditorAPI): Tool[] => {
     );
     add(
         'import_url',
-        'Import a model from a CORS-enabled HTTP(S) URL as a new layer. Existing layers are kept. Supports PLY, SPLAT, SOG, SPZ and KSPLAT. Optional LOD index; otherwise uses the loader recommended LOD. Import is undoable.',
+        `Import a model from a CORS-enabled HTTP(S) URL as a new layer. Existing layers are kept. Supports ${modelFormatNames}. Optional LOD index; otherwise uses the loader recommended LOD. Import is undoable.`,
         {
             url: string('Absolute HTTP(S) model URL.', 4096),
             filename: string('Filename with format extension; defaults to URL path.', 256),

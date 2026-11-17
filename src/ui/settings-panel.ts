@@ -1,4 +1,5 @@
-import { BooleanInput, Container, Label, SelectInput, SliderInput } from '@playcanvas/pcui';
+import { BooleanInput, ColorPicker, Container, Label, SelectInput, SliderInput } from '@playcanvas/pcui';
+import { Color } from 'playcanvas';
 
 import type { AntiAliasMode } from '../editor-splat-resource';
 import type { Events } from '../events';
@@ -13,7 +14,7 @@ const createSvg = (svgString: string) => {
 };
 
 // application preferences: set-and-forget options, as opposed to the viewport
-// state that lives in the appearance and overlays panels
+// state that lives on the mode toolbar and in the overlays panel
 class SettingsPanel extends Container {
     constructor(events: Events, tooltips: Tooltips, args = {}) {
         args = {
@@ -230,6 +231,30 @@ class SettingsPanel extends Container {
         shBandsRow.append(shBandsLabel);
         shBandsRow.append(shBandsSlider);
 
+        // minimum projected splat size
+
+        const minSplatSizeRow = new Container({
+            class: 'settings-panel-row'
+        });
+
+        const minSplatSizeLabel = new Label({
+            class: 'settings-panel-row-label'
+        });
+        i18n.bindText(minSplatSizeLabel, 'panel.settings.min-splat-size');
+
+        // the projector's 0.3px² low-pass floor keeps every splat at least
+        // ~1.55px across, so values up to there cull nothing
+        const minSplatSizeSlider = new SliderInput({
+            class: 'settings-panel-row-slider',
+            min: 0,
+            max: 5,
+            precision: 1,
+            value: 2
+        });
+
+        minSplatSizeRow.append(minSplatSizeLabel);
+        minSplatSizeRow.append(minSplatSizeSlider);
+
         // camera fly speed
 
         const cameraFlySpeedRow = new Container({
@@ -327,11 +352,79 @@ class SettingsPanel extends Container {
         rowToggles(fovDollyRow, fovDollyToggle);
         rowToggles(createSkyboxRow, createSkyboxToggle);
 
+        // the viewport colours: background, selection, unselected markers, locked
+
+        const colorsRow = new Container({
+            class: 'settings-panel-row'
+        });
+
+        const colorsLabel = new Label({
+            class: 'settings-panel-row-label'
+        });
+        i18n.bindText(colorsLabel, 'panel.settings.colors');
+
+        const colorPickers = new Container({
+            class: 'settings-panel-row-pickers'
+        });
+
+        const picker = (channels: number) =>
+            new ColorPicker({
+                class: 'settings-panel-row-picker',
+                channels,
+                value: channels === 3 ? [0, 0, 0] : [0, 0, 0, 1]
+            });
+        const bgClrPicker = picker(3);
+        const selectedClrPicker = picker(4);
+        const unselectedClrPicker = picker(4);
+        const lockedClrPicker = picker(4);
+
+        colorPickers.append(bgClrPicker);
+        colorPickers.append(selectedClrPicker);
+        colorPickers.append(unselectedClrPicker);
+        colorPickers.append(lockedClrPicker);
+
+        colorsRow.append(colorsLabel);
+        colorsRow.append(colorPickers);
+
+        const toArray = (clr: Color) => [clr.r, clr.g, clr.b, clr.a];
+
+        events.on('bgClr', (clr: Color) => {
+            bgClrPicker.value = toArray(clr);
+        });
+        events.on('selectedClr', (clr: Color) => {
+            selectedClrPicker.value = toArray(clr);
+        });
+        events.on('unselectedClr', (clr: Color) => {
+            unselectedClrPicker.value = toArray(clr);
+        });
+        events.on('lockedClr', (clr: Color) => {
+            lockedClrPicker.value = toArray(clr);
+        });
+
+        bgClrPicker.on('change', (value: number[]) => {
+            events.fire('setBgClr', new Color(value[0], value[1], value[2]));
+        });
+        selectedClrPicker.on('change', (value: number[]) => {
+            events.fire('setSelectedClr', new Color(value[0], value[1], value[2], value[3]));
+        });
+        unselectedClrPicker.on('change', (value: number[]) => {
+            events.fire('setUnselectedClr', new Color(value[0], value[1], value[2], value[3]));
+        });
+        lockedClrPicker.on('change', (value: number[]) => {
+            events.fire('setLockedClr', new Color(value[0], value[1], value[2], value[3]));
+        });
+
+        tooltips.register(bgClrPicker, () => i18n.t('panel.settings.background-color'), 'left');
+        tooltips.register(selectedClrPicker, () => i18n.t('panel.settings.selected-color'), 'top');
+        tooltips.register(unselectedClrPicker, () => i18n.t('panel.settings.unselected-color'), 'top');
+        tooltips.register(lockedClrPicker, () => i18n.t('panel.settings.locked-color'), 'top');
+
         this.append(header);
         this.append(languageRow);
         this.append(sectionHeader('panel.settings.section-rendering'));
         this.append(tonemappingRow);
         this.append(shBandsRow);
+        this.append(minSplatSizeRow);
         this.append(antiAliasRow);
         this.append(sortModeRow);
         this.append(stochasticRow);
@@ -340,6 +433,8 @@ class SettingsPanel extends Container {
         this.append(cameraFlySpeedRow);
         this.append(fovDollyRow);
         this.append(createSkyboxRow);
+        this.append(sectionHeader('panel.settings.colors'));
+        this.append(colorsRow);
 
         // handle panel visibility
 
@@ -368,12 +463,6 @@ class SettingsPanel extends Container {
             }
         });
 
-        events.on('appearancePanel.visible', (visible: boolean) => {
-            if (visible) {
-                setVisible(false);
-            }
-        });
-
         // sh bands
 
         events.on('view.bands', (bands: number) => {
@@ -382,6 +471,16 @@ class SettingsPanel extends Container {
 
         shBandsSlider.on('change', (value: number) => {
             events.fire('view.setBands', value);
+        });
+
+        // minimum projected splat size
+
+        events.on('view.minPixelSize', (value: number) => {
+            minSplatSizeSlider.value = value;
+        });
+
+        minSplatSizeSlider.on('change', (value: number) => {
+            events.fire('view.setMinPixelSize', value);
         });
 
         // camera speed
@@ -486,6 +585,7 @@ class SettingsPanel extends Container {
         tooltips.register(languageLabel, help('panel.settings.language.tooltip'), 'top');
         tooltips.register(tonemappingLabel, help('panel.settings.tone-mapping.tooltip'), 'top');
         tooltips.register(shBandsLabel, help('panel.settings.sh-bands.tooltip'), 'top');
+        tooltips.register(minSplatSizeLabel, help('panel.settings.min-splat-size.tooltip'), 'top');
         tooltips.register(antiAliasLabel, help('panel.settings.anti-alias.tooltip'), 'top');
         tooltips.register(sortModeLabel, help('panel.settings.sort-mode.tooltip'), 'top');
         tooltips.register(stochasticLabel, help('panel.settings.stochastic-alpha.tooltip'), 'top');

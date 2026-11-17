@@ -107,10 +107,11 @@ class Popup extends Container {
             id: 'popup-buttons'
         });
 
-        buttons.append(okButton);
+        // the action goes on the right, as in the editor's other dialogs
         buttons.append(cancelButton);
-        buttons.append(yesButton);
+        buttons.append(okButton);
         buttons.append(noButton);
+        buttons.append(yesButton);
 
         dialog.append(header);
         dialog.append(text);
@@ -206,7 +207,7 @@ class Popup extends Container {
                     this.hide();
                     resolve({
                         action: 'ok',
-                        value: select ? selectInput.value : undefined
+                        value: select ? (selectInput.value as string) : undefined
                     });
                 };
                 cancelFn = () => {

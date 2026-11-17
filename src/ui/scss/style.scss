@@ -1,5 +1,6 @@
 @use 'pcui-theme-grey.scss';
 @use 'colors.scss' as *;
+@use 'layout.scss' as *;
 @use 'tooltips.scss';
 
 @use 'panel.scss';
@@ -11,7 +12,9 @@
 @use 'color-panel.scss';
 @use 'splat-list.scss';
 @use 'transform.scss';
+@use 'toolbar.scss';
 @use 'bottom-toolbar.scss';
+@use 'mode-toolbar.scss';
 @use 'right-toolbar.scss';
 @use 'select-toolbar.scss';
 @use 'data-panel.scss';
@@ -28,6 +31,7 @@
 @use 'iframe-controls.scss';
 @use 'render-sub-panel.scss';
 @use 'annotation-overlay.scss';
+@use 'drop-overlay.scss';
 
 * {
     font-family: 'Rajdhani', sans-serif;
@@ -259,8 +263,8 @@ body {
 
 #view-cube-container {
     position: absolute;
-    width: 140px;
-    height: 140px;
+    width: $view-cube-size;
+    height: $view-cube-size;
     right: 0px;
     top: 0px;
     pointer-events: none;
@@ -440,19 +444,16 @@ body {
     &:focus {
         background-color: $bg-light-hover !important;
         color: $text-primary !important;
-        border-width: px !important;
         box-shadow: 0 0 0 2px $bg-light-hover !important;
     }
 
 }
 
 // Toolbar buttons: white default, gray hover, black active
-.bottom-toolbar-button.pcui-button,
-.bottom-toolbar-tool.pcui-button,
-.bottom-toolbar-toggle.pcui-button,
-.right-toolbar-button.pcui-button,
-.right-toolbar-tool.pcui-button,
-.right-toolbar-toggle.pcui-button {
+.toolbar-button.pcui-button,
+.toolbar-tool.pcui-button,
+.toolbar-toggle.pcui-button,
+.toolbar-panel.pcui-button {
     background-color: white !important;
     border: none !important;
     border-radius: 5px !important;
@@ -465,9 +466,22 @@ body {
         background-color: $clr-hilight !important;
         color: $clr-active !important;
 
+        &::before,
         svg {
             color: $clr-active !important;
         }
+    }
+
+    &:hover,
+    &:focus {
+        box-shadow: none !important;
+    }
+}
+
+.toolbar-switch-option.pcui-button {
+    &:hover,
+    &:focus {
+        box-shadow: none !important;
     }
 }
 
