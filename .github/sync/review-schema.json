@@ -1,7 +1,7 @@
 {
     "type": "object",
     "additionalProperties": false,
-    "required": ["verdict", "lost", "notes"],
+    "required": ["verdict", "lost", "notes", "changes"],
     "properties": {
         "verdict": { "type": "string", "enum": ["merge", "hold"] },
         "lost": {
@@ -16,6 +16,19 @@
                 }
             }
         },
-        "notes": { "type": "string" }
+        "notes": { "type": "string" },
+        "changes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "summary", "files"],
+                "properties": {
+                    "kind": { "type": "string", "enum": ["feature", "fix", "maintenance"] },
+                    "summary": { "type": "string" },
+                    "files": { "type": "array", "items": { "type": "string" } }
+                }
+            }
+        }
     }
 }

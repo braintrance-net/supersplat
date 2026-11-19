@@ -38,7 +38,14 @@ The workflow starts with a mirror update, then integrates and verifies the fork:
    7. opens a `sync-upstream-<date>` PR into `braintrance` with all of the above, and on `merge`
       fast-forwards `braintrance` to it, which marks the PR merged. Anything else leaves the PR open
       with the `sync-needs-human` label. Older open sync PRs are closed as superseded.
-   8. posts to the Slack alert channel whether the PR landed, was held, or the run failed.
+   8. posts to the Slack alert channel whether the PR landed, was held, or the run failed, together
+      with features, fixes and maintenance changes from the candidate's actual diff against the
+      previously released fork. The read-only reviewer supplies descriptions with changed-file
+      evidence. The PR includes those notes and complete incoming commit/file inventories; the
+      unabridged report is also saved as the `sync-changes` workflow artifact. Long Slack summaries
+      explicitly link to the full report. If review notes are unavailable, the report says so and
+      preserves the complete inventories rather than guessing features. A held sync describes
+      proposed changes; landing on `braintrance` does not itself verify deployment in Lookleft.
 
 Each step is its own job, so that nothing the merged tree runs can reach a key or the verdict:
 
