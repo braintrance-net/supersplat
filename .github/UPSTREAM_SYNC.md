@@ -59,6 +59,15 @@ Each step is its own job, so that nothing the merged tree runs can reach a key o
 
 The merge travels between jobs as a git bundle and is matched against the commit id each job reports.
 
+Lockfile regeneration in both `resolve` and `fix` uses npm **11.17.0** via `relock.sh`,
+independent of the npm bundled with Node 22. npm 10 can drop Rollup's `libc` metadata.
+After regeneration, `check-lock-platforms.mjs` compares the fork and upstream lockfiles
+(and the pre-regeneration merge when parseable) against the result. For unchanged package
+artifacts, existing `os`, `cpu`, and `libc` constraints must remain intact. Dependency removal
+and upgrades are allowed; an unexpected metadata change fails before the candidate is committed.
+Run `node --test .github/sync/test-lock-platforms.mjs` to check this guard.
+
+
 Known limits, accepted:
 
 - The checks prove a well-meaning tree works; they do not defend against a malicious dependency. Its
