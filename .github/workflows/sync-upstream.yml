@@ -499,8 +499,14 @@ jobs:
           fi
 
           body="$OUT/body.md"
+          python3 "$SYNC/change-notes.py" report --fork "$FORK" \
+            --review "$OUT/review/review.json" --output "$OUT/changes"
           {
             echo "Merges \`main\` ($UPSTREAM, mirroring playcanvas/supersplat) into \`braintrance\` ($FORK)."
+            echo
+            echo "Full unabridged change report: [sync-changes artifact]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+            echo
+            cat "$OUT/changes/summary.md"
             echo
             echo "| Step | Result |"
             echo "| --- | --- |"
@@ -524,6 +530,8 @@ jobs:
                 break
               fi
             done
+            echo
+            cat "$OUT/changes/inventory.md"
           } > "$body"
           # A PR body caps at 65536 characters.
           head -c 60000 "$body" > "$body.cut"
@@ -566,11 +574,34 @@ jobs:
 
           [ "$land" = yes ] || { echo "::warning::Not landed; see $pr"; exit 1; }
 
+      - name: Preserve complete change report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sync-changes
+          path: out/changes/
+          if-no-files-found: ignore
+
   notify:
     needs: [sync, resolve, check, fix, recheck, review, land]
     if: always() && (contains(needs.*.result, 'failure') || needs.land.outputs.pr != '')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout notification tools
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: tools
+          sparse-checkout: .github/sync
+          persist-credentials: false
+
+      - name: Download change report
+        uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          name: sync-changes
+          path: changes
+
       - name: Post to Slack
         env:
           WEBHOOK: ${{ secrets.SLACK_ALERT_WEBHOOK_URL }}
@@ -581,13 +612,7 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           [ -n "$WEBHOOK" ] || { echo "::error::The SLACK_ALERT_WEBHOOK_URL secret is not set"; exit 1; }
-          if [ "$LANDED" = yes ] && [ "$FAILED" = true ]; then
-            text=":x: The SuperSplat upstream sync landed <$PR|supersplat#${PR##*/}> but a step failed: <$RUN|run $GITHUB_RUN_ID>"
-          elif [ "$LANDED" = yes ]; then
-            text=":white_check_mark: The SuperSplat upstream sync landed on \`braintrance\`: <$PR|supersplat#${PR##*/}>. The editor update PR into braintrance follows at the next 10:00 UTC run."
-          elif [ -n "$PR" ]; then
-            text=":warning: The SuperSplat upstream sync was not landed and needs a person: <$PR|supersplat#${PR##*/}> ($CHECKS)"
-          else
-            text=":x: The SuperSplat upstream sync failed before opening a PR: <$RUN|run $GITHUB_RUN_ID>"
-          fi
-          jq -n --arg text "$text" '{text: $text}' | curl -fsS -X POST -H 'Content-Type: application/json' --data @- "$WEBHOOK"
+          python3 tools/.github/sync/change-notes.py slack \
+            --pr "$PR" --landed "$LANDED" --failed "$FAILED" --checks "$CHECKS" \
+            --run "$RUN" --notes changes/changes.txt > slack-payload.json
+          curl -fsS -X POST -H 'Content-Type: application/json' --data @slack-payload.json "$WEBHOOK"
