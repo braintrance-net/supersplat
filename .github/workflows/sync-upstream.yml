@@ -110,6 +110,9 @@ jobs:
         with:
           node-version: 22.x
 
+      - name: Test lockfile platform guard
+        run: node --test "$SYNC/test-lock-platforms.mjs"
+
       - name: Merge main into braintrance
         id: merge
         working-directory: work
@@ -169,7 +172,7 @@ jobs:
           FORK: ${{ steps.merge.outputs.fork }}
           UPSTREAM: ${{ steps.merge.outputs.upstream }}
         run: |
-          bash "$SYNC/relock.sh" "$FORK"
+          bash "$SYNC/relock.sh" "$FORK" "$UPSTREAM"
           git add -A
           git commit --no-edit -m "Merge upstream playcanvas/supersplat main into braintrance (automatic)" -m "main at $UPSTREAM"
           git branch -f merge HEAD
@@ -273,7 +276,7 @@ jobs:
           FORK: ${{ needs.resolve.outputs.fork }}
           UPSTREAM: ${{ needs.resolve.outputs.upstream }}
         run: |
-          bash "$SYNC/relock.sh" "$FORK"
+          bash "$SYNC/relock.sh" "$FORK" "$UPSTREAM"
           git add -A
           git commit --amend --no-edit
           git bundle create "$OUT/merge.bundle" merge "^$FORK" "^$UPSTREAM"
