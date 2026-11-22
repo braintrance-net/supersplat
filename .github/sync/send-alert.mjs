@@ -11,7 +11,7 @@ export function notification(env, details) {
     return {
         channel: 'C0CCLJ45P99', key: `supersplat-sync:${GITHUB_REF_NAME}`,
         id: `${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}`, occurredAt: Date.parse(RUN_STARTED_AT),
-        resolved, ignoreMissingWarning: true,
+        resolved, missingWarning: "ignore",
         text: `:warning: *SuperSplat upstream sync*\n*Status:* ${LANDED === 'yes' ? 'Landed, but a workflow step failed' : 'Failed or held for review'}\n*Branch:* ${escape(GITHUB_REF_NAME)}\n*Run:* <${RUN}|Sync with Upstream>\n${details.text}`
     };
 }

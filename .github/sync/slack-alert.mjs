@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 	                   
 	             
 	                  
-	                               
+	                          
 	                                       
 	                          
  
@@ -228,7 +228,9 @@ export async function deliverSlackAlert(token        , alert            , fetchI
 	if (alert.resolved) {
 		const [original] = matches.sort((a, b) => b.occurredAt - a.occurredAt || Number(b.ts) - Number(a.ts));
 		if (!original) {
-			if (alert.ignoreMissingWarning) return "";
+			if (alert.missingWarning === "ignore") {
+				return "";
+			}
 			throw new Error("Original warning not found; resolution was not posted");
 		}
 		await call("reactions.add", { channel: alert.channel, timestamp: original.ts, name: "white_check_mark" });
