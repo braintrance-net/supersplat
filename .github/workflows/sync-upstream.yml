@@ -621,7 +621,8 @@ jobs:
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          export RUN_STARTED_AT="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)"
+          RUN_STARTED_AT="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)"
+          export RUN_STARTED_AT
           python3 tools/.github/sync/change-notes.py slack \
             --pr "$PR" --landed "$LANDED" --failed "$FAILED" --checks "$CHECKS" \
             --run "$RUN" --notes changes/changes.txt > slack-payload.json
