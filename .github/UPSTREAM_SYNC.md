@@ -55,7 +55,7 @@ Each step is its own job, so that nothing the merged tree runs can reach a key o
 | `check`, `recheck` (`sync-check.yml`) | nothing; read-only token | yes: install, build, lint, smoke |
 | `sync` | `BT_GITHUB_TOKEN` for git pushes | no; git merge and push only |
 | `land` | `BT_GITHUB_TOKEN` for git pushes; job token for PR operations | no; recomputes the scope check and fork guard itself |
-| `notify` | `SLACK_ALERT_WEBHOOK_URL` | no |
+| `notify` | `SLACK_ALERTS_BOT_TOKEN` | no |
 
 The merge travels between jobs as a git bundle and is matched against the commit id each job reports.
 
@@ -203,3 +203,13 @@ Open a PR merging `sync` into `braintrance` and merge once reviewed.
 - **The Vercel status check fails** with an "authorize" URL — that is an unauthorized-integration
   issue, not a build failure. It leaves the PR `UNSTABLE`, which is expected.
 - **`git fetch <url> <tag>` clobbers `FETCH_HEAD`** — use explicit SHAs when resolving conflicts.
+
+### Alert lifecycle
+
+The notify job posts readable warning fields to #alerts-supersplat. A verified landing
+or a clean no-change run adds a check reaction to the most recent warning; it does
+not send a separate success message. Cancellations and incomplete runs never resolve
+an incident. Complete change notes remain in the PR and workflow artifact. The bot
+token is the existing Cloud Agent Slack app, sourced from Doppler
+`lookleft-cloud-agent-slack/dev`, `CANARY_CLOUD_AGENT_SLACK_BOT_TOKEN`. JSON
+attachments remain pending. The vendored Slack helper matches Lookleft's tested lifecycle.
