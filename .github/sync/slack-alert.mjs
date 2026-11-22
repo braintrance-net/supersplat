@@ -131,13 +131,7 @@ async function findWarnings(call           , alert            , user        , ma
 		if (!("has_more" in history) || typeof history.has_more !== "boolean") {
 			throw new Error("Incomplete Slack history");
 		}
-		const messages            = history.messages;
-		const oldest = messages.at(-1);
-		const oldestTime =
-			typeof oldest === "object" && oldest !== null && "ts" in oldest && typeof oldest.ts === "string"
-				? Number(oldest.ts) * millisecondsPerSecond
-				: Number.POSITIVE_INFINITY;
-		if (!history.has_more || (alert.resolved && matches.some(match => oldestTime < match.occurredAt))) {
+		if (!history.has_more) {
 			break;
 		}
 		const metadata = "response_metadata" in history ? history.response_metadata : undefined;
@@ -233,7 +227,9 @@ export async function deliverSlackAlert(token        , alert            , fetchI
 			}
 			throw new Error("Original warning not found; resolution was not posted");
 		}
-		await call("reactions.add", { channel: alert.channel, timestamp: original.ts, name: "white_check_mark" });
+		for (const warning of matches) {
+			await call("reactions.add", { channel: alert.channel, timestamp: warning.ts, name: "white_check_mark" });
+		}
 		return link(original.ts);
 	}
 	const previous = matches.find(match => match.receipt === receipt);
