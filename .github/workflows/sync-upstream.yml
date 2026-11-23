@@ -587,7 +587,7 @@ jobs:
 
   notify:
     needs: [sync, resolve, check, fix, recheck, review, land]
-    if: always() && (contains(needs.*.result, 'failure') || needs.land.outputs.pr != '')
+    if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Checkout notification tools
@@ -598,6 +598,10 @@ jobs:
           sparse-checkout: .github/sync
           persist-credentials: false
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
       - name: Download change report
         uses: actions/download-artifact@v8
         continue-on-error: true
@@ -605,17 +609,21 @@ jobs:
           name: sync-changes
           path: changes
 
-      - name: Post to Slack
+      - name: Post warning or recovery reaction
         env:
-          WEBHOOK: ${{ secrets.SLACK_ALERT_WEBHOOK_URL }}
+          SLACK_ALERTS_BOT_TOKEN: ${{ secrets.SLACK_ALERTS_BOT_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           PR: ${{ needs.land.outputs.pr }}
           LANDED: ${{ needs.land.outputs.landed }}
           CHECKS: ${{ needs.land.outputs.checks }}
-          FAILED: ${{ contains(needs.*.result, 'failure') }}
+          FAILED: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.sync.result != 'success' }}
+          BEHIND: ${{ needs.sync.outputs.behind }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          [ -n "$WEBHOOK" ] || { echo "::error::The SLACK_ALERT_WEBHOOK_URL secret is not set"; exit 1; }
+          set -euo pipefail
+          RUN_STARTED_AT="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --jq .run_started_at)"
+          export RUN_STARTED_AT
           python3 tools/.github/sync/change-notes.py slack \
             --pr "$PR" --landed "$LANDED" --failed "$FAILED" --checks "$CHECKS" \
             --run "$RUN" --notes changes/changes.txt > slack-payload.json
-          curl -fsS -X POST -H 'Content-Type: application/json' --data @slack-payload.json "$WEBHOOK"
+          node tools/.github/sync/send-alert.mjs slack-payload.json
